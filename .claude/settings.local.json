@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git --version)",
+      "Bash(git config *)",
+      "Bash(gh --version)",
+      "Bash(gh auth *)",
+      "Bash(git init *)",
+      "Bash(git add *)",
+      "Bash(git reset *)",
+      "Bash(git commit *)",
+      "Bash(git commit -q -m 'docs: add requirements + transformation plan + upstream baseline' -m '- 改造计划.md: 3-step transformation plan + requirements description *)"
+    ]
+  }
+}
