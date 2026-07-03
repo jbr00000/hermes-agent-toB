@@ -11633,6 +11633,8 @@ def _maybe_setup_dashboard_auth_interactively(args) -> None:
 
 def cmd_dashboard(args):
     """Start the web UI server, or (with --stop/--status) manage running ones."""
+    print("dashboard/serve have been removed in this fork.", file=sys.stderr)
+    sys.exit(1)
     # --status: report running dashboards and exit, no deps needed.
     if getattr(args, "status", False):
         count = _report_dashboard_status()
