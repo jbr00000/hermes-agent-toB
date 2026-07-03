@@ -9,7 +9,10 @@
       "Bash(git add *)",
       "Bash(git reset *)",
       "Bash(git commit *)",
-      "Bash(git commit -q -m 'docs: add requirements + transformation plan + upstream baseline' -m '- 改造计划.md: 3-step transformation plan + requirements description *)"
+      "Bash(git commit -q -m 'docs: add requirements + transformation plan + upstream baseline' -m '- 改造计划.md: 3-step transformation plan + requirements description *)",
+      "Bash(git ls-tree *)",
+      "Bash(rm -rf ui-tui tui_gateway tests/tui_gateway apps web website)",
+      "Bash(python -m py_compile run_agent.py model_tools.py toolsets.py cli.py hermes_state.py hermes_cli/main.py)"
     ]
   }
 }
