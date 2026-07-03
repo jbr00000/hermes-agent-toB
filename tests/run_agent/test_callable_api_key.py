@@ -242,17 +242,8 @@ class TestBatchRunnerCallableHandling:
         assert worker_api_key_str == "sk-static"
 
     def test_batch_runner_source_uses_the_correct_predicate(self):
-        """Pin the predicate string in batch_runner so refactors that
-        change it are caught here. Reading the source rather than
-        importing avoids spinning up the full BatchRunner."""
-        from pathlib import Path
-        src = (Path(__file__).resolve().parent.parent.parent
-               / "batch_runner.py").read_text()
-        assert "callable(self.api_key) and not isinstance(self.api_key, str)" in src, (
-            "BatchRunner.api_key callable check changed — update test or "
-            "verify the new predicate still routes Entra token providers "
-            "to the worker-rebuild path."
-        )
+        import pytest
+        pytest.skip("batch_runner.py removed in to-B fork (Step 1.2)")
 
 
 # ---------------------------------------------------------------------------

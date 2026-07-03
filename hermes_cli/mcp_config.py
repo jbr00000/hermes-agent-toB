@@ -917,8 +917,8 @@ def mcp_command(args):
     action = getattr(args, "mcp_action", None)
 
     if action == "serve":
-        from mcp_serve import run_mcp_server
-        run_mcp_server(verbose=getattr(args, "verbose", False))
+        # Hermes-as-MCP-server removed (to-B fork; only MCP client mode used).
+        print("hermes mcp serve has been removed in this fork.")
         return
 
     # Catalog subcommands live in mcp_picker / mcp_catalog. Import lazily so
