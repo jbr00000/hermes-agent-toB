@@ -136,6 +136,37 @@ def get_user(user_id: str) -> Optional[dict]:
         con.close()
 
 
+def list_users() -> list:
+    con = sqlite3.connect(_db_path())
+    try:
+        rows = con.execute(
+            "SELECT id, username, role, created_at FROM users ORDER BY created_at"
+        ).fetchall()
+        return [{"id": r[0], "username": r[1], "role": r[2], "created_at": r[3]} for r in rows]
+    finally:
+        con.close()
+
+
+def delete_user(user_id: str) -> bool:
+    con = sqlite3.connect(_db_path())
+    try:
+        cur = con.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        con.commit()
+        return cur.rowcount > 0
+    finally:
+        con.close()
+
+
+def set_user_role(user_id: str, role: str) -> bool:
+    con = sqlite3.connect(_db_path())
+    try:
+        cur = con.execute("UPDATE users SET role = ? WHERE id = ?", (role, user_id))
+        con.commit()
+        return cur.rowcount > 0
+    finally:
+        con.close()
+
+
 def create_token(user: dict) -> str:
     now = int(time.time())
     payload = {

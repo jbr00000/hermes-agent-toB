@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from server import auth
-from server.deps import get_current_user
+from server.deps import get_current_user, require_admin
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -29,8 +29,9 @@ def login(creds: Creds):
     return {"access_token": auth.create_token(user), "token_type": "bearer", "user": user}
 
 
-@router.post("/register")
+@router.post("/register", dependencies=[Depends(require_admin)])
 def register(creds: Creds):
+    """Admin-only user creation (open self-registration closed in Inc 5)."""
     try:
         user = auth.create_user(creds.username, creds.password, role="user")
     except sqlite3.IntegrityError:
