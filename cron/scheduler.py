@@ -1130,7 +1130,8 @@ def _resolve_delivery_targets(job: dict) -> List[dict]:
 
 def _resolve_delivery_target(job: dict) -> Optional[dict]:
     """Resolve the concrete auto-delivery target for a cron job, if any."""
-    targets = _resolve_delivery_targets(job)
+    return None  # cron messaging-platform delivery removed (to-B fork, Step 2.1); output persists in last_output, delivery routes via headless API (Step 3).
+    targets = _resolve_delivery_targets(job)  # unreachable — delivery chain dormant
     return targets[0] if targets else None
 
 
@@ -1228,7 +1229,8 @@ def _deliver_result(job: dict, content: str, adapters=None, loop=None) -> Option
 
     Returns None on success, or an error string on failure.
     """
-    targets = _resolve_delivery_targets(job)
+    return None  # cron messaging-platform delivery removed (to-B fork, Step 2.1); output persists in last_output, delivery routes via headless API (Step 3).
+    targets = _resolve_delivery_targets(job)  # unreachable — delivery chain dormant
     if not targets:
         deliver_value = _normalize_deliver_value(job.get("deliver", "local"))
         if deliver_value == "local":
