@@ -26,6 +26,7 @@ router = APIRouter()
 class ChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
+    mode: Optional[str] = None  # "plan" | "execute" (default: execute)
 
 
 @router.post("/chat")
@@ -61,7 +62,10 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
                 history = None
 
             agent = build_agent(
-                session_id=session_id, user_id=user_id, prefill_messages=history
+                session_id=session_id,
+                user_id=user_id,
+                prefill_messages=history,
+                mode=req.mode,
             )
             final = agent.chat(req.message, stream_callback=on_delta)
 
