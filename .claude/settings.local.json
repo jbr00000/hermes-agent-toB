@@ -24,7 +24,10 @@
       "Bash(\"D:/Anaconda/envs/hermes/Scripts/hermes.exe\" -z \"Reply with exactly the word PONG and nothing else.\" --provider deepseek -m deepseek-chat)",
       "Bash(D:/Anaconda/envs/hermes/python.exe -m server draft / reviewed)",
       "Bash(curl -s -m 5 http://127.0.0.1:8000/health)",
-      "Bash(curl -s -N -m 60 -X POST http://127.0.0.1:8000/chat -H \"Content-Type: application/json\" -d '{\"message\":\"Reply with exactly the word PONG and nothing else.\"}')"
+      "Bash(curl -s -N -m 60 -X POST http://127.0.0.1:8000/chat -H \"Content-Type: application/json\" -d '{\"message\":\"Reply with exactly the word PONG and nothing else.\"}')",
+      "Bash(D:/Anaconda/envs/hermes/python.exe -m pip install \"passlib[bcrypt]\" bcrypt --progress-bar off --no-input)",
+      "Bash(D:/Anaconda/envs/hermes/python.exe -m server)",
+      "Bash(git push *)"
     ]
   }
 }
