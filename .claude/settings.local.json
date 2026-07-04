@@ -21,7 +21,10 @@
       "Bash(export HERMES_HOME=\"F:/project/Hermes Agent/hermes-agent/.hermes-dev\")",
       "Bash(D:/Anaconda/envs/hermes/python.exe -c \"import run_agent, model_tools, toolsets, hermes_state, hermes_cli.main, tools.delegate_tool, tools.todo_tool, tools.mcp_tool, agent.memory_manager, agent.curator, agent.context_engine; print\\('ALL CORE IMPORTS OK'\\)\")",
       "Bash(D:/Anaconda/envs/hermes/Scripts/hermes.exe --help)",
-      "Bash(\"D:/Anaconda/envs/hermes/Scripts/hermes.exe\" -z \"Reply with exactly the word PONG and nothing else.\" --provider deepseek -m deepseek-chat)"
+      "Bash(\"D:/Anaconda/envs/hermes/Scripts/hermes.exe\" -z \"Reply with exactly the word PONG and nothing else.\" --provider deepseek -m deepseek-chat)",
+      "Bash(D:/Anaconda/envs/hermes/python.exe -m server draft / reviewed)",
+      "Bash(curl -s -m 5 http://127.0.0.1:8000/health)",
+      "Bash(curl -s -N -m 60 -X POST http://127.0.0.1:8000/chat -H \"Content-Type: application/json\" -d '{\"message\":\"Reply with exactly the word PONG and nothing else.\"}')"
     ]
   }
 }
