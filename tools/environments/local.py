@@ -323,7 +323,7 @@ def _inject_session_context_env(env: dict) -> None:
     tests/tools/test_local_env_session_leak.py.
     """
     try:
-        from gateway.session_context import (
+        from agent.session_context import (
             _UNSET,
             _VAR_MAP,
             session_context_engaged,

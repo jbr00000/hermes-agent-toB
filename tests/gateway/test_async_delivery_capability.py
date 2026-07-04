@@ -21,7 +21,7 @@ import json
 
 import pytest
 
-from gateway.session_context import (
+from agent.session_context import (
     async_delivery_supported,
     clear_session_vars,
     get_session_env,
@@ -106,7 +106,7 @@ class TestAdapterCapabilityFlag:
         _bind_api_server_session, which hardwires async_delivery=False — a new
         route physically cannot reintroduce the silent no-op (#10760)."""
         from gateway.platforms.api_server import APIServerAdapter
-        from gateway.session_context import clear_session_vars, get_session_env
+        from agent.session_context import clear_session_vars, get_session_env
 
         tokens = APIServerAdapter._bind_api_server_session(
             chat_id="c1", session_key="sk1", session_id="sid1"
@@ -122,7 +122,7 @@ class TestAdapterCapabilityFlag:
         After clear, a session resumed on a delivering interface re-binds fresh
         and is NOT blocked."""
         from gateway.platforms.api_server import APIServerAdapter
-        from gateway.session_context import clear_session_vars
+        from agent.session_context import clear_session_vars
 
         # Turn 1: same session over the API server -> blocked.
         tokens = APIServerAdapter._bind_api_server_session(session_key="shared-key")

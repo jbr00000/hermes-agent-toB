@@ -418,7 +418,7 @@ def _capture_required_environment_variables(
 def _is_gateway_surface() -> bool:
     if env_var_enabled("HERMES_GATEWAY_SESSION"):
         return True
-    from gateway.session_context import get_session_env
+    from agent.session_context import get_session_env
     return bool(get_session_env("HERMES_SESSION_PLATFORM"))
 
 
@@ -569,7 +569,7 @@ def _get_session_platform() -> str:
     ``_is_skill_disabled`` respects ``HERMES_SESSION_PLATFORM``.
     """
     try:
-        from gateway.session_context import get_session_env
+        from agent.session_context import get_session_env
         return get_session_env("HERMES_SESSION_PLATFORM") or ""
     except Exception:
         return ""

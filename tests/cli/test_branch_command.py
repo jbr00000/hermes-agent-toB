@@ -169,7 +169,7 @@ class TestBranchCommandCLI:
     def test_branch_rotates_hermes_session_id_env_and_context(self, cli_instance, session_db):
         """Branching must update process-local session-id readers too."""
         from cli import HermesCLI
-        from gateway.session_context import _UNSET, _VAR_MAP, get_session_env
+        from agent.session_context import _UNSET, _VAR_MAP, get_session_env
 
         old_session_id = cli_instance.session_id
         os.environ["HERMES_SESSION_ID"] = old_session_id

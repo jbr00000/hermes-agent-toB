@@ -113,7 +113,7 @@ def _session_is_messaging_surface() -> bool:
     non-messaging surface.
     """
     try:
-        from gateway.session_context import get_session_env
+        from agent.session_context import get_session_env
 
         platform = (
             os.getenv("HERMES_PLATFORM")

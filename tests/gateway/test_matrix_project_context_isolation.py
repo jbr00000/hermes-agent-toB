@@ -196,7 +196,7 @@ async def test_matrix_session_scope_auto_and_thread_preserve_synthetic_threads()
 @pytest.mark.asyncio
 async def test_matrix_project_context_survives_concurrent_messages():
     from gateway.run import GatewayRunner
-    from gateway.session_context import get_session_env
+    from agent.session_context import get_session_env
 
     async def observe(room_id: str):
         adapter = _make_adapter()

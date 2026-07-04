@@ -372,7 +372,7 @@ def get_disabled_skill_names(platform: str | None = None) -> Set[str]:
     if not isinstance(skills_cfg, dict):
         return set()
 
-    from gateway.session_context import get_session_env
+    from agent.session_context import get_session_env
     resolved_platform = (
         platform
         or os.getenv("HERMES_PLATFORM")

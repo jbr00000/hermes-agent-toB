@@ -413,7 +413,7 @@ class TestHistoryDisplay:
         assert "session title" in output
 
     def test_resume_updates_hermes_session_id_env_and_context(self, tmp_path):
-        from gateway.session_context import _UNSET, _VAR_MAP, get_session_env
+        from agent.session_context import _UNSET, _VAR_MAP, get_session_env
         from hermes_state import SessionDB
 
         cli = _make_cli()

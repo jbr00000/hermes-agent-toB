@@ -710,7 +710,7 @@ class TestCrossSessionApprovalIsolation:
         gateway that value would be another live session's key; here we assert
         the resolver never surfaces it.
         """
-        from gateway.session_context import clear_session_vars, set_session_vars
+        from agent.session_context import clear_session_vars, set_session_vars
         from tools.approval import get_current_session_key
 
         # Simulate: concurrent session B was the last to clobber os.environ
