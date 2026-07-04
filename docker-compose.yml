@@ -1,0 +1,16 @@
+# Hermes headless server (to-B fork) — local/dev compose. See 改造计划.md Step 3.6.
+# Per-customer state lives in ./.hermes-dev (config.yaml, .env with API keys,
+# users.db, sessions, business.db) and is mounted as HERMES_HOME=/data.
+services:
+  hermes-server:
+    build: .
+    image: hermes-agent-tob:dev
+    container_name: hermes-server
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./.hermes-dev:/data
+    environment:
+      - HERMES_SERVER_PORT=8000
+      # HERMES_DB_URL, DEEPSEEK_API_KEY, etc. come from /data/.env (loaded by the server).
+    restart: unless-stopped

@@ -33,7 +33,8 @@
       "Bash(findstr \":8000\")",
       "Bash(findstr LISTENING)",
       "Bash(D:/Anaconda/envs/hermes/python.exe)",
-      "Bash(D:/Anaconda/envs/hermes/python.exe -c \"import tools.db_query; from tools.registry import registry; print\\('db_query registered:', 'db_query' in [e.name for e in registry._tools.values\\(\\)]\\)\")"
+      "Bash(D:/Anaconda/envs/hermes/python.exe -c \"import tools.db_query; from tools.registry import registry; print\\('db_query registered:', 'db_query' in [e.name for e in registry._tools.values\\(\\)]\\)\")",
+      "Bash(docker build *)"
     ]
   }
 }

@@ -106,3 +106,6 @@ acp_registry/
 .gitattributes
 .hadolint.yaml
 .mailmap
+
+# Local dev state (provided by volume, not build context)
+.hermes-dev
