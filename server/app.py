@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from server import auth as auth_module
-from server.routes import auth, chat
+from server.routes import auth, chat, sessions
 
 
 def create_app() -> FastAPI:
@@ -12,6 +12,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Hermes Headless Server", version="0.2.0")
     app.include_router(auth.router)
     app.include_router(chat.router)
+    app.include_router(sessions.router)
 
     @app.get("/health")
     def health():

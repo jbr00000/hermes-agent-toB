@@ -19,6 +19,7 @@ def build_agent(
     *,
     session_id: str,
     user_id: str,
+    prefill_messages=None,
 ):
     """Construct an AIAgent scoped to one server-side chat session.
 
@@ -26,9 +27,15 @@ def build_agent(
     stream_callback=...)`` — do NOT also pass ``stream_delta_callback`` here,
     or each delta fires twice (one per hook).
 
+    Persistence is managed EXPLICITLY by the caller (routes/chat.py creates
+    the session row + appends messages), NOT via AIAgent.session_db — the
+    agent's deferred-row/close-finalize semantics don't fit a per-request
+    agent. Resume history is passed in via ``prefill_messages``.
+
     Args:
-        session_id: unique session id (persisted via SessionDB in later incs).
-        user_id: authenticated user id (Inc 1: stub "dev-user"; Inc 2: JWT user).
+        session_id: unique session id.
+        user_id: authenticated user id.
+        prefill_messages: prior turns (OpenAI format) for session resume.
     """
     from run_agent import AIAgent
 
@@ -43,4 +50,5 @@ def build_agent(
         skip_memory=True,           # no memory provider yet (Step 3.4)
         skip_context_files=True,
         quiet_mode=True,
+        prefill_messages=prefill_messages,  # Inc 3: resume prior history
     )

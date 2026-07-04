@@ -27,7 +27,11 @@
       "Bash(curl -s -N -m 60 -X POST http://127.0.0.1:8000/chat -H \"Content-Type: application/json\" -d '{\"message\":\"Reply with exactly the word PONG and nothing else.\"}')",
       "Bash(D:/Anaconda/envs/hermes/python.exe -m pip install \"passlib[bcrypt]\" bcrypt --progress-bar off --no-input)",
       "Bash(D:/Anaconda/envs/hermes/python.exe -m server)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(D:/Anaconda/envs/hermes/python.exe -c ' *)",
+      "Bash(netstat -ano)",
+      "Bash(findstr \":8000\")",
+      "Bash(findstr LISTENING)"
     ]
   }
 }
