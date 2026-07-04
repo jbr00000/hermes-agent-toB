@@ -34,7 +34,11 @@
       "Bash(findstr LISTENING)",
       "Bash(D:/Anaconda/envs/hermes/python.exe)",
       "Bash(D:/Anaconda/envs/hermes/python.exe -c \"import tools.db_query; from tools.registry import registry; print\\('db_query registered:', 'db_query' in [e.name for e in registry._tools.values\\(\\)]\\)\")",
-      "Bash(docker build *)"
+      "Bash(docker build *)",
+      "Bash(docker rm *)",
+      "Bash(docker run *)",
+      "Bash(curl -s -m 5 http://127.0.0.1:8001/health)",
+      "Bash(curl -s -m 5 -X POST http://127.0.0.1:8001/auth/login -H \"Content-Type: application/json\" -d '{\"username\":\"admin\",\"password\":\"changeme\"}')"
     ]
   }
 }
