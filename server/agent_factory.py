@@ -47,14 +47,27 @@ def build_agent(
         mode: "plan" | "execute" | None.
     """
     from run_agent import AIAgent
+    from server.memory import list_memory_contents
 
     is_plan = mode == "plan"
-    plan_prompt = (
-        "You are in PLAN mode. Investigate with read-only tools, then produce a clear, "
-        "structured plan for the user to approve. Do NOT execute any changes — no writes, "
-        "no mutations, no long-running actions. End with a concrete step list the user can "
-        "approve to switch to EXECUTE mode."
-    ) if is_plan else None
+
+    # Build an ephemeral system-prompt section combining persistent memory
+    # (per-user, loaded fresh each request) and the plan-mode instruction.
+    parts = []
+    memories = list_memory_contents(user_id)
+    if memories:
+        parts.append(
+            "Persistent memory about this user (carries across sessions):\n"
+            + "\n".join(f"- {m}" for m in memories)
+        )
+    if is_plan:
+        parts.append(
+            "You are in PLAN mode. Investigate with read-only tools, then produce a clear, "
+            "structured plan for the user to approve. Do NOT execute any changes — no writes, "
+            "no mutations, no long-running actions. End with a concrete step list the user can "
+            "approve to switch to EXECUTE mode."
+        )
+    ephemeral = "\n\n".join(parts) if parts else None
 
     return AIAgent(
         provider=_PROVIDER,
@@ -64,9 +77,9 @@ def build_agent(
         user_id=user_id,
         platform="headless",
         enabled_toolsets=["db"],    # read-only (plan mode keeps this; execute adds mutating tools in Step 2.4)
-        skip_memory=True,
+        skip_memory=True,           # AIAgent's memory-provider system is off; server injects memory above
         skip_context_files=True,
         quiet_mode=True,
         prefill_messages=prefill_messages,
-        ephemeral_system_prompt=plan_prompt,
+        ephemeral_system_prompt=ephemeral,
     )
