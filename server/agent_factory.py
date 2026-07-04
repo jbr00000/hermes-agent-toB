@@ -46,7 +46,7 @@ def build_agent(
         session_id=session_id,
         user_id=user_id,
         platform="headless",
-        enabled_toolsets=[],        # Inc 1: pure chat, no tools
+        enabled_toolsets=["db"],    # Inc 3.3: db_query tool (read-only, DB-grant enforced)
         skip_memory=True,           # no memory provider yet (Step 3.4)
         skip_context_files=True,
         quiet_mode=True,

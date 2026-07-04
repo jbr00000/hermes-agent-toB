@@ -205,6 +205,12 @@ TOOLSETS = {
         "tools": ["todo"],
         "includes": []
     },
+
+    "db": {
+        "description": "Read-only query against the configured business database (HERMES_DB_URL)",
+        "tools": ["db_query"],
+        "includes": []
+    },
     
     "memory": {
         "description": "Persistent memory across sessions (personal notes + user profile)",
