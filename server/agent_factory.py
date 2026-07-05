@@ -48,8 +48,16 @@ def build_agent(
     """
     from run_agent import AIAgent
     from server.memory import list_memory_contents
+    from server.features import get_features
 
     is_plan = mode == "plan"
+    features = get_features()
+
+    # Toolsets: db (read-only) + terminal (sandbox) are always on.
+    # computer_use (desktop control) is opt-in via features.computer_use.
+    toolsets = ["db", "terminal"]
+    if features.get("computer_use"):
+        toolsets.append("computer_use")
 
     # Build an ephemeral system-prompt section combining persistent memory
     # (per-user, loaded fresh each request) and the plan-mode instruction.
@@ -79,7 +87,7 @@ def build_agent(
         # db = read-only queries; terminal = sandboxed shell/code execution
         # (docker-only since Step 2.4; TERMINAL_ENV=docker + TERMINAL_DOCKER_IMAGE
         # select the sandbox container). execute_code (PTC) added when needed.
-        enabled_toolsets=["db", "terminal"],
+        enabled_toolsets=toolsets,
         skip_memory=True,           # AIAgent's memory-provider system is off; server injects memory above
         skip_context_files=True,
         quiet_mode=True,
