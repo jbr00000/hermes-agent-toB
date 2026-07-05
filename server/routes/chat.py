@@ -29,6 +29,16 @@ class ChatRequest(BaseModel):
     mode: Optional[str] = None  # "plan" | "execute" (default: execute)
 
 
+def _agent_runtime_metadata(agent, mode: str | None) -> dict:
+    return {
+        "provider": getattr(agent, "provider", None),
+        "model": getattr(agent, "model", None),
+        "reasoning_config": getattr(agent, "reasoning_config", None),
+        "enabled_toolsets": list(getattr(agent, "enabled_toolsets", None) or []),
+        "mode": (mode or "execute"),
+    }
+
+
 @router.post("/chat")
 async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
     # Inc 3: if resuming an existing session, it must belong to this user.
@@ -49,6 +59,7 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
     def run_agent() -> None:
         try:
             from server.agent_factory import build_agent
+            from server.audit import record_event
             from server.sessions import get_session_db
 
             db = get_session_db()
@@ -67,13 +78,57 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
                 prefill_messages=history,
                 mode=req.mode,
             )
+            runtime_metadata = _agent_runtime_metadata(agent, req.mode)
+            db.create_session(
+                session_id,
+                "headless",
+                user_id=user_id,
+                chat_id=session_id,
+                model=runtime_metadata.get("model"),
+                model_config={
+                    "provider": runtime_metadata.get("provider"),
+                    "reasoning_config": runtime_metadata.get("reasoning_config"),
+                    "enabled_toolsets": runtime_metadata.get("enabled_toolsets"),
+                    "mode": runtime_metadata.get("mode"),
+                },
+            )
+            record_event(
+                event_type="chat_turn",
+                session_id=session_id,
+                user_id=user_id,
+                status="started",
+                mode=runtime_metadata.get("mode"),
+                metadata=runtime_metadata,
+            )
             final = agent.chat(req.message, stream_callback=on_delta)
 
             # Persist this turn so the next request can resume it.
             db.append_message(session_id, "user", content=req.message)
             db.append_message(session_id, "assistant", content=final or "")
+            record_event(
+                event_type="chat_turn",
+                session_id=session_id,
+                user_id=user_id,
+                status="completed",
+                mode=runtime_metadata.get("mode"),
+                metadata={**runtime_metadata, "response_chars": len(final or "")},
+            )
             q.put(("final", final or ""))
         except Exception as exc:  # surfaced to the client as an error event
+            try:
+                from server.audit import record_event
+
+                record_event(
+                    event_type="chat_turn",
+                    session_id=session_id,
+                    user_id=user_id,
+                    status="failed",
+                    mode=req.mode or "execute",
+                    metadata={"mode": req.mode or "execute"},
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            except Exception:
+                pass
             q.put(("error", f"{type(exc).__name__}: {exc}"))
         finally:
             q.put(SENTINEL)

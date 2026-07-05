@@ -1,18 +1,5 @@
-"""Build AIAgent instances for the headless server.
-
-Inc 1: minimal DeepSeek config, thinking off, no memory/tools — proves the
-AIAgent-in-FastAPI + SSE streaming integration. Later increments read
-provider/model from config.yaml and add toolsets, memory, per-user scoping.
-"""
+"""Build AIAgent instances for the headless server."""
 from __future__ import annotations
-
-from typing import Callable, Optional
-
-# Inc 1 hardcoded dev config (DeepSeek, thinking off).
-# TODO(Inc 2): read provider/model/reasoning from config.yaml.
-_PROVIDER = "deepseek"
-_MODEL = "deepseek-v4-pro"
-_REASONING_CONFIG = {"enabled": False}  # thinking off
 
 
 def build_agent(
@@ -35,10 +22,7 @@ def build_agent(
 
     plan mode (decision 9): when mode=="plan", the agent is given a read-only
     toolset + a system-prompt instructing it to produce a plan and NOT execute
-    changes. The toolset restriction becomes meaningful once mutating tools
-    (terminal/execute_code/write — Step 2.4 sandbox) are enabled; until then
-    db_query is the only tool and is already read-only, so the prompt carries
-    the plan-mode behavior.
+    changes.
 
     Args:
         session_id: unique session id.
@@ -49,15 +33,13 @@ def build_agent(
     from run_agent import AIAgent
     from server.memory import list_memory_contents
     from server.features import get_features
+    from server.runtime_config import load_runtime_config
+    from server.tool_policy import resolve_toolsets
 
     is_plan = mode == "plan"
     features = get_features()
-
-    # Toolsets: db (read-only) + terminal (sandbox) are always on.
-    # computer_use (desktop control) is opt-in via features.computer_use.
-    toolsets = ["db", "terminal"]
-    if features.get("computer_use"):
-        toolsets.append("computer_use")
+    runtime_config = load_runtime_config()
+    toolsets = resolve_toolsets(mode=mode, features=features)
 
     # Build an ephemeral system-prompt section combining persistent memory
     # (per-user, loaded fresh each request) and the plan-mode instruction.
@@ -78,9 +60,9 @@ def build_agent(
     ephemeral = "\n\n".join(parts) if parts else None
 
     return AIAgent(
-        provider=_PROVIDER,
-        model=_MODEL,
-        reasoning_config=_REASONING_CONFIG,
+        provider=runtime_config.provider,
+        model=runtime_config.model,
+        reasoning_config=runtime_config.reasoning_config,
         session_id=session_id,
         user_id=user_id,
         platform="headless",
