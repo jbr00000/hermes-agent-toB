@@ -2409,6 +2409,8 @@ def cmd_chat(args):
 
 
 def cmd_gateway(args):
+    print("hermes gateway (messaging platforms) has been removed in this to-B fork.")
+    return
     """Gateway management commands."""
     _sync_bundled_skills_quietly()
 
@@ -5569,6 +5571,8 @@ def _desktop_launch_options() -> tuple[list[str], str]:
 
 
 def cmd_gui(args: argparse.Namespace):
+    print("hermes gui (desktop app) has been removed in this to-B fork.")
+    return
     """Build and launch the native Electron desktop GUI."""
     desktop_dir = PROJECT_ROOT / "apps" / "desktop"
     if not (desktop_dir / "package.json").exists():
@@ -10792,6 +10796,8 @@ def _coalesce_session_name_args(argv: list) -> list:
 
 
 def cmd_profile(args):
+    print("hermes profile (multi-instance management) has been removed in this to-B fork.")
+    return
     """Profile management — create, delete, list, switch, alias."""
     from hermes_cli.profiles import (
         list_profiles,
@@ -11844,6 +11850,8 @@ def cmd_dashboard(args):
 
 
 def cmd_dashboard_register(args):
+    print("hermes dashboard register has been removed in this to-B fork.")
+    return
     """Register a self-hosted dashboard OAuth client with Nous Portal."""
     from hermes_cli.dashboard_register import cmd_dashboard_register as _impl
 
@@ -12314,6 +12322,8 @@ def cmd_memory(args):
 
 
 def cmd_acp(args):
+    print("hermes acp (IDE integration) has been removed in this to-B fork.")
+    return
     """Launch Hermes Agent as an ACP server."""
     try:
         from acp_adapter.entry import main as acp_main
