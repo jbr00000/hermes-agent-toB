@@ -1,7 +1,7 @@
 """Feature-flag routes: GET /features (read current flags).
 
-The frontend reads this to render the opt-in buttons (computer_use,
-host_terminal) in their current state. Toggling (POST) lands in Inc 2 once the
+The frontend reads this to render opt-in feature state such as host_terminal.
+Toggling (POST) lands in Inc 2 once the
 admin-only write path + audit logging are added.
 """
 from __future__ import annotations

@@ -88,24 +88,8 @@ infographic/
 # Plugin-level docs (hermes-achievements ships docs/ but the runtime doesn't read them)
 plugins/hermes-achievements/docs/
 
-# Legacy consumer/platform plugin bundles. Keep browser, image, video, and web
-# plugins in the product image; these are old CLI/platform integrations.
-plugins/google_meet/
+# Legacy memory plugin bundle; the B-side server uses server/memory.py instead.
 plugins/memory/
-plugins/platforms/
-plugins/spotify/
-plugins/teams_pipeline/
-
-# Legacy tool modules not used by the headless B-side server. Skill modules are
-# intentionally kept because agent internals still import their helpers.
-tools/computer_use_tool.py
-tools/discord_tool.py
-tools/feishu_doc_tool.py
-tools/feishu_drive_tool.py
-tools/homeassistant_tool.py
-tools/project_tools.py
-tools/send_message_tool.py
-tools/yuanbao_tools.py
 
 # Nix / Homebrew / AUR packaging metadata — irrelevant to Docker
 nix/

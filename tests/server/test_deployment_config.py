@@ -19,7 +19,6 @@ def test_load_deployment_config_defaults_are_secure(monkeypatch, tmp_path) -> No
     assert config.sandbox.backend == "docker"
     assert config.sandbox.network_egress == "deny"
     assert config.features["host_terminal"] is False
-    assert config.features["computer_use"] is False
     assert config.database.max_rows == 200
 
 
@@ -44,7 +43,6 @@ mcp_servers:
     url: http://metrics-mcp.internal/sse
 features:
   host_terminal: false
-  computer_use: false
 """.strip(),
         encoding="utf-8",
     )

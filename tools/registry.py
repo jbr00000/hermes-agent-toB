@@ -29,21 +29,11 @@ logger = logging.getLogger(__name__)
 
 _TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
 
-# Product/headless server pruning. These modules remain in source for old CLI
-# compatibility and tests, but they should not be auto-registered in the B-side
-# server runtime. Browser automation and voice/image/video tools are intentionally
-# not listed here.
+# Product/headless server pruning. These modules remain in source for old skill
+# internals, but they should not be auto-registered in the B-side server runtime.
 _HEADLESS_SKIP_TOOL_MODULES = {
-    "computer_use_tool",
-    "discord_tool",
-    "feishu_doc_tool",
-    "feishu_drive_tool",
-    "homeassistant_tool",
-    "project_tools",
-    "send_message_tool",
     "skill_manager_tool",
     "skills_tool",
-    "yuanbao_tools",
 }
 
 

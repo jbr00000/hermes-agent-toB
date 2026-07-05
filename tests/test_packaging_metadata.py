@@ -86,7 +86,7 @@ def test_every_on_disk_subpackage_is_covered_by_packages_find():
     )
 
 
-def test_headless_distribution_excludes_legacy_platform_plugins():
+def test_headless_distribution_keeps_media_browser_and_removes_legacy_platform_sources():
     include, exclude = _packages_find_config()
     selected = set(find_packages(where=str(REPO_ROOT), include=include, exclude=exclude))
     excluded_plugin_data = _exclude_package_data_plugins()
@@ -116,19 +116,20 @@ def test_headless_distribution_excludes_legacy_platform_plugins():
         "tools/send_message_tool.py",
         "tools/yuanbao_tools.py",
     ]:
-        assert tool_file in dockerignore
+        assert not (REPO_ROOT / tool_file).exists()
+    for removed_plugin_dir in [
+        "plugins/google_meet",
+        "plugins/platforms",
+        "plugins/spotify",
+        "plugins/teams_pipeline",
+    ]:
+        assert not (REPO_ROOT / removed_plugin_dir).exists()
     assert "plugins.platforms" not in selected
     assert not any(package.startswith("plugins.platforms.") for package in selected)
     assert "plugins.spotify" not in selected
     assert "plugins.google_meet" not in selected
     assert "plugins.teams_pipeline" not in selected
-    assert {
-        "google_meet/**",
-        "memory/**",
-        "platforms/**",
-        "spotify/**",
-        "teams_pipeline/**",
-    }.issubset(excluded_plugin_data)
+    assert {"memory/**"}.issubset(excluded_plugin_data)
 
 
 def test_packaging_declared_as_core_dependency():

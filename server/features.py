@@ -1,7 +1,6 @@
 """Feature flags for elevated headless-server capabilities.
 
-Both default off. The normal production path is Docker sandbox execution and
-no desktop-control capability.
+The normal production path is Docker sandbox execution.
 
 Host terminal is intentionally stricter than a normal feature flag. A to-B
 deployment must not be able to flip the agent into host shell execution from
@@ -13,7 +12,7 @@ from __future__ import annotations
 
 import os
 
-_DEFAULTS = {"computer_use": False, "host_terminal": False}
+_DEFAULTS = {"host_terminal": False}
 
 
 def _truthy(value: str | None) -> bool:

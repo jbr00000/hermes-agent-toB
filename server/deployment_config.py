@@ -40,9 +40,7 @@ class DeploymentConfig:
     database: DatabaseDeploymentConfig = field(default_factory=DatabaseDeploymentConfig)
     sandbox: SandboxDeploymentConfig = field(default_factory=SandboxDeploymentConfig)
     mcp_servers: list[dict[str, Any]] = field(default_factory=list)
-    features: dict[str, bool] = field(
-        default_factory=lambda: {"computer_use": False, "host_terminal": False}
-    )
+    features: dict[str, bool] = field(default_factory=lambda: {"host_terminal": False})
 
 
 def _config_path() -> Path:
@@ -91,7 +89,7 @@ def load_deployment_config(path: str | os.PathLike[str] | None = None) -> Deploy
 
     database = _as_dict(raw.get("database"))
     sandbox = _as_dict(raw.get("sandbox"))
-    features = {"computer_use": False, "host_terminal": False}
+    features = {"host_terminal": False}
     for key, value in _as_dict(raw.get("features")).items():
         if key in features:
             features[key] = bool(value)

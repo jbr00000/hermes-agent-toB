@@ -12647,9 +12647,6 @@ def main():
     # =========================================================================
     # send command — pipe shell-script output to any configured platform
     # =========================================================================
-    from hermes_cli.send_cmd import register_send_subparser
-    register_send_subparser(subparsers)
-
     # =========================================================================
     # login command  (parser built in hermes_cli/subcommands/login.py)
     # =========================================================================

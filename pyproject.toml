@@ -335,28 +335,16 @@ plugins = [
 
 [tool.setuptools.exclude-package-data]
 plugins = [
-  "google_meet/**",
   "memory/**",
-  "platforms/**",
-  "spotify/**",
-  "teams_pipeline/**",
 ]
 
 [tool.setuptools.packages.find]
 include = ["agent", "agent.*", "tools", "tools.*", "server", "server.*", "hermes_cli", "hermes_cli.*", "cron", "cron.*", "plugins", "plugins.*", "providers", "providers.*"]
 exclude = [
-  # Legacy consumer/platform plugin bundles stay in source for old CLI tests,
-  # but are not part of the headless B-side server distribution.
-  "plugins.google_meet",
-  "plugins.google_meet.*",
+  # The headless B-side server uses server/memory.py instead of the legacy
+  # plugin memory providers.
   "plugins.memory",
   "plugins.memory.*",
-  "plugins.platforms",
-  "plugins.platforms.*",
-  "plugins.spotify",
-  "plugins.spotify.*",
-  "plugins.teams_pipeline",
-  "plugins.teams_pipeline.*",
 ]
 
 [tool.pytest.ini_options]

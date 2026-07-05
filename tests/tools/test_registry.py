@@ -357,8 +357,8 @@ class TestBuiltinDiscovery:
         (tools_dir / "registry.py").write_text("", encoding="utf-8")
         for name in [
             "browser_tool",
-            "discord_tool",
             "image_generation_tool",
+            "skills_tool",
             "tts_tool",
             "video_generation_tool",
             "vision_tools",
@@ -373,7 +373,7 @@ class TestBuiltinDiscovery:
             imported = discover_builtin_tools(tools_dir)
 
         assert not _should_skip_builtin_module_in_headless("browser_tool")
-        assert _should_skip_builtin_module_in_headless("discord_tool")
+        assert _should_skip_builtin_module_in_headless("skills_tool")
         assert imported == [
             "tools.browser_tool",
             "tools.image_generation_tool",

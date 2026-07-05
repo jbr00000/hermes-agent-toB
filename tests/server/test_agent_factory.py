@@ -26,8 +26,6 @@ model:
   default: llama-3.3
 agent:
   reasoning_effort: low
-features:
-  computer_use: true
 """,
     )
     captured = {}
@@ -46,7 +44,7 @@ features:
     assert captured["provider"] == "custom"
     assert captured["model"] == "llama-3.3"
     assert captured["reasoning_config"] == {"enabled": True, "effort": "low"}
-    assert captured["enabled_toolsets"] == ["db", "session_search", "terminal", "computer_use"]
+    assert captured["enabled_toolsets"] == ["db", "session_search", "terminal"]
 
 
 def test_build_agent_plan_mode_removes_terminal_toolset(monkeypatch, tmp_path) -> None:
@@ -55,10 +53,8 @@ def test_build_agent_plan_mode_removes_terminal_toolset(monkeypatch, tmp_path) -
     monkeypatch.setenv("HERMES_HOME", str(home))
     _write_config(
         home,
-        """
+"""
 model: deepseek-v4-pro
-features:
-  computer_use: true
 """,
     )
     captured = {}
