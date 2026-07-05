@@ -35,6 +35,17 @@ _DB_PATH: Optional[str] = None
 _JWT_SECRET: Optional[str] = None
 _JWT_ALG = "HS256"
 _JWT_TTL_SECONDS = 24 * 3600
+VALID_ROLES = frozenset({"admin", "user"})
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _validate_role(role: str) -> str:
+    if role not in VALID_ROLES:
+        raise ValueError(f"invalid role {role!r}; expected one of: {', '.join(sorted(VALID_ROLES))}")
+    return role
 
 
 def _db_path() -> str:
@@ -73,7 +84,17 @@ def init_db() -> None:
         count = con.execute("SELECT COUNT(*) FROM users").fetchone()[0]
         if count == 0:
             username = os.environ.get("HERMES_ADMIN_USERNAME", "admin")
-            password = os.environ.get("HERMES_ADMIN_PASSWORD", "changeme")
+            password = os.environ.get("HERMES_ADMIN_PASSWORD")
+            if password is None:
+                password = "changeme"
+            if not password:
+                raise RuntimeError("HERMES_ADMIN_PASSWORD must not be empty")
+            if password == "changeme" and not _env_flag("HERMES_ALLOW_DEFAULT_ADMIN"):
+                raise RuntimeError(
+                    "Refusing to bootstrap admin with the default password. "
+                    "Set HERMES_ADMIN_PASSWORD, or set HERMES_ALLOW_DEFAULT_ADMIN=1 "
+                    "only for local development."
+                )
             con.execute(
                 "INSERT INTO users(id, username, password_hash, role, created_at) VALUES(?, ?, ?, ?, ?)",
                 (str(uuid.uuid4()), username, _hash_pw(password), "admin", time.time()),
@@ -91,6 +112,7 @@ def init_db() -> None:
 
 
 def create_user(username: str, password: str, role: str = "user") -> dict:
+    role = _validate_role(role)
     con = sqlite3.connect(_db_path())
     try:
         user = {
@@ -158,6 +180,7 @@ def delete_user(user_id: str) -> bool:
 
 
 def set_user_role(user_id: str, role: str) -> bool:
+    role = _validate_role(role)
     con = sqlite3.connect(_db_path())
     try:
         cur = con.execute("UPDATE users SET role = ? WHERE id = ?", (role, user_id))

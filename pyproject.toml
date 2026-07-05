@@ -6,9 +6,9 @@ requires = ["setuptools>=77.0,<83"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "hermes-agent"
-version = "0.18.0"
-description = "The self-improving AI agent — creates skills from experience, improves them during use, and runs anywhere"
+name = "hermes-agent-tob"
+version = "0.18.0.post1"
+description = "A headless, private to-B agent server forked from Hermes Agent"
 readme = "README.md"
 # Upper bound is load-bearing, not cosmetic. uv resolves the project's
 # Python from `requires-python`, and an inherited `UV_PYTHON` env var (or a
@@ -18,7 +18,7 @@ readme = "README.md"
 # <3.14 makes uv refuse 3.14 with a clear error instead of attempting that
 # build. Raise the ceiling once our Rust transitives ship cp314 wheels.
 requires-python = ">=3.11,<3.14"
-authors = [{ name = "Nous Research" }]
+authors = [{ name = "Hermes Agent to-B maintainers" }]
 license = "MIT"
 license-files = ["LICENSE"]
 dependencies = [
@@ -109,6 +109,9 @@ dependencies = [
   "pathspec==1.1.1",
   "fastapi>=0.104.0,<1",
   "uvicorn[standard]>=0.24.0,<1",
+  # Headless server auth and streaming response support.
+  "bcrypt==5.0.0",
+  "sse-starlette==3.4.5",
   # Streaming multipart uploads for the dashboard file manager (NS-501).
   # FastAPI's UploadFile/Form depend on python-multipart; it is NOT pulled in
   # by fastapi itself, so the dashboard's multipart upload endpoint would 500
@@ -180,7 +183,7 @@ voice = [
 pty = [
   # Kept as a no-op back-compat alias — `ptyprocess` and `pywinpty` are now
   # in the main `dependencies` list (with the same platform markers), so
-  # any existing `pip install hermes-agent[pty]` invocations resolve cleanly
+  # any existing `pip install hermes-agent-tob[pty]` invocations resolve cleanly
   # without pulling in extra packages.
 ]
 honcho = ["honcho-ai==2.0.1"]
@@ -195,7 +198,7 @@ mem0 = ["mem0ai==2.0.10"]
 # (see the main `dependencies` list) since the byte/pixel shrink paths are on
 # the default vision-embed path and the mid-session lazy install deadlocked the
 # CLI under prompt_toolkit (#40490). This extra is kept as a no-op back-compat
-# alias so existing `pip install hermes-agent[vision]` invocations still resolve.
+# alias so existing `pip install hermes-agent-tob[vision]` invocations still resolve.
 vision = []
 # CVE-2026-48710 (BadHost): Starlette is pulled transitively by mcp's
 # sse-starlette / HTTP-SSE stack (and by fastapi in the `web` extra). Before
@@ -229,22 +232,22 @@ azure-identity = ["azure-identity==1.25.3"]
 termux = [
   # Baseline Android / Termux path for reliable fresh installs.
   "python-telegram-bot[webhooks]==22.6",
-  "hermes-agent[cron]",
-  "hermes-agent[cli]",
-  "hermes-agent[pty]",
-  "hermes-agent[mcp]",
-  "hermes-agent[honcho]",
+  "hermes-agent-tob[cron]",
+  "hermes-agent-tob[cli]",
+  "hermes-agent-tob[pty]",
+  "hermes-agent-tob[mcp]",
+  "hermes-agent-tob[honcho]",
 ]
 termux-all = [
   # Best-effort "install all" profile for Termux. Same policy as [all]:
   # only includes extras that aren't covered by `tools/lazy_deps.py`.
   # Backends like telegram/slack/dingtalk/feishu/honcho lazy-install at
   # first use, so they're no longer eager-installed here.
-  "hermes-agent[termux]",
-  "hermes-agent[google]",
-  "hermes-agent[homeassistant]",
-  "hermes-agent[sms]",
-  "hermes-agent[web]",
+  "hermes-agent-tob[termux]",
+  "hermes-agent-tob[google]",
+  "hermes-agent-tob[homeassistant]",
+  "hermes-agent-tob[sms]",
+  "hermes-agent-tob[web]",
 ]
 dingtalk = ["dingtalk-stream==0.24.3", "alibabacloud-dingtalk==2.2.42", "qrcode==7.4.2"]
 feishu = ["lark-oapi==1.5.3", "qrcode==7.4.2"]
@@ -290,15 +293,15 @@ all = [
   # [all], `uv sync --locked` on Windows tried to build it from sdist
   # and failed on `make`. Lazy-install routes that build to first use,
   # where the user is expected to have a toolchain available.
-  "hermes-agent[cron]",
-  "hermes-agent[cli]",
-  "hermes-agent[pty]",
-  "hermes-agent[mcp]",
-  "hermes-agent[homeassistant]",
-  "hermes-agent[sms]",
-  "hermes-agent[google]",
-  "hermes-agent[web]",
-  "hermes-agent[youtube]",
+  "hermes-agent-tob[cron]",
+  "hermes-agent-tob[cli]",
+  "hermes-agent-tob[pty]",
+  "hermes-agent-tob[mcp]",
+  "hermes-agent-tob[homeassistant]",
+  "hermes-agent-tob[sms]",
+  "hermes-agent-tob[google]",
+  "hermes-agent-tob[web]",
+  "hermes-agent-tob[youtube]",
 ]
 
 [project.scripts]

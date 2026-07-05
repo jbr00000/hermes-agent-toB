@@ -1,7 +1,7 @@
 # Upstream Baseline Record
 
 This project is a **hard fork** of [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent),
-transformed into a private, to-B-oriented agent framework. See [`改造计划.md`](./改造计划.md)
+transformed into a private, to-B-oriented agent framework. See [`改造计划.md`](./docs/改造计划.md)
 for the full transformation plan and requirements.
 
 ## Baseline

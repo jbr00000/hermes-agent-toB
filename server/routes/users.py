@@ -7,6 +7,7 @@ open only during Inc 2 testing).
 from __future__ import annotations
 
 import sqlite3
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -20,11 +21,11 @@ router = APIRouter(prefix="/users", tags=["users"], dependencies=[Depends(requir
 class CreateUserRequest(BaseModel):
     username: str
     password: str
-    role: str = "user"
+    role: Literal["user", "admin"] = "user"
 
 
 class RoleUpdateRequest(BaseModel):
-    role: str
+    role: Literal["user", "admin"]
 
 
 @router.get("")

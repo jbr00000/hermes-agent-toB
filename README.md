@@ -7,7 +7,7 @@
 
 把开源个人助手 Hermes 改造成**企业级、可交付客户独立部署的 agent 平台**。一个 headless FastAPI 服务作为前端 BFF，驱动 `AIAgent` 核心，提供：对话（流式）、查客户数据库（只读）、沙盒跑生成代码、规划模式、持久记忆、多用户管理——全部按用户隔离，容器化部署。
 
-详见 [`改造计划.md`](改造计划.md)（需求 + 9 个锁定架构决策 + 改造记录）。
+详见 [`改造计划.md`](docs/改造计划.md)（需求 + 9 个锁定架构决策 + 改造记录）。
 
 ## 核心特性
 
@@ -36,7 +36,7 @@
                       └── users.db ── 用户 + bcrypt + 角色
 ```
 
-详细模块说明见 [`项目架构详解.md`](项目架构详解.md)；前端对接的 API 见 [`API文档.md`](API文档.md)。
+详细模块说明见 [`项目架构详解.md`](docs/项目架构详解.md)；前端对接的 API 见 [`API文档.md`](docs/API文档.md)。
 
 ## 快速开始
 
@@ -48,7 +48,7 @@
 ```bash
 conda create -n hermes python=3.12 -y
 conda activate hermes
-pip install -e ".[dev]" bcrypt sse-starlette
+pip install -e ".[dev]"
 ```
 
 ### 2. 配置 HERMES_HOME（本地 dev 状态目录）
@@ -62,7 +62,7 @@ cp cli-config.yaml.example .hermes-dev/config.yaml   # 调 model 等
 ```bash
 HERMES_HOME=.hermes-dev python -m server     # 启动在 :8000
 ```
-首跑自动 bootstrap admin 用户（默认 admin/changeme，设 `HERMES_ADMIN_PASSWORD` 改）。
+首跑会自动 bootstrap admin 用户；生产/交付环境必须先设置 `HERMES_ADMIN_PASSWORD`。本地临时开发如需使用 `admin/changeme`，显式设置 `HERMES_ALLOW_DEFAULT_ADMIN=1`。
 
 ### 4. 容器化
 ```bash
@@ -99,9 +99,9 @@ features:
 
 | 文档 | 内容 |
 |---|---|
-| [`改造计划.md`](改造计划.md) | 需求 + 9 个架构决策 + 改造记录 |
-| [`项目架构详解.md`](项目架构详解.md) | 每个模块的作用 + 数据流 |
-| [`API文档.md`](API文档.md) | 前端对接的 API 接口（含 SSE 格式） |
+| [`改造计划.md`](docs/改造计划.md) | 需求 + 9 个架构决策 + 改造记录 |
+| [`项目架构详解.md`](docs/项目架构详解.md) | 每个模块的作用 + 数据流 |
+| [`API文档.md`](docs/API文档.md) | 前端对接的 API 接口（含 SSE 格式） |
 | [`CLAUDE.md`](CLAUDE.md) | 给 AI 助手的项目导览 |
 | [`AGENTS.md`](AGENTS.md) | 开发指南 + 硬性约束 + 编码规范 |
 | [`UPSTREAM.md`](UPSTREAM.md) | 硬分叉基线记录 |
