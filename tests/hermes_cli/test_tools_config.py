@@ -182,48 +182,6 @@ def test_get_platform_tools_context_engine_respects_explicit_empty_selection():
     assert "context_engine" not in enabled
 
 
-def test_get_platform_tools_default_whatsapp_includes_web():
-    enabled = _get_platform_tools({}, "whatsapp")
-
-    assert "web" in enabled
-
-
-def test_get_platform_tools_homeassistant_platform_keeps_homeassistant_toolset():
-    enabled = _get_platform_tools({}, "homeassistant")
-
-    assert "homeassistant" in enabled
-
-
-def test_get_platform_tools_homeassistant_toolset_enabled_for_cron_when_hass_token_set(monkeypatch):
-    """HA toolset is runtime-gated by check_fn (requires HASS_TOKEN).
-
-    When HASS_TOKEN is set, the user has explicitly opted in — _DEFAULT_OFF_TOOLSETS
-    shouldn't also strip HA from platforms (like cron) that run through
-    _get_platform_tools without an explicit saved toolset list.
-
-    Regression guard for Norbert's HA cron breakage after #14798 made cron
-    honor per-platform tool config.
-    """
-    monkeypatch.setenv("HASS_TOKEN", "fake-test-token")
-
-    cron_enabled = _get_platform_tools({}, "cron")
-    assert "homeassistant" in cron_enabled
-    # moa must stay off — the original goal of #14798
-    assert "moa" not in cron_enabled
-
-    cli_enabled = _get_platform_tools({}, "cli")
-    assert "homeassistant" in cli_enabled
-
-
-def test_get_platform_tools_homeassistant_toolset_off_for_cron_when_hass_token_missing(monkeypatch):
-    """Without HASS_TOKEN, HA stays off by default — preserves #14798's behavior
-    for users who never configured HA."""
-    monkeypatch.delenv("HASS_TOKEN", raising=False)
-
-    cron_enabled = _get_platform_tools({}, "cron")
-    assert "homeassistant" not in cron_enabled
-
-
 def test_get_platform_tools_x_search_auto_enabled_when_xai_oauth_present(monkeypatch):
     """x_search toolset auto-enables across platforms when xAI Grok OAuth
     tokens are present, mirroring the HASS_TOKEN → homeassistant rule.
@@ -273,19 +231,19 @@ def test_get_platform_tools_x_search_respects_explicit_config(monkeypatch):
         "hermes_cli.tools_config._xai_credentials_present", lambda: True
     )
 
-    # User explicitly opted into spotify but not x_search via `hermes tools`.
-    config = {"platform_toolsets": {"cli": ["hermes-cli", "spotify"]}}
+    # User explicitly opted into video but not x_search via `hermes tools`.
+    config = {"platform_toolsets": {"cli": ["hermes-cli", "video"]}}
     enabled = _get_platform_tools(config, "cli")
     assert "x_search" not in enabled
-    assert "spotify" in enabled
+    assert "video" in enabled
 
 
 def test_get_platform_tools_expands_composite_when_mixed_with_configurable():
-    """``[hermes-cli, spotify]`` (composite + configurable) must keep the full
-    ``hermes-cli`` toolset alongside the explicit Spotify opt-in. The
+    """``[hermes-cli, video]`` (composite + configurable) must keep the full
+    ``hermes-cli`` toolset alongside the explicit Video opt-in. The
     has_explicit_config branch used to drop ``hermes-cli`` on the floor,
-    leaving sessions with only ``{spotify, kanban}``."""
-    config = {"platform_toolsets": {"cli": ["hermes-cli", "spotify"]}}
+    leaving sessions with only ``{video, kanban}``."""
+    config = {"platform_toolsets": {"cli": ["hermes-cli", "video"]}}
 
     enabled = _get_platform_tools(config, "cli", include_default_mcp_servers=False)
 
@@ -293,8 +251,8 @@ def test_get_platform_tools_expands_composite_when_mixed_with_configurable():
     for ts in ("terminal", "file", "web", "browser", "memory", "delegation",
                "code_execution", "todo", "session_search", "skills"):
         assert ts in enabled, f"{ts} should be enabled when hermes-cli is listed"
-    # User explicitly opted into Spotify — must survive _DEFAULT_OFF_TOOLSETS subtraction.
-    assert "spotify" in enabled
+    # User explicitly opted into Video — must survive _DEFAULT_OFF_TOOLSETS subtraction.
+    assert "video" in enabled
 
 
 def test_get_platform_tools_composite_only_unchanged():
@@ -938,53 +896,6 @@ def test_first_install_nous_auto_configures_video_gen(monkeypatch):
 # ── Platform / toolset consistency ────────────────────────────────────────────
 
 
-class TestPlatformToolsetConsistency:
-    """Every platform in tools_config.PLATFORMS must have a matching toolset."""
-
-    def test_all_platforms_have_toolset_definitions(self):
-        """Each platform's default_toolset must exist in TOOLSETS."""
-        from hermes_cli.tools_config import PLATFORMS
-        from toolsets import TOOLSETS
-
-        for platform, meta in PLATFORMS.items():
-            ts_name = meta["default_toolset"]
-            assert ts_name in TOOLSETS, (
-                f"Platform {platform!r} references toolset {ts_name!r} "
-                f"which is not defined in toolsets.py"
-            )
-
-    def test_gateway_toolset_includes_all_messaging_platforms(self):
-        """hermes-gateway includes list should cover all messaging platforms."""
-        from hermes_cli.tools_config import PLATFORMS
-        from toolsets import TOOLSETS
-
-        gateway_includes = set(TOOLSETS["hermes-gateway"]["includes"])
-        # Exclude non-messaging platforms from the check
-        non_messaging = {"cli", "api_server", "cron"}
-        for platform, meta in PLATFORMS.items():
-            if platform in non_messaging:
-                continue
-            ts_name = meta["default_toolset"]
-            assert ts_name in gateway_includes, (
-                f"Platform {platform!r} toolset {ts_name!r} missing from "
-                f"hermes-gateway includes"
-            )
-
-    def test_skills_config_covers_tools_config_platforms(self):
-        """skills_config.PLATFORMS should have entries for all gateway platforms."""
-        from hermes_cli.tools_config import PLATFORMS as TOOLS_PLATFORMS
-        from hermes_cli.skills_config import PLATFORMS as SKILLS_PLATFORMS
-
-        non_messaging = {"api_server"}
-        for platform in TOOLS_PLATFORMS:
-            if platform in non_messaging:
-                continue
-            assert platform in SKILLS_PLATFORMS, (
-                f"Platform {platform!r} in tools_config but missing from "
-                f"skills_config PLATFORMS"
-            )
-
-
 def test_numeric_mcp_server_name_does_not_crash_sorted():
     """YAML parses bare numeric keys (e.g. ``12306:``) as int.
 
@@ -1014,91 +925,6 @@ def test_numeric_mcp_server_name_does_not_crash_sorted():
 
 
 # ─── Imagegen Backend Picker Wiring ────────────────────────────────────────
-
-def test_toolset_has_keys_treats_no_key_providers_as_configured():
-    config = {}
-
-    assert _toolset_has_keys("computer_use", config) is True
-
-
-def test_computer_use_needs_configuration_when_cua_driver_post_setup_pending():
-    """No-key providers can still need setup when their post_setup is unsatisfied.
-
-    Returning users enabling Computer Use through `hermes tools` must reach the
-    cua-driver post-setup installer even though the provider has no API keys.
-    """
-    with patch("shutil.which", return_value=None):
-        assert _toolset_needs_configuration_prompt("computer_use", {}) is True
-
-
-def test_computer_use_skips_configuration_when_cua_driver_already_installed():
-    """Installed post_setup dependencies should keep returning-user toggles no-op."""
-    def fake_which(name: str):
-        return "/usr/local/bin/cua-driver" if name == "cua-driver" else None
-
-    with patch("shutil.which", side_effect=fake_which):
-        assert _toolset_needs_configuration_prompt("computer_use", {}) is False
-
-
-def test_computer_use_respects_custom_cua_driver_command():
-    """The setup gate should match runtime's HERMES_CUA_DRIVER_CMD override."""
-    def fake_which(name: str):
-        return "/opt/bin/custom-cua" if name == "custom-cua" else None
-
-    with patch.dict("os.environ", {"HERMES_CUA_DRIVER_CMD": "custom-cua"}), \
-         patch("shutil.which", side_effect=fake_which):
-        assert _toolset_needs_configuration_prompt("computer_use", {}) is False
-
-
-def test_computer_use_blank_custom_driver_command_falls_back_to_default():
-    """Blank overrides should not make the setup gate look for an empty command."""
-    def fake_which(name: str):
-        return "/usr/local/bin/cua-driver" if name == "cua-driver" else None
-
-    with patch.dict("os.environ", {"HERMES_CUA_DRIVER_CMD": "   "}), \
-         patch("shutil.which", side_effect=fake_which):
-        assert _toolset_needs_configuration_prompt("computer_use", {}) is False
-
-
-def test_computer_use_post_setup_respects_custom_driver_command_when_installed():
-    """post_setup already-installed checks should version-probe the override."""
-    def fake_which(name: str):
-        return "/opt/bin/custom-cua" if name == "custom-cua" else None
-
-    with patch.dict("os.environ", {"HERMES_CUA_DRIVER_CMD": "custom-cua"}), \
-         patch("platform.system", return_value="Darwin"), \
-         patch("shutil.which", side_effect=fake_which), \
-         patch("subprocess.run") as run:
-        run.return_value.stdout = "custom 1.2.3\n"
-
-        _run_post_setup("cua_driver")
-
-    run.assert_called_once()
-    assert run.call_args.args[0] == ["custom-cua", "--version"]
-
-
-def test_computer_use_post_setup_missing_override_does_not_accept_default_binary():
-    """A default cua-driver binary must not satisfy a missing runtime override."""
-    seen = []
-
-    def fake_which(name: str):
-        seen.append(name)
-        if name == "cua-driver":
-            return "/usr/local/bin/cua-driver"
-        if name == "curl":
-            return None
-        return None
-
-    with patch.dict("os.environ", {"HERMES_CUA_DRIVER_CMD": "custom-cua"}), \
-         patch("platform.system", return_value="Darwin"), \
-         patch("shutil.which", side_effect=fake_which), \
-         patch("subprocess.run") as run:
-        _run_post_setup("cua_driver")
-
-    run.assert_not_called()
-    assert "custom-cua" in seen
-    assert "curl" in seen
-
 
 class TestImagegenBackendRegistry:
     """IMAGEGEN_BACKENDS tags drive the model picker flow in tools_config."""
@@ -1281,81 +1107,8 @@ def test_get_platform_tools_second_pass_skips_fully_claimed_toolsets():
     assert "search" not in enabled
 
 
-def test_get_platform_tools_discord_both_off_by_default():
-    """Both `discord` and `discord_admin` are opt-in via `hermes tools`,
-    even on the Discord platform itself.  Users shouldn't auto-inherit 19
-    extra tools just because DISCORD_BOT_TOKEN is set."""
-    enabled = _get_platform_tools({}, "discord")
-    assert "discord" not in enabled
-    assert "discord_admin" not in enabled
-
-
-def test_discord_toolsets_in_configurable_toolsets():
-    keys = {ts_key for ts_key, _, _ in CONFIGURABLE_TOOLSETS}
-    assert "discord" in keys
-    assert "discord_admin" in keys
-
-
-def test_discord_toolsets_in_default_off():
-    assert "discord" in _DEFAULT_OFF_TOOLSETS
-    assert "discord_admin" in _DEFAULT_OFF_TOOLSETS
-
-
-def test_discord_toolsets_not_available_on_other_platforms():
-    """Platform-scoping: discord / discord_admin should not appear on CLI,
-    Telegram, etc. — not even as an opt-in."""
-    from hermes_cli.tools_config import _toolset_allowed_for_platform
-    for plat in ["cli", "telegram", "slack", "whatsapp", "signal"]:
-        assert not _toolset_allowed_for_platform("discord", plat), (
-            f"`discord` toolset leaked onto {plat}"
-        )
-        assert not _toolset_allowed_for_platform("discord_admin", plat), (
-            f"`discord_admin` toolset leaked onto {plat}"
-        )
-    assert _toolset_allowed_for_platform("discord", "discord")
-    assert _toolset_allowed_for_platform("discord_admin", "discord")
-
-
-def test_discord_toolsets_user_enabled_are_honored():
-    """When the user opts in via `hermes tools`, the toolset appears."""
-    config = {"platform_toolsets": {"discord": ["web", "terminal", "discord"]}}
-    enabled = _get_platform_tools(config, "discord")
-    assert "discord" in enabled
-    assert "discord_admin" not in enabled
-
-
-def test_save_platform_tools_strips_restricted_toolsets():
-    """Hand-edited or all-platforms checklist with `discord` selected for
-    Telegram must be stripped at save time."""
-    from hermes_cli.tools_config import _save_platform_tools
-    config = {}
-    _save_platform_tools(config, "telegram", {"web", "terminal", "discord", "discord_admin"})
-    saved = config["platform_toolsets"]["telegram"]
-    assert "discord" not in saved
-    assert "discord_admin" not in saved
-    assert "web" in saved
-    assert "terminal" in saved
-
-
-def test_get_platform_tools_feishu_includes_doc_and_drive():
-    enabled = _get_platform_tools({}, "feishu")
-    assert "feishu_doc" in enabled
-    assert "feishu_drive" in enabled
-
-
-def test_get_platform_tools_feishu_tools_not_on_other_platforms():
-    for plat in ["cli", "telegram", "discord"]:
-        enabled = _get_platform_tools({}, plat)
-        assert "feishu_doc" not in enabled, f"feishu_doc leaked onto {plat}"
-        assert "feishu_drive" not in enabled, f"feishu_drive leaked onto {plat}"
-
-
-def test_get_effective_configurable_toolsets_dedupes_bundled_plugins():
-    """Bundled plugins (plugins/spotify) share their toolset key with the
-    built-in CONFIGURABLE_TOOLSETS entry. The effective list must not list
-    them twice — otherwise `hermes tools` → "reconfigure existing" shows
-    the same toolset two rows in a row.
-    """
+def test_get_effective_configurable_toolsets_has_unique_keys():
+    """The effective configurable list must not contain duplicate keys."""
     from hermes_cli.tools_config import _get_effective_configurable_toolsets
 
     all_ts = _get_effective_configurable_toolsets()
@@ -1364,11 +1117,7 @@ def test_get_effective_configurable_toolsets_dedupes_bundled_plugins():
         f"duplicate toolset keys in effective list: "
         f"{[k for k in keys if keys.count(k) > 1]}"
     )
-    # Spotify specifically — the bug that motivated the dedupe.
-    spotify_rows = [t for t in all_ts if t[0] == "spotify"]
-    assert len(spotify_rows) == 1, spotify_rows
-    # Built-in label wins over the plugin label.
-    assert spotify_rows[0][1] == "🎵 Spotify"
+
 
 
 @pytest.mark.parametrize("provider,config_key,expected", [

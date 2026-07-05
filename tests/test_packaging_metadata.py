@@ -117,6 +117,11 @@ def test_headless_distribution_keeps_media_browser_and_removes_legacy_platform_s
         "tools/yuanbao_tools.py",
     ]:
         assert not (REPO_ROOT / tool_file).exists()
+    for removed_dir in [
+        "tools/computer_use",
+        "scripts/whatsapp-bridge",
+    ]:
+        assert not (REPO_ROOT / removed_dir).exists()
     for removed_plugin_dir in [
         "plugins/google_meet",
         "plugins/platforms",
@@ -213,8 +218,8 @@ def test_bundled_plugin_manifests_ship_in_both_wheel_and_sdist():
 # 1.0.1. Anything below that lets a malformed Host header desync
 # ``request.url.path`` from the dispatched ASGI path, bypassing path-based
 # authz in middleware/endpoints that gate on ``request.url``. Starlette is a
-# transitive dep (fastapi in [web]; sse-starlette/mcp in [mcp]/[computer-use]/
-# [dev]) so we pin it directly in every extra that exposes a server surface and
+# transitive dep (fastapi in [web]; sse-starlette/mcp in [mcp]/[dev]) so we
+# pin it directly in every extra that exposes a server surface and
 # enforce the floor in both pyproject and the committed lockfile.
 _STARLETTE_CVE_FLOOR = (1, 0, 1)
 
@@ -251,8 +256,8 @@ def test_starlette_pinned_above_cve_2026_48710_floor_in_pyproject():
                 ver = spec.split("==", 1)[1].split(";", 1)[0].strip()
                 found[extra] = ver
 
-    # The four server-surface extras must each carry the direct pin.
-    for extra in ("web", "mcp", "computer-use", "dev"):
+    # Server-surface extras must each carry the direct pin.
+    for extra in ("web", "mcp", "dev"):
         assert extra in found, (
             f"[{extra}] no longer pins starlette directly — CVE-2026-48710 "
             f"regression risk (mcp/fastapi pull it transitively with no upper bound)"
@@ -397,8 +402,8 @@ def _lazy_deps_pinned_specs():
 def test_pyproject_pins_are_internally_consistent():
     """No package may be exact-pinned to two different versions in pyproject.
 
-    A package legitimately appearing in several extras (e.g. aiohttp in
-    messaging/slack/homeassistant/sms) must use the SAME version everywhere.
+    A package legitimately appearing in several extras must use the SAME
+    version everywhere.
     """
     pins = _pins_from_specs(_pyproject_pinned_specs())
     conflicts = {name: sorted(v) for name, v in pins.items() if len(v) > 1}
@@ -463,30 +468,11 @@ def _lazy_deps_by_feature():
     raise AssertionError("LAZY_DEPS dict literal not found in tools/lazy_deps.py")
 
 
-# Security-critical packages whose patched floor must be enforced on EVERY
-# install path, eager and lazy. test_pyproject_and_lazy_deps_pins_agree only
-# fires when a package is pinned in BOTH sources, so it cannot catch a lazy
-# feature that omits the pin entirely — the exact gap that left platform.slack
-# carrying aiohttp==3.14.0 while platform.discord (whose discord.py dep pulls
-# aiohttp transitively as its HTTP backbone) shipped without it, so the lazy
-# Discord path could keep an already-installed vulnerable aiohttp. A fully
-# general "no mirrored feature drops a pin" check is impossible statically
-# (it can't see transitive deps), so this is the explicit coverage contract:
-# each security package -> the lazy features that bundle an SDK pulling it and
-# must therefore carry the same pin as the pyproject extra.
-_REQUIRED_SECURITY_PINS = {
-    # Every lazy messaging feature whose SDK pulls aiohttp transitively must
-    # carry the patched floor directly: discord.py (aiohttp<4), slack-bolt,
-    # mautrix/aiohttp-socks (aiohttp<4 / >=3.10), and microsoft-teams-apps —
-    # none of those upper/lower bounds excludes a vulnerable already-installed
-    # aiohttp, so the lazy path would not upgrade it without an explicit pin.
-    "aiohttp": {
-        "platform.discord",
-        "platform.slack",
-        "platform.matrix",
-        "platform.teams",
-    },
-}
+# Security-critical packages whose patched floor must be enforced on every
+# install path, eager and lazy. This fork removed the legacy messaging platform
+# lazy features, so this map is intentionally empty until a mirrored lazy
+# feature with transitive security-sensitive deps is added.
+_REQUIRED_SECURITY_PINS = {}
 
 
 def test_security_pins_present_in_mirrored_lazy_features():

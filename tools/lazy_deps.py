@@ -138,74 +138,6 @@ LAZY_DEPS: dict[str, tuple[str, ...]] = {
     # ─── Image generation backends ─────────────────────────────────────────
     "image.fal": ("fal-client==0.13.1",),
 
-    # ─── Memory providers ──────────────────────────────────────────────────
-    "memory.honcho": ("honcho-ai==2.0.1",),
-    "memory.hindsight": ("hindsight-client==0.6.1",),
-    # supermemory + mem0 are opt-in cloud memory providers with their own
-    # SDKs. On the published Docker image the agent venv is sealed
-    # (HERMES_DISABLE_LAZY_INSTALLS=1) and lazy installs are redirected to the
-    # durable target — so, like honcho/hindsight, these MUST go through
-    # ensure() to be installable there. Without an allowlist entry + an
-    # ensure() call at the import site, the SDK never installs on a hosted
-    # instance and the provider silently reports itself unavailable.
-    "memory.supermemory": ("supermemory==3.50.0",),
-    "memory.mem0": ("mem0ai==2.0.10",),
-
-    # ─── Messaging platforms (lazy-installable on demand) ──────────────────
-    "platform.telegram": ("python-telegram-bot[webhooks]==22.6",),
-    # brotlicffi gives aiohttp a working 2-arg Decompressor.process() for
-    # Discord CDN's Brotli-encoded attachments. Without it, aiohttp falls
-    # back to google's `Brotli` package (1-arg API), and any .txt/.md/.doc
-    # uploaded to the Discord gateway fails to decode at att.read() with
-    # "Can not decode content-encoding: br" — see #12511 / #15744.
-    "platform.discord": (
-        "discord.py[voice]==2.7.1",
-        "brotlicffi==1.2.0.1",
-        # discord.py pulls aiohttp transitively (>=3.7.4,<4) as its HTTP
-        # backbone. Pin the patched floor here too so the lazy Discord path
-        # can't keep an already-installed vulnerable aiohttp satisfying that
-        # range — mirrors the messaging extra and platform.slack.
-        "aiohttp==3.14.1",  # CVE-2026-34513/34518/34519/34520/34525 + 34993(RCE)/47265
-    ),
-    "platform.slack": (
-        "slack-bolt==1.27.0",
-        "slack-sdk==3.40.1",
-        "aiohttp==3.14.1",  # CVE-2026-34513/34518/34519/34520/34525 + 34993(RCE)/47265
-    ),
-    "platform.matrix": (
-        "mautrix[encryption]==0.21.0",
-        "aiosqlite==0.22.1",
-        "asyncpg==0.31.0",
-        "aiohttp-socks==0.11.0",
-        # mautrix (aiohttp>=3,<4) and aiohttp-socks (aiohttp>=3.10.0) only cap
-        # aiohttp transitively, so a vulnerable already-installed aiohttp still
-        # satisfies both — pin the patched floor here too, like platform.discord.
-        "aiohttp==3.14.1",  # CVE-2026-34513/34518/34519/34520/34525 + 34993(RCE)/47265
-    ),
-    "platform.dingtalk": (
-        "dingtalk-stream==0.24.3",
-        "alibabacloud-dingtalk==2.2.42",
-        "qrcode==7.4.2",
-    ),
-    "platform.feishu": (
-        "lark-oapi==1.5.3",
-        "qrcode==7.4.2",
-    ),
-    # WeCom callback-mode adapter — parses untrusted XML POST bodies. Pulls
-    # defusedxml only; aiohttp/httpx are core dependencies of every messaging
-    # adapter and ship via `platform.discord` / `platform.slack` / etc.
-    "platform.wecom_callback": ("defusedxml==0.7.1",),
-    # Microsoft Teams adapter — microsoft-teams-apps pulls a heavy tree
-    # (microsoft-teams-api/cards/common, dependency-injector, msal). Lazy-
-    # installed on demand like every other messaging platform; also exposed
-    # as the `teams` extra in pyproject for packagers / explicit installs.
-    "platform.teams": ("microsoft-teams-apps==2.0.13.4", "aiohttp==3.14.1"),  # aiohttp 3.14.1: CVE-2026-34993(RCE)/47265 + 34513/34518/34519/34520/34525
-
-    # ─── Terminal backends ─────────────────────────────────────────────────
-    "terminal.modal": ("modal==1.3.4",),
-    "terminal.daytona": ("daytona==0.155.0",),
-
-    # ─── Skills ────────────────────────────────────────────────────────────
     "skill.google_workspace": (
         "google-api-python-client==2.194.0",
         "google-auth-oauthlib==1.3.1",
@@ -229,15 +161,6 @@ LAZY_DEPS: dict[str, tuple[str, ...]] = {
     # call site uses prompt=False so it can never raise a blocking input()
     # prompt mid-session (#40490).
     "tool.vision": ("Pillow==12.2.0",),
-    # Computer Use (cua-driver) — the MCP client SDK used to spawn and talk
-    # to the cua-driver process over stdio. Matches the `mcp` / `computer-use`
-    # extras in pyproject.toml. The one-liner installer pulls this in via
-    # `[all]`; lazy-installing here covers lean / partial / broken-extra
-    # installs so computer_use never dead-ends on `No module named 'mcp'`.
-    "tool.computer_use": (
-        "mcp==1.26.0",
-        "starlette==1.0.1",  # CVE-2026-48710 — keep in sync with pyproject [computer-use]
-    ),
 }
 
 
@@ -467,8 +390,8 @@ def _spec_is_safe(spec: str) -> bool:
 def _pkg_name_from_spec(spec: str) -> str:
     """Extract the bare package name from a pip spec.
 
-    ``"slack-bolt>=1.18.0,<2"`` → ``"slack-bolt"``
-    ``"mautrix[encryption]>=0.20"`` → ``"mautrix"``
+    ``"fal-client>=0.13,<1"`` -> ``"fal-client"``
+    ``"uvicorn[standard]>=0.40"`` -> ``"uvicorn"``
     """
     m = re.match(r"^([A-Za-z0-9_][A-Za-z0-9_.\-]*)", spec)
     return m.group(1) if m else spec
@@ -477,8 +400,8 @@ def _pkg_name_from_spec(spec: str) -> str:
 def _specifier_from_spec(spec: str) -> str:
     """Extract just the version-specifier portion of a pip spec.
 
-    ``"honcho-ai==2.0.1"`` → ``"==2.0.1"``
-    ``"mautrix[encryption]>=0.20,<1"`` → ``">=0.20,<1"``
+    ``"fal-client==0.13.1"`` -> ``"==0.13.1"``
+    ``"uvicorn[standard]>=0.40,<1"`` -> ``">=0.40,<1"``
     ``"package"`` → ``""`` (no version constraint)
     """
     # Strip the package name + optional [extras] block.
@@ -904,24 +827,18 @@ def ensure_and_bind(
 
     Returns True on success, False if deps couldn't be installed or imported.
 
-    Example usage in a platform adapter::
+    Example usage in a media adapter::
 
-        def check_slack_requirements() -> bool:
-            if SLACK_AVAILABLE:
+        def check_fal_requirements() -> bool:
+            if FAL_AVAILABLE:
                 return True
             def _import():
-                from slack_bolt.async_app import AsyncApp
-                from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
-                from slack_sdk.web.async_client import AsyncWebClient
-                import aiohttp
+                import fal_client
                 return {
-                    "AsyncApp": AsyncApp,
-                    "AsyncSocketModeHandler": AsyncSocketModeHandler,
-                    "AsyncWebClient": AsyncWebClient,
-                    "aiohttp": aiohttp,
-                    "SLACK_AVAILABLE": True,
+                    "fal_client": fal_client,
+                    "FAL_AVAILABLE": True,
                 }
-            return ensure_and_bind("platform.slack", _import, globals(), prompt=False)
+            return ensure_and_bind("image.fal", _import, globals(), prompt=False)
     """
     try:
         ensure(feature, prompt=prompt)

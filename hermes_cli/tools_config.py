@@ -77,12 +77,6 @@ CONFIGURABLE_TOOLSETS = [
     ("clarify",         "❓ Clarifying Questions",      "clarify"),
     ("delegation",      "👥 Task Delegation",           "delegate_task"),
     ("cronjob",         "⏰ Cron Jobs",                 "create/list/update/pause/resume/run, with optional attached skills"),
-    ("homeassistant",    "🏠 Home Assistant",           "smart home device control"),
-    ("spotify",          "🎵 Spotify",                  "playback, search, playlists, library"),
-    ("discord",         "💬 Discord (read/participate)", "fetch messages, search members, create thread"),
-    ("discord_admin",   "🛡️  Discord Server Admin",    "list channels/roles, pin, assign roles"),
-    ("yuanbao",          "🤖 Yuanbao",                  "group info, member queries, DM"),
-    ("computer_use",     "🖱️  Computer Use (macOS/Windows/Linux)", "background desktop control via cua-driver"),
 ]
 
 
@@ -110,12 +104,11 @@ def gui_toolset_label(label: str) -> str:
 # them through provider + model selection.
 #
 # X search is off by default for users without xAI credentials, but
-# auto-enables when SuperGrok OAuth tokens are stored OR XAI_API_KEY is
-# set — mirroring the HASS_TOKEN → homeassistant auto-enable below. The
+# auto-enables when SuperGrok OAuth tokens are stored OR XAI_API_KEY is set. The
 # `hermes tools` → X (Twitter) Search setup walks users through credential
 # setup. The tool's check_fn means the schema still won't appear to the
 # model if the credential later goes missing or expires.
-_DEFAULT_OFF_TOOLSETS = {"homeassistant", "spotify", "discord", "discord_admin", "video", "video_gen", "x_search"}
+_DEFAULT_OFF_TOOLSETS = {"video", "video_gen", "x_search"}
 
 
 def _xai_credentials_present() -> bool:
@@ -150,10 +143,7 @@ def _xai_credentials_present() -> bool:
 # Use this for tools whose APIs only make sense on one platform (Discord
 # server admin, Slack workspace admin, etc.).  Keeps every other platform's
 # checklist from filling up with irrelevant toggles.
-_TOOLSET_PLATFORM_RESTRICTIONS: Dict[str, Set[str]] = {
-    "discord": {"discord"},
-    "discord_admin": {"discord"},
-}
+_TOOLSET_PLATFORM_RESTRICTIONS: Dict[str, Set[str]] = {}
 
 
 def _toolset_allowed_for_platform(ts_key: str, platform: str) -> bool:
@@ -170,9 +160,8 @@ def _get_effective_configurable_toolsets():
 
     Plugin toolsets are appended at the end so they appear after the
     built-in toolsets in the TUI checklist. A plugin whose toolset key
-    already appears in ``CONFIGURABLE_TOOLSETS`` is skipped — bundled
-    plugins (e.g. ``plugins/spotify``) share their toolset key with the
-    built-in entry, and we want the built-in label/description to win.
+    already appears in ``CONFIGURABLE_TOOLSETS`` is skipped so the built-in
+    label/description wins.
     Without the dedupe, ``hermes tools`` → "reconfigure existing" would
     list the same toolset twice.
     """
@@ -493,56 +482,6 @@ TOOL_CATEGORIES = {
             },
         ],
     },
-    "homeassistant": {
-        "name": "Smart Home",
-        "icon": "🏠",
-        "providers": [
-            {
-                "name": "Home Assistant",
-                "tag": "REST API integration",
-                "env_vars": [
-                    {"key": "HASS_TOKEN", "prompt": "Home Assistant Long-Lived Access Token"},
-                    {"key": "HASS_URL", "prompt": "Home Assistant URL", "default": "http://homeassistant.local:8123"},
-                ],
-            },
-        ],
-    },
-    "spotify": {
-        "name": "Spotify",
-        "icon": "🎵",
-        "providers": [
-            {
-                "name": "Spotify Web API",
-                "tag": "PKCE OAuth — opens the setup wizard",
-                "env_vars": [],
-                "post_setup": "spotify",
-            },
-        ],
-    },
-    "computer_use": {
-        "name": "Computer Use (macOS/Windows/Linux)",
-        "icon": "🖱️",
-        # Runtime backends ship for macOS, Windows, and Linux (X11 today,
-        # Wayland via XWayland). Per-host gaps surface via `computer-use doctor`.
-        "platform_gate": ["darwin", "win32", "linux"],
-        "providers": [
-            {
-                "name": "cua-driver (background)",
-                "badge": "★ recommended · free · local",
-                "tag": (
-                    "Background computer-use via cua-driver — does NOT steal "
-                    "your cursor or focus. Works with any model."
-                ),
-                "env_vars": [
-                    # cua-driver reads HOME/TMPDIR from the process env, no
-                    # extra keys required. Set HERMES_CUA_DRIVER_CMD to use a
-                    # specific binary (e.g. a local build); there is no
-                    # version-pin env var.
-                ],
-                "post_setup": "cua_driver",
-            },
-        ],
-    },
     "langfuse": {
         "name": "Langfuse Observability",
         "icon": "📊",
@@ -586,27 +525,6 @@ TOOLSET_ENV_REQUIREMENTS = {
 
 
 # ─── Post-Setup Hooks ─────────────────────────────────────────────────────────
-
-
-def _cua_driver_cmd() -> str:
-    """Return the cua-driver executable name/path, honoring non-empty overrides."""
-    return os.environ.get("HERMES_CUA_DRIVER_CMD", "").strip() or "cua-driver"
-
-
-def _cua_driver_env() -> dict:
-    """cua-driver child env with the Hermes telemetry policy applied.
-
-    Delegates to ``cua_backend.cua_driver_child_env`` (telemetry disabled by
-    default; user opt-in via ``computer_use.cua_telemetry``). Falls back to the
-    current environment if the helper can't be imported, so install/status
-    never break on a telemetry-helper error.
-    """
-    try:
-        from tools.computer_use.cua_backend import cua_driver_child_env
-
-        return cua_driver_child_env()
-    except Exception:
-        return dict(os.environ)
 
 
 def _pip_install(
@@ -676,265 +594,6 @@ def _pip_install(
         capture_output=capture_output, text=True, timeout=timeout,
     )
 
-
-
-# The asset-probe that lived here used to hit `/releases/latest` on
-# trycua/cua and inspect the release's asset list before piping the
-# installer to bash. It was broken in two places:
-#
-#   1. cua-driver-rs releases are marked **prerelease** on every cut,
-#      and GitHub's `/releases/latest` endpoint explicitly skips
-#      prereleases. On the live trycua/cua repo today, `/releases/latest`
-#      returns the Python `cua-agent v0.8.3` package (zero binary
-#      assets) instead of `cua-driver-rs-v0.6.0` (19 binary assets).
-#      The probe then reported "no asset for this arch" and skipped the
-#      install on every non-arm64 host — Linux x86_64, Windows, macOS
-#      Intel, Linux arm64 — even when the upstream installer would have
-#      succeeded.
-#   2. Even with the right endpoint, we'd be duplicating tag-resolution
-#      logic the upstream installer already does correctly via
-#      `CUA_DRIVER_RS_BAKED_VERSION` (auto-baked by CD on every release,
-#      with an API fallback). Drift between our probe and theirs is a
-#      maintenance hazard.
-#
-# Resolution: trust the upstream installer. For fresh installs, run
-# install.sh directly — it errors clean if the target arch has no
-# asset. For the upgrade path, `cua_driver_update_check()` (which calls
-# `cua-driver check-update --json`) gives us the canonical update
-# answer from the binary itself — same tag-resolution as the installer,
-# no Python-side duplication.
-
-
-def install_cua_driver(upgrade: bool = False) -> bool:
-    """Install or refresh the cua-driver binary used by Computer Use.
-
-    The upstream installer always pulls the latest release tag, so re-running
-    it is the canonical way to upgrade. We expose two modes:
-
-    * ``upgrade=False`` — original post-setup behaviour: skip if already
-      installed, install otherwise. Used by the toolset enable flow where
-      we don't want to surprise the user with a network fetch.
-    * ``upgrade=True`` — always re-run the installer (or call ``cua-driver
-      update`` if the binary supports it). Used by ``hermes update`` and
-      by ``hermes computer-use install --upgrade``.
-
-    Returns True iff cua-driver is installed (or successfully refreshed)
-    when the function returns. Supported on macOS, Windows, and Linux
-    (Linux is alpha). Silently returns False on unsupported platforms.
-    """
-    import platform as _plat
-    import shutil
-    import subprocess
-
-    system = _plat.system()
-    if system not in ("Darwin", "Windows", "Linux"):
-        if upgrade:
-            # Silent on unsupported platforms — `hermes update` calls this
-            # for every user; only macOS/Windows/Linux users care.
-            return False
-        _print_warning("    Computer Use (cua-driver) is unsupported on this platform; skipping.")
-        return False
-
-    is_windows = system == "Windows"
-    is_linux = system == "Linux"
-
-    # The Windows installer (install.ps1) is fetched via PowerShell's `irm`,
-    # so it needs PowerShell rather than curl. macOS/Linux use curl | bash.
-    fetch_tool = "powershell" if is_windows else "curl"
-
-    driver_cmd = _cua_driver_cmd()
-    binary = shutil.which(driver_cmd)
-
-    # Not installed → fresh install path (only when caller asked for it).
-    if not binary and not upgrade:
-        if not shutil.which(fetch_tool):
-            _print_warning(f"    {fetch_tool} not found — install manually:")
-            _print_info("      https://github.com/trycua/cua/blob/main/libs/cua-driver/README.md")
-            return False
-        # Pre-install asset probe deleted — see comment near the top of
-        # tools_config.py for why. install.sh has CUA_DRIVER_RS_BAKED_VERSION
-        # baked in by CD and errors cleanly on missing-arch assets.
-        return _run_cua_driver_installer(label="Installing")
-
-    # Already installed and caller didn't ask to upgrade → just confirm.
-    if binary and not upgrade:
-        try:
-            version = subprocess.run(
-                [driver_cmd, "--version"],
-                capture_output=True, text=True, timeout=5, env=_cua_driver_env(),
-            ).stdout.strip()
-            _print_success(f"    {driver_cmd} already installed: {version or 'unknown version'}")
-        except Exception:
-            _print_success(f"    {driver_cmd} already installed.")
-        if is_windows:
-            _print_info("    cua-driver may spawn a UIAccess worker (cua-driver-uia.exe);")
-            _print_info("    Windows/SmartScreen may prompt the first time it runs.")
-        elif is_linux:
-            _print_warning("    Linux support is alpha.")
-        else:
-            _print_info("    Grant macOS permissions if not done yet:")
-            _print_info("      System Settings > Privacy & Security > Accessibility")
-            _print_info("      System Settings > Privacy & Security > Screen Recording")
-        return True
-
-    # upgrade=True path — refresh to the latest upstream release.
-    if not shutil.which(fetch_tool):
-        _print_warning(f"    {fetch_tool} not found — cannot refresh cua-driver.")
-        return bool(binary)
-
-    # Pre-install asset probe deleted (see top-of-file comment). The
-    # `cua_driver_update_check()` call further down asks the installed
-    # cua-driver binary itself whether an update exists — same
-    # tag-resolution as the installer, no duplication.
-
-    # Skip the (network) re-install when the driver itself reports it's already
-    # on the latest release. Best-effort: an older driver (no check-update
-    # verb) or an offline check returns None, in which case we fall through and
-    # re-run the installer as before.
-    if binary:
-        try:
-            from tools.computer_use.cua_backend import cua_driver_update_check
-            _state = cua_driver_update_check()
-            if _state is not None and not _state.get("update_available"):
-                _print_success(
-                    f"    {driver_cmd} is already on the latest release "
-                    f"({_state.get('current_version') or 'unknown'})."
-                )
-                return True
-        except Exception:
-            pass
-
-    if binary:
-        # Show before/after version when we have a baseline. Best-effort.
-        try:
-            before = subprocess.run(
-                [driver_cmd, "--version"],
-                capture_output=True, text=True, timeout=5, env=_cua_driver_env(),
-            ).stdout.strip()
-        except Exception:
-            before = ""
-    else:
-        before = ""
-
-    ok = _run_cua_driver_installer(label="Refreshing", verbose=False)
-    if ok and before:
-        try:
-            after = subprocess.run(
-                [driver_cmd, "--version"],
-                capture_output=True, text=True, timeout=5, env=_cua_driver_env(),
-            ).stdout.strip()
-            if after and after != before:
-                _print_success(f"    {driver_cmd} upgraded: {before} → {after}")
-            elif after:
-                _print_info(f"    {driver_cmd} up to date: {after}")
-        except Exception:
-            pass
-    return ok
-
-
-def _run_cua_driver_installer(label: str = "Installing", verbose: bool = True) -> bool:
-    """Run the upstream cua-driver installer for this platform.
-
-    The scripts are idempotent: they always download the latest release, so
-    re-running on an already-installed system performs an upgrade.
-
-    * macOS / Linux → ``curl -fsSL …/install.sh | /bin/bash``.
-    * Windows       → ``powershell -NoProfile -ExecutionPolicy Bypass -Command
-      "irm …/install.ps1 | iex"``.
-    """
-    import platform as _plat
-    import shutil
-    import subprocess
-
-    system = _plat.system()
-    is_windows = system == "Windows"
-    is_linux = system == "Linux"
-
-    if is_windows:
-        # Mirror the one-liner printed by cua_driver_install_hint().
-        ps_oneliner = (
-            "irm https://raw.githubusercontent.com/trycua/cua/main/"
-            "libs/cua-driver/scripts/install.ps1 | iex"
-        )
-        install_cmd = [
-            "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-            "-Command", ps_oneliner,
-        ]
-        use_shell = False
-        manual_hint = (
-            'powershell -NoProfile -ExecutionPolicy Bypass -Command '
-            f'"{ps_oneliner}"'
-        )
-    else:
-        install_cmd = (
-            "/bin/bash -c \"$(curl -fsSL "
-            "https://raw.githubusercontent.com/trycua/cua/main/"
-            "libs/cua-driver/scripts/install.sh)\""
-        )
-        use_shell = True
-        manual_hint = install_cmd
-
-    if verbose:
-        _print_info(f"    {label} cua-driver (background computer-use)...")
-    else:
-        _print_info(f"    {label} cua-driver...")
-    driver_cmd = _cua_driver_cmd()
-    try:
-        # When not verbose (e.g. `hermes update`'s refresh), capture the
-        # installer's chatty "Next steps" wall instead of dumping it to the
-        # terminal. The combined output is logged so a failure stays
-        # debuggable. Verbose installs (interactive `computer-use install`)
-        # keep streaming live.
-        if verbose:
-            result = subprocess.run(install_cmd, shell=use_shell, timeout=300, env=_cua_driver_env())
-        else:
-            result = subprocess.run(
-                install_cmd, shell=use_shell, timeout=300, env=_cua_driver_env(),
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, encoding="utf-8", errors="replace",
-            )
-            # Preserve the full installer output. During `hermes update`,
-            # sys.stdout is the mirroring _UpdateOutputStream whose `_log`
-            # handle is ~/.hermes/logs/update.log — write straight to it so
-            # the captured "Next steps" wall is kept in full (success AND
-            # failure), without echoing it to the terminal.
-            if result.stdout:
-                _update_log = getattr(sys.stdout, "_log", None)
-                if _update_log is not None:
-                    try:
-                        _update_log.write(
-                            "\n--- cua-driver installer output ---\n"
-                            + result.stdout
-                            + "\n"
-                        )
-                        _update_log.flush()
-                    except Exception:
-                        pass
-                if result.returncode != 0:
-                    logger.debug("cua-driver installer output:\n%s", result.stdout)
-        if result.returncode == 0 and shutil.which(driver_cmd):
-            if verbose:
-                _print_success(f"    {driver_cmd} installed.")
-                if is_windows:
-                    _print_info("    cua-driver may spawn a UIAccess worker (cua-driver-uia.exe);")
-                    _print_info("    Windows/SmartScreen may prompt the first time it runs.")
-                elif is_linux:
-                    _print_warning("    Linux support is alpha.")
-                else:
-                    _print_info("    IMPORTANT — grant macOS permissions now:")
-                    _print_info("      System Settings > Privacy & Security > Accessibility")
-                    _print_info("      System Settings > Privacy & Security > Screen Recording")
-                    _print_info("    Both must allow the terminal / Hermes process.")
-            return True
-        _print_warning(f"    cua-driver {label.lower()} did not complete. Re-run manually:")
-        _print_info(f"      {manual_hint}")
-        return False
-    except subprocess.TimeoutExpired:
-        _print_warning(f"    cua-driver {label.lower()} timed out. Re-run manually.")
-        return False
-    except Exception as e:
-        _print_warning(f"    cua-driver {label.lower()} failed: {e}")
-        return False
 
 
 def _run_post_setup(post_setup_key: str):
@@ -1078,8 +737,6 @@ def _run_post_setup(post_setup_key: str):
             _print_warning("    Node.js not found. Install Camofox via Docker:")
             _print_info("      docker run -p 9377:9377 -e CAMOFOX_PORT=9377 jo-inc/camofox-browser")
 
-    elif post_setup_key == "cua_driver":
-        install_cua_driver(upgrade=False)
 
     elif post_setup_key == "kittentts":
         try:
@@ -1151,35 +808,6 @@ def _run_post_setup(post_setup_key: str):
                 return
         _print_info("    No API key required. DuckDuckGo enforces server-side rate limits.")
         _print_info("    Pair with an extract provider if you also need web_extract.")
-
-    elif post_setup_key == "spotify":
-        # Run the full `hermes auth spotify` flow — if the user has no
-        # client_id yet, this drops them into the interactive wizard
-        # (opens the Spotify dashboard, prompts for client_id, persists
-        # to ~/.hermes/.env), then continues straight into PKCE. If they
-        # already have an app, it skips the wizard and just does OAuth.
-        from types import SimpleNamespace
-        try:
-            from hermes_cli.auth import login_spotify_command
-        except Exception as exc:
-            _print_warning(f"    Could not load Spotify auth: {exc}")
-            _print_info("    Run manually: hermes auth spotify")
-            return
-        _print_info("    Starting Spotify login...")
-        try:
-            login_spotify_command(SimpleNamespace(
-                client_id=None, redirect_uri=None, scope=None,
-                no_browser=False, timeout=None,
-            ))
-            _print_success("    Spotify authenticated")
-        except SystemExit as exc:
-            # User aborted the wizard, or OAuth failed — don't fail the
-            # toolset enable; they can retry with `hermes auth spotify`.
-            _print_warning(f"    Spotify login did not complete: {exc}")
-            _print_info("    Run later: hermes auth spotify")
-        except Exception as exc:
-            _print_warning(f"    Spotify login failed: {exc}")
-            _print_info("    Run manually: hermes auth spotify")
 
     elif post_setup_key == "langfuse":
         # Install the langfuse SDK.
@@ -1315,8 +943,8 @@ def run_post_setup_command(args) -> int:
     """``hermes tools post-setup <key>`` — non-interactive post-setup runner.
 
     Runs the install/bootstrap hook a provider declares (npm install for
-    browser/Camofox, pip install for kittentts/piper/ddgs, cua-driver fetch,
-    etc.). This is the stable, scriptable target the dashboard spawns so the
+    browser/Camofox, pip install for kittentts/piper/ddgs, etc.). This is the
+    stable, scriptable target the dashboard spawns so the
     GUI can drive backend setup without re-implementing the install logic.
     Returns a process exit code (0 ok, 2 unknown key).
     """
@@ -1344,19 +972,8 @@ def run_post_setup_command(args) -> int:
 # ─── Platform / Toolset Helpers ───────────────────────────────────────────────
 
 def _get_enabled_platforms() -> List[str]:
-    """Return platform keys that are configured (have tokens or are CLI)."""
-    enabled = ["cli"]
-    if get_env_value("TELEGRAM_BOT_TOKEN"):
-        enabled.append("telegram")
-    if get_env_value("DISCORD_BOT_TOKEN"):
-        enabled.append("discord")
-    if get_env_value("SLACK_BOT_TOKEN"):
-        enabled.append("slack")
-    if get_env_value("WHATSAPP_ENABLED"):
-        enabled.append("whatsapp")
-    if get_env_value("QQ_APP_ID"):
-        enabled.append("qqbot")
-    return enabled
+    """Return the remaining local CLI platform for tool configuration."""
+    return ["cli"]
 
 
 def _platform_toolset_summary(config: dict, platforms: Optional[List[str]] = None) -> Dict[str, Set[str]]:
@@ -1451,13 +1068,11 @@ def _get_platform_tools(
             ts for ts in toolset_names
             if ts in configurable_keys and _toolset_allowed_for_platform(ts, platform)
         }
-        # Mixed config: composite toolset alongside configurables (e.g.
-        # ``[hermes-cli, spotify]`` after enabling Spotify via ``hermes
-        # tools``). Without expansion the composite name is silently dropped,
-        # leaving sessions with only the configurable opt-ins and no native
-        # tools. Mirror the else-branch's subset inference, but apply
-        # _DEFAULT_OFF_TOOLSETS only to the implicit expansion — anything the
-        # user explicitly listed (e.g. ``spotify``) must survive.
+        # Mixed config: composite toolset alongside configurables. Without
+        # expansion the composite name is silently dropped, leaving sessions
+        # with only the configurable opt-ins and no native tools. Mirror the
+        # else-branch's subset inference, but apply _DEFAULT_OFF_TOOLSETS only
+        # to the implicit expansion.
         composite_tools = set()
         for ts_name in toolset_names:
             if ts_name in configurable_keys or ts_name in plugin_ts_keys:
@@ -1482,8 +1097,6 @@ def _get_platform_tools(
             default_off = set(_DEFAULT_OFF_TOOLSETS)
             if platform in default_off and platform not in _TOOLSET_PLATFORM_RESTRICTIONS:
                 default_off.remove(platform)
-            if "homeassistant" in default_off and os.getenv("HASS_TOKEN"):
-                default_off.remove("homeassistant")
             expanded -= default_off
 
             enabled_toolsets |= expanded
@@ -1508,15 +1121,10 @@ def _get_platform_tools(
                 enabled_toolsets.add(ts_key)
 
         # Auto-enable ``x_search`` when xAI credentials are configured.
-        # Unlike ``homeassistant`` (whose ``ha_*`` tools live inside the
-        # platform composite and thus pass the subset check above),
         # ``x_search`` is its own one-tool toolset that the composite does
-        # NOT include, so the subset loop never picks it up. Inject it
-        # directly here, mirroring the HASS_TOKEN → ``homeassistant`` rule
-        # below: once you have working creds, you don't have to also click
-        # through ``hermes tools`` to flip the toolset on. Only fires when
-        # the user has not yet saved an explicit toolset list — once they
-        # do, the saved list is authoritative.
+        # NOT include, so the subset loop never picks it up. Only fires when
+        # the user has not yet saved an explicit toolset list — once they do,
+        # the saved list is authoritative.
         x_search_auto_enabled = (
             _toolset_allowed_for_platform("x_search", platform)
             and _xai_credentials_present()
@@ -1526,10 +1134,8 @@ def _get_platform_tools(
 
         default_off = set(_DEFAULT_OFF_TOOLSETS)
         # Legacy safety: if the platform's own name matches a default-off
-        # toolset (e.g. `homeassistant` platform + `homeassistant` toolset),
-        # keep that toolset enabled on first install.  Skip this dodge for
-        # platform-restricted toolsets — those are always opt-in even on
-        # their own platform (e.g. `discord` + `discord` should stay OFF).
+        # toolset, keep that toolset enabled on first install. Skip this dodge
+        # for platform-restricted toolsets.
         if platform in default_off and platform not in _TOOLSET_PLATFORM_RESTRICTIONS:
             default_off.remove(platform)
         # Home Assistant is already runtime-gated by its check_fn (requires
@@ -1539,8 +1145,6 @@ def _get_platform_tools(
         # (e.g. cron) that run through _get_platform_tools without an
         # explicit saved toolset list. Without this, Norbert's HA cron jobs
         # regressed after #14798 made cron honor per-platform tool config.
-        if "homeassistant" in default_off and os.getenv("HASS_TOKEN"):
-            default_off.remove("homeassistant")
         # Symmetric carve-out for x_search auto-enable (see the inject
         # block above). Without this, the default_off subtraction would
         # strip the entry we just added.
@@ -1548,12 +1152,11 @@ def _get_platform_tools(
             default_off.remove("x_search")
         enabled_toolsets -= default_off
 
-    # Recover non-configurable platform toolsets (e.g. discord, feishu_doc,
-    # feishu_drive).  These are part of the platform's default composite but
-    # absent from CONFIGURABLE_TOOLSETS, so they can't appear in the TUI
-    # checklist or in a user-saved config.  Must run in BOTH branches —
-    # otherwise saving via `hermes tools` (which flips has_explicit_config
-    # to True) silently drops them.
+    # Recover non-configurable platform toolsets. These are part of a
+    # platform's default composite but absent from CONFIGURABLE_TOOLSETS, so
+    # they can't appear in the TUI checklist or in a user-saved config. Must
+    # run in BOTH branches — otherwise saving via `hermes tools` (which flips
+    # has_explicit_config to True) silently drops them.
     _plat_info = PLATFORMS.get(platform)
     _default_ts = _plat_info["default_toolset"] if _plat_info else f"hermes-{platform}"
     platform_tool_universe = set(resolve_toolset(_default_ts))
@@ -1588,9 +1191,7 @@ def _get_platform_tools(
             claimed.update(ts_tools)
 
     # Plugin toolsets: enabled by default unless explicitly disabled, or
-    # unless the toolset is in _DEFAULT_OFF_TOOLSETS (e.g. spotify —
-    # shipped as a bundled plugin but user must opt in via `hermes tools`
-    # so we don't ship 7 Spotify tool schemas to users who don't use it).
+    # unless the toolset is in _DEFAULT_OFF_TOOLSETS.
     # A plugin toolset is "known" for a platform once `hermes tools`
     # has been saved for that platform (tracked via known_plugin_toolsets).
     # Unknown plugins default to enabled; known-but-absent = disabled.
@@ -1703,9 +1304,9 @@ def _save_platform_tools(config: dict, platform: str, enabled_toolset_keys: Set[
     """
     config.setdefault("platform_toolsets", {})
 
-    # Drop platform-scoped toolsets that don't apply here.  Prevents the
-    # "Configure all platforms" checklist (or a hand-edited config.yaml)
-    # from turning on, say, the `discord` toolset for Telegram.
+    # Drop platform-scoped toolsets that don't apply here. Prevents the
+    # "Configure all platforms" checklist (or a hand-edited config.yaml) from
+    # turning on a platform-only toolset for the wrong surface.
     enabled_toolset_keys = {
         ts for ts in enabled_toolset_keys
         if _toolset_allowed_for_platform(ts, platform)
@@ -2309,22 +1910,6 @@ def _hidden_nous_gateway_message(
     return ""
 
 
-_POST_SETUP_INSTALLED: dict = {
-    # post_setup_key -> predicate(): True when the install side-effect
-    # is already satisfied. Used by `_toolset_needs_configuration_prompt`
-    # to force the provider-setup flow when a no-key provider still needs
-    # a binary/dependency install (otherwise an already-configured user
-    # who toggles the toolset on via `hermes tools` gets a silent no-op
-    # because the gate sees "no env vars to ask about" and skips the
-    # provider-setup flow that would have run the post_setup hook).
-    #
-    # Only entries here are gated; other post_setup hooks (kittentts,
-    # piper, agent_browser, etc.) keep their existing behaviour. Add an
-    # entry when (a) the post_setup is the ONLY install side-effect for
-    # a no-key provider, and (b) an installed-state check is cheap and
-    # doesn't trigger a heavy import.
-    "cua_driver": lambda: bool(shutil.which(_cua_driver_cmd())),
-}
 
 
 def _post_setup_already_installed(post_setup_key: str) -> bool:
@@ -2352,9 +1937,9 @@ def _toolset_needs_configuration_prompt(
         return not _toolset_has_keys(ts_key, config, force_fresh=force_fresh)
 
     # If any visible provider has a registered post_setup install-state
-    # check that hasn't been satisfied (e.g. cua-driver binary not on
-    # PATH yet), force the configuration flow so `_configure_provider`
-    # invokes `_run_post_setup` and the install actually runs.
+    # check that hasn't been satisfied, force the configuration flow so
+    # `_configure_provider` invokes `_run_post_setup` and the install actually
+    # runs.
     for provider in _visible_providers(cat, config, force_fresh=force_fresh):
         post_setup = provider.get("post_setup")
         if post_setup and not _post_setup_already_installed(post_setup):

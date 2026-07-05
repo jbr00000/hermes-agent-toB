@@ -103,17 +103,6 @@ def _has_provider_env_config(content: str) -> bool:
     return any(key in content for key in _PROVIDER_ENV_HINTS)
 
 
-def _honcho_is_configured_for_doctor() -> bool:
-    """Return True when Honcho is configured, even if this process has no active session."""
-    try:
-        from plugins.memory.honcho.client import HonchoClientConfig
-
-        cfg = HonchoClientConfig.from_global_config()
-        return bool(cfg.enabled and (cfg.api_key or cfg.base_url))
-    except Exception:
-        return False
-
-
 def _is_kanban_worker_env_gate(item: dict) -> bool:
     """Return True when Kanban is unavailable only because this is not a worker process."""
     if item.get("name") != "kanban":
@@ -137,14 +126,9 @@ def _apply_doctor_tool_availability_overrides(available: list[str], unavailable:
     updated_available = list(available)
     updated_unavailable = []
     for item in unavailable:
-        name = item.get("name")
         if _is_kanban_worker_env_gate(item):
             if "kanban" not in updated_available:
                 updated_available.append("kanban")
-            continue
-        if name == "honcho" and _honcho_is_configured_for_doctor():
-            if "honcho" not in updated_available:
-                updated_available.append("honcho")
             continue
         updated_unavailable.append(item)
     return updated_available, updated_unavailable
@@ -1640,25 +1624,14 @@ def run_doctor(args):
         # glob (which pulls in Electron, node-pty, etc.) is never resolved
         # for a routine security check. The web and ui-tui workspaces are
         # audited separately via --workspace flags. See #38772.
-        # The WhatsApp bridge may live under a writable HERMES_HOME mirror
-        # instead of the (possibly read-only) install tree in Docker — resolve
-        # it through the shared helper so we audit the dir that actually holds
-        # node_modules. See #49561.
-        try:
-            from gateway.platforms.whatsapp_common import resolve_whatsapp_bridge_dir
-            _whatsapp_bridge_dir = resolve_whatsapp_bridge_dir()
-        except Exception:
-            _whatsapp_bridge_dir = PROJECT_ROOT / "scripts" / "whatsapp-bridge"
         npm_audit_targets = [
             (PROJECT_ROOT, "Browser tools (agent-browser)", ["--workspaces=false"]),
             (PROJECT_ROOT, "web workspace", ["--workspace", "web"]),
             (PROJECT_ROOT, "ui-tui workspace", ["--workspace", "ui-tui"]),
-            (_whatsapp_bridge_dir, "WhatsApp bridge", []),
         ]
         for npm_dir, label, audit_extra in npm_audit_targets:
-            # For workspace-scoped audits run from PROJECT_ROOT the
-            # node_modules check must use the workspace root; standalone dirs
-            # (whatsapp-bridge) check their own node_modules.
+            # For workspace-scoped audits run from PROJECT_ROOT, the
+            # node_modules check must use the workspace root.
             check_dir = PROJECT_ROOT if audit_extra else npm_dir
             if not (check_dir / "node_modules").exists():
                 continue
@@ -2256,77 +2229,8 @@ def run_doctor(args):
 
     if not _active_memory_provider:
         check_ok("Built-in memory active", "(no external provider configured — this is fine)")
-    elif _active_memory_provider == "honcho":
-        try:
-            from plugins.memory.honcho.client import HonchoClientConfig, resolve_config_path
-            hcfg = HonchoClientConfig.from_global_config()
-            _honcho_cfg_path = resolve_config_path()
-
-            if not _honcho_cfg_path.exists():
-                # Config file missing — but env var fallback may have resolved it.
-                # Only warn if the config didn't actually resolve from env vars.
-                if hcfg.api_key or hcfg.base_url:
-                    check_ok(
-                        "Honcho configured via environment variables",
-                        f"config file {_honcho_cfg_path} not found, using HONCHO_API_KEY env var",
-                    )
-                else:
-                    check_warn("Honcho config not found", "run: hermes memory setup")
-            elif not hcfg.enabled:
-                check_info(f"Honcho disabled (set enabled: true in {_honcho_cfg_path} to activate)")
-            elif not (hcfg.api_key or hcfg.base_url):
-                _fail_and_issue(
-                    "Honcho API key or base URL not set",
-                    "run: hermes memory setup",
-                    "No Honcho API key — run 'hermes memory setup'",
-                    issues,
-                )
-            else:
-                from plugins.memory.honcho.client import get_honcho_client, reset_honcho_client
-                reset_honcho_client()
-                try:
-                    get_honcho_client(hcfg)
-                    check_ok(
-                        "Honcho connected",
-                        f"workspace={hcfg.workspace_id} mode={hcfg.recall_mode} freq={hcfg.write_frequency}",
-                    )
-                except Exception as _e:
-                    _fail_and_issue("Honcho connection failed", str(_e), f"Honcho unreachable: {_e}", issues)
-        except ImportError:
-            _fail_and_issue(
-                "honcho-ai not installed",
-                "pip install honcho-ai",
-                "Honcho is set as memory provider but honcho-ai is not installed",
-                issues,
-            )
-        except Exception as _e:
-            check_warn("Honcho check failed", str(_e))
-    elif _active_memory_provider == "mem0":
-        try:
-            from plugins.memory.mem0 import _load_config as _load_mem0_config
-            mem0_cfg = _load_mem0_config()
-            mem0_key = mem0_cfg.get("api_key", "")
-            if mem0_key:
-                check_ok("Mem0 API key configured")
-                check_info(f"user_id={mem0_cfg.get('user_id', '?')}  agent_id={mem0_cfg.get('agent_id', '?')}")
-            else:
-                _fail_and_issue(
-                    "Mem0 API key not set",
-                    "(set MEM0_API_KEY in .env or run hermes memory setup)",
-                    "Mem0 is set as memory provider but API key is missing",
-                    issues,
-                )
-        except ImportError:
-            _fail_and_issue(
-                "Mem0 plugin not loadable",
-                "pip install mem0ai",
-                "Mem0 is set as memory provider but mem0ai is not installed",
-                issues,
-            )
-        except Exception as _e:
-            check_warn("Mem0 check failed", str(_e))
     else:
-        # Generic check for other memory providers (openviking, hindsight, etc.)
+        # Generic check for user-installed memory providers.
         try:
             from plugins.memory import load_memory_provider
             _provider = load_memory_provider(_active_memory_provider)

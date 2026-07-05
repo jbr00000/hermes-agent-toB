@@ -2077,8 +2077,7 @@ DEFAULT_CONFIG = {
         "memory_char_limit": 2200,   # ~800 tokens at 2.75 chars/token
         "user_char_limit": 1375,     # ~500 tokens at 2.75 chars/token
         # External memory provider plugin (empty = built-in only).
-        # Set to a provider name to activate: "openviking", "mem0",
-        # "hindsight", "holographic", "retaindb", "byterover".
+        # Set to a user-installed provider name to activate it.
         # Only ONE external provider is allowed at a time.
         "provider": "",
     },
@@ -2291,11 +2290,6 @@ DEFAULT_CONFIG = {
             "keep": 5,  # retain last N regular snapshots
         },
     },
-
-    # Honcho AI-native memory -- reads ~/.honcho/config.json as single source of truth.
-    # This section is only needed for hermes-specific overrides; everything else
-    # (apiKey, workspace, peerName, sessions, enabled) comes from the global config.
-    "honcho": {},
 
     # IANA timezone (e.g. "Asia/Kolkata", "America/New_York").
     # Empty string means use server-local time.
@@ -3077,17 +3071,6 @@ DEFAULT_CONFIG = {
     "paste_collapse_threshold_fallback": 5,
     "paste_collapse_char_threshold": 2000,
 
-    # Computer Use (cua-driver) toolset settings.
-    "computer_use": {
-        # cua-driver ships with anonymous usage telemetry (PostHog) ENABLED
-        # by default upstream. Hermes disables it for our users unless they
-        # explicitly opt in here. When false (default), Hermes sets
-        # CUA_DRIVER_RS_TELEMETRY_ENABLED=0 in the cua-driver child env for
-        # every invocation (MCP backend, status, doctor, install). Set true
-        # to let cua-driver use its own default (telemetry on).
-        "cua_telemetry": False,
-    },
-
     # Hermes Desktop (Electron app) launch options. These only affect
     # `hermes desktop`; they do not touch the CLI/gateway.
     "desktop": {
@@ -3765,98 +3748,6 @@ OPTIONAL_ENV_VARS = {
         "url": "https://developers.google.com/tenor/guides/quickstart",
         "password": True,
         "category": "skill",
-        "advanced": True,
-    },
-
-    # ── Honcho ──
-    "HONCHO_API_KEY": {
-        "description": "Honcho API key for AI-native persistent memory",
-        "prompt": "Honcho API key",
-        "url": "https://app.honcho.dev",
-        "tools": ["honcho_context"],
-        "password": True,
-        "category": "tool",
-    },
-    "HONCHO_BASE_URL": {
-        "description": "Base URL for self-hosted Honcho instances (no API key needed)",
-        "prompt": "Honcho base URL (e.g. http://localhost:8000)",
-        "category": "tool",
-    },
-
-    # ── Hindsight ──
-    "HINDSIGHT_API_KEY": {
-        "description": "Hindsight API key for graph-aware persistent memory",
-        "prompt": "Hindsight API key",
-        "url": "https://hindsight.vectorize.io",
-        "tools": ["hindsight_recall"],
-        "password": True,
-        "category": "tool",
-    },
-    "HINDSIGHT_API_URL": {
-        "description": "Base URL for the Hindsight API (default: https://api.hindsight.vectorize.io)",
-        "prompt": "Hindsight API URL",
-        "category": "tool",
-        "advanced": True,
-    },
-
-    # ── Supermemory ──
-    "SUPERMEMORY_API_KEY": {
-        "description": "Supermemory API key for conversation-scoped persistent memory",
-        "prompt": "Supermemory API key",
-        "url": "https://supermemory.ai",
-        "tools": ["supermemory_search"],
-        "password": True,
-        "category": "tool",
-    },
-
-    # ── Mem0 ──
-    "MEM0_API_KEY": {
-        "description": "Mem0 Platform API key for semantic persistent memory",
-        "prompt": "Mem0 API key",
-        "url": "https://app.mem0.ai",
-        "tools": ["mem0_search"],
-        "password": True,
-        "category": "tool",
-    },
-
-    # ── RetainDB ──
-    "RETAINDB_API_KEY": {
-        "description": "RetainDB API key for persistent memory",
-        "prompt": "RetainDB API key",
-        "url": "https://retaindb.com",
-        "tools": ["retaindb_search"],
-        "password": True,
-        "category": "tool",
-    },
-    "RETAINDB_BASE_URL": {
-        "description": "Base URL for self-hosted RetainDB instances (default: https://api.retaindb.com)",
-        "prompt": "RetainDB base URL",
-        "category": "tool",
-        "advanced": True,
-    },
-
-    # ── ByteRover ──
-    "BRV_API_KEY": {
-        "description": "ByteRover API key (optional, for cloud sync — local-first by default)",
-        "prompt": "ByteRover API key",
-        "url": "https://app.byterover.dev",
-        "tools": ["brv_query"],
-        "password": True,
-        "category": "tool",
-    },
-
-    # ── OpenViking ──
-    "OPENVIKING_API_KEY": {
-        "description": "OpenViking API key (leave blank for local dev mode)",
-        "prompt": "OpenViking API key",
-        "tools": ["viking_search"],
-        "password": True,
-        "category": "tool",
-    },
-    "OPENVIKING_ENDPOINT": {
-        "description": "OpenViking server URL (default: http://127.0.0.1:1933)",
-        "prompt": "OpenViking endpoint",
-        "category": "tool",
         "advanced": True,
     },
 

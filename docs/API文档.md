@@ -229,9 +229,9 @@ curl -N -X POST http://127.0.0.1:8000/chat \
 ### 3.6 功能开关 Features
 
 #### `GET /features`
-返回当前功能开关状态（前端据此渲染「是否启用 computer_use / 宿主机访问」按钮）。
+返回当前功能开关状态（前端据此渲染「是否启用宿主机访问」按钮）。
 ```json
-{ "features": { "computer_use": false, "host_terminal": false } }
+{ "features": { "host_terminal": false } }
 ```
 > 开关本身在 `config.yaml` 的 `features` 段或 `HERMES_FEATURE_*` env 配置。`POST` 改开关（Inc 2，等你前端按钮设计好再加）。
 
@@ -295,7 +295,7 @@ async function chat(token, message, sessionId) {
 4. **历史**：`GET /sessions` 列表 → `GET /sessions/{id}` 看详情。
 5. **记忆**：`POST /memory` 存长期事实 → 之后所有对话自动带上。
 6. **管理**（admin）：`/users` 增删用户、改角色。
-7. **开关**：`GET /features` 读 computer_use/host_terminal 状态，渲染按钮。
+7. **开关**：`GET /features` 读 host_terminal 状态，渲染按钮。
 
 ---
 

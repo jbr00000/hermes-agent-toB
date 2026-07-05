@@ -20,7 +20,6 @@ agent:
 # Elevated capabilities default OFF (decision 5: no host access by default).
 # The frontend toggles via GET/POST /features. Env: HERMES_FEATURE_<UPPER>.
 features:
-  computer_use: false      # desktop control (also needs cua-driver installed)
   host_terminal: false     # true = agent may run shell on the HOST server
                            # false (default) = Docker sandbox ONLY
 

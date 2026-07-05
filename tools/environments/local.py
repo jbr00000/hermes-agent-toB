@@ -435,7 +435,7 @@ def hermes_subprocess_env(*, inherit_credentials: bool = False) -> dict[str, str
     """Build a sanitized environment dict for a spawned subprocess.
 
     Centralized helper for the **non-terminal** spawn surface (browser,
-    ACP/CLI executors, computer-use driver, dep-ensure, TUI Node host,
+    ACP/CLI executors, dep-ensure, TUI Node host,
     detached gateway).  Use this instead of copying ``os.environ`` directly
     so strip-by-default is the uniform policy across every spawn site, with a
     single source of truth (``_HERMES_PROVIDER_ENV_BLOCKLIST``).  The terminal

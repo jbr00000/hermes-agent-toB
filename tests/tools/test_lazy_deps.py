@@ -27,9 +27,9 @@ class TestSpecSafety:
     @pytest.mark.parametrize("spec", [
         "mistralai>=2.3.0,<3",
         "elevenlabs>=1.0,<2",
-        "honcho-ai>=2.0.1,<3",
+        "fal-client>=0.13,<1",
         "boto3>=1.35.0,<2",
-        "mautrix[encryption]>=0.20,<1",
+        "uvicorn[standard]>=0.40,<1",
         "google-api-python-client>=2.100,<3",
         "youtube-transcript-api>=1.2.0",
         "qrcode>=7.0,<8",
@@ -95,10 +95,10 @@ class TestAllowlist:
                     f"{feature}: spec {spec!r} fails safety check"
 
     def test_feature_install_command_returns_pip_invocation(self):
-        cmd = ld.feature_install_command("memory.honcho")
+        cmd = ld.feature_install_command("image.fal")
         assert cmd is not None
         assert cmd.startswith("uv pip install")
-        assert "honcho-ai" in cmd
+        assert "fal-client" in cmd
 
     def test_feature_install_command_unknown(self):
         assert ld.feature_install_command("not.real") is None
@@ -111,7 +111,7 @@ class TestAllowlist:
 
 class TestSecurityGating:
     def test_disabled_via_config_raises(self, monkeypatch):
-        # Pretend honcho is missing AND lazy installs are disabled.
+        # Pretend a lazy feature is missing AND lazy installs are disabled.
         monkeypatch.setitem(ld.LAZY_DEPS, "test.feat", ("packageX>=1.0,<2",))
         monkeypatch.setattr(ld, "_is_satisfied", lambda spec: False)
         monkeypatch.setattr(ld, "_allow_lazy_installs", lambda: False)
@@ -253,26 +253,26 @@ class TestIsSatisfiedVersionAware:
         monkeypatch.setattr(_md, "version", _version)
 
     def test_exact_pin_match_returns_true(self, monkeypatch):
-        self._fake_version(monkeypatch, {"honcho-ai": "2.0.1"})
-        assert ld._is_satisfied("honcho-ai==2.0.1") is True
+        self._fake_version(monkeypatch, {"fal-client": "0.13.1"})
+        assert ld._is_satisfied("fal-client==0.13.1") is True
 
     def test_exact_pin_mismatch_returns_false(self, monkeypatch):
         # Installed 2.0.0, spec requires 2.0.1 → False (needs upgrade).
-        self._fake_version(monkeypatch, {"honcho-ai": "2.0.0"})
-        assert ld._is_satisfied("honcho-ai==2.0.1") is False
+        self._fake_version(monkeypatch, {"fal-client": "0.13.0"})
+        assert ld._is_satisfied("fal-client==0.13.1") is False
 
     def test_range_within_returns_true(self, monkeypatch):
-        self._fake_version(monkeypatch, {"slack-bolt": "1.27.0"})
-        assert ld._is_satisfied("slack-bolt>=1.18.0,<2") is True
+        self._fake_version(monkeypatch, {"some-sdk": "1.27.0"})
+        assert ld._is_satisfied("some-sdk>=1.18.0,<2") is True
 
     def test_range_above_returns_false(self, monkeypatch):
         # Installed too new for the upper bound.
-        self._fake_version(monkeypatch, {"slack-bolt": "2.0.0"})
-        assert ld._is_satisfied("slack-bolt>=1.18.0,<2") is False
+        self._fake_version(monkeypatch, {"some-sdk": "2.0.0"})
+        assert ld._is_satisfied("some-sdk>=1.18.0,<2") is False
 
     def test_range_below_returns_false(self, monkeypatch):
-        self._fake_version(monkeypatch, {"slack-bolt": "1.0.0"})
-        assert ld._is_satisfied("slack-bolt>=1.18.0,<2") is False
+        self._fake_version(monkeypatch, {"some-sdk": "1.0.0"})
+        assert ld._is_satisfied("some-sdk>=1.18.0,<2") is False
 
     def test_package_not_installed_returns_false(self, monkeypatch):
         self._fake_version(monkeypatch, {})
@@ -284,14 +284,14 @@ class TestIsSatisfiedVersionAware:
         assert ld._is_satisfied("somepkg") is True
 
     def test_extras_block_in_spec_is_stripped(self, monkeypatch):
-        # mautrix[encryption]==0.21.0 — the [encryption] block must not
+        # uvicorn[standard]==0.41.0 - the [standard] block must not
         # confuse the specifier parser.
-        self._fake_version(monkeypatch, {"mautrix": "0.21.0"})
-        assert ld._is_satisfied("mautrix[encryption]==0.21.0") is True
+        self._fake_version(monkeypatch, {"uvicorn": "0.41.0"})
+        assert ld._is_satisfied("uvicorn[standard]==0.41.0") is True
 
     def test_extras_block_mismatch_returns_false(self, monkeypatch):
-        self._fake_version(monkeypatch, {"mautrix": "0.20.0"})
-        assert ld._is_satisfied("mautrix[encryption]==0.21.0") is False
+        self._fake_version(monkeypatch, {"uvicorn": "0.40.0"})
+        assert ld._is_satisfied("uvicorn[standard]==0.41.0") is False
 
 
 # ---------------------------------------------------------------------------
@@ -305,26 +305,26 @@ class TestActiveFeatures:
         assert ld.active_features() == []
 
     def test_finds_features_with_at_least_one_package_installed(self, monkeypatch):
-        # Pretend only honcho-ai is installed; nothing else.
+        # Pretend only fal-client is installed; nothing else.
         monkeypatch.setattr(
             ld, "_is_present",
-            lambda spec: ld._pkg_name_from_spec(spec) == "honcho-ai",
+            lambda spec: ld._pkg_name_from_spec(spec) == "fal-client",
         )
         active = ld.active_features()
-        assert "memory.honcho" in active
+        assert "image.fal" in active
         # Backends the user never enabled stay quiet.
-        assert "memory.hindsight" not in active
-        assert "platform.slack" not in active
+        assert "tts.elevenlabs" not in active
+        assert "stt.mistral" not in active
 
     def test_multi_package_feature_active_if_any_present(self, monkeypatch):
-        # platform.slack has 3 packages; only one needs to be present
+        # stt.faster_whisper has multiple packages; only one needs to be present
         # for the feature to count as active (user activated it before,
         # one transitive may have been uninstalled separately).
         monkeypatch.setattr(
             ld, "_is_present",
-            lambda spec: ld._pkg_name_from_spec(spec) == "slack-bolt",
+            lambda spec: ld._pkg_name_from_spec(spec) == "sounddevice",
         )
-        assert "platform.slack" in ld.active_features()
+        assert "stt.faster_whisper" in ld.active_features()
 
 
 class TestRefreshActiveFeatures:

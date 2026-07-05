@@ -18,22 +18,6 @@ Usage:
     hermes cron list           # List cron jobs
     hermes cron status         # Check if cron scheduler is running
     hermes doctor              # Check configuration and dependencies
-    hermes honcho setup                    # Configure Honcho AI memory integration
-    hermes honcho status                   # Show Honcho config and connection status
-    hermes honcho sessions                 # List directory → session name mappings
-    hermes honcho map <name>               # Map current directory to a session name
-    hermes honcho peer                     # Show peer names and dialectic settings
-    hermes honcho peer --user NAME         # Set user peer name
-    hermes honcho peer --ai NAME           # Set AI peer name
-    hermes honcho peer --reasoning LEVEL   # Set dialectic reasoning level
-    hermes honcho mode                     # Show current memory mode
-    hermes honcho mode [hybrid|honcho|local]  # Set memory mode
-    hermes honcho tokens                   # Show token budget settings
-    hermes honcho tokens --context N       # Set session.context() token cap
-    hermes honcho tokens --dialectic N     # Set dialectic result char cap
-    hermes honcho identity                 # Show AI peer identity representation
-    hermes honcho identity <file>          # Seed AI peer identity from a file (SOUL.md etc.)
-    hermes honcho migrate                  # Step-by-step migration guide: OpenClaw native → Hermes + Honcho
     hermes version             Show version
     hermes update              Update to latest version
     hermes uninstall           Uninstall Hermes Agent
@@ -272,8 +256,6 @@ from hermes_cli.subcommands.profile import build_profile_parser
 from hermes_cli.subcommands.model import build_model_parser
 from hermes_cli.subcommands.setup import build_setup_parser
 from hermes_cli.subcommands.postinstall import build_postinstall_parser
-from hermes_cli.subcommands.whatsapp import build_whatsapp_parser
-from hermes_cli.subcommands.slack import build_slack_parser
 from hermes_cli.subcommands.login import build_login_parser
 from hermes_cli.subcommands.logout import build_logout_parser
 from hermes_cli.subcommands.auth import build_auth_parser
@@ -2430,258 +2412,6 @@ def cmd_proxy(args):
         raise SystemExit(rc)
 
 
-def cmd_whatsapp(args):
-    """Set up WhatsApp: choose mode, configure, install bridge, pair via QR."""
-    _require_tty("whatsapp")
-    from hermes_cli.config import get_env_value, save_env_value
-    from hermes_constants import find_node_executable, with_hermes_node_path
-
-    print()
-    print("⚕ WhatsApp Setup")
-    print("=" * 50)
-
-    # ── Step 1: Choose mode ──────────────────────────────────────────────
-    current_mode = get_env_value("WHATSAPP_MODE") or ""
-    if not current_mode:
-        print()
-        print("How will you use WhatsApp with Hermes?")
-        print()
-        print("  1. Separate bot number (recommended)")
-        print("     People message the bot's number directly — cleanest experience.")
-        print(
-            "     Requires a second phone number with WhatsApp installed on a device."
-        )
-        print()
-        print("  2. Personal number (self-chat)")
-        print("     You message yourself to talk to the agent.")
-        print("     Quick to set up, but the UX is less intuitive.")
-        print()
-        try:
-            choice = input("  Choose [1/2]: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\nSetup cancelled.")
-            return
-
-        if choice == "1":
-            save_env_value("WHATSAPP_MODE", "bot")
-            wa_mode = "bot"
-            print("  ✓ Mode: separate bot number")
-            print()
-            print("  ┌─────────────────────────────────────────────────┐")
-            print("  │  Getting a second number for the bot:           │")
-            print("  │                                                 │")
-            print("  │  Easiest: Install WhatsApp Business (free app)  │")
-            print("  │  on your phone with a second number:            │")
-            print("  │    • Dual-SIM: use your 2nd SIM slot            │")
-            print("  │    • Google Voice: free US number (voice.google) │")
-            print("  │    • Prepaid SIM: $3-10, verify once            │")
-            print("  │                                                 │")
-            print("  │  WhatsApp Business runs alongside your personal │")
-            print("  │  WhatsApp — no second phone needed.             │")
-            print("  └─────────────────────────────────────────────────┘")
-        else:
-            save_env_value("WHATSAPP_MODE", "self-chat")
-            wa_mode = "self-chat"
-            print("  ✓ Mode: personal number (self-chat)")
-    else:
-        wa_mode = current_mode
-        mode_label = (
-            "separate bot number" if wa_mode == "bot" else "personal number (self-chat)"
-        )
-        print(f"\n✓ Mode: {mode_label}")
-
-    # ── Step 2: Mode is selected, will enable WhatsApp only after pairing ──
-    # We intentionally don't write WHATSAPP_ENABLED=true here.  If the user
-    # aborts the wizard later (Ctrl+C, failed npm install, missed QR scan),
-    # we'd otherwise leave .env claiming WhatsApp is ready when the bridge
-    # has no creds.json.  Every subsequent `hermes gateway` then paid a 30s
-    # bridge-bootstrap timeout and queued WhatsApp for indefinite retries.
-    # Now: aborted setup leaves WHATSAPP_ENABLED unset → gateway skips it.
-    # Re-runs that already have WHATSAPP_ENABLED=true (from a prior
-    # successful pairing) stay enabled — we just don't write it pre-emptively.
-    print()
-    if (get_env_value("WHATSAPP_ENABLED") or "").lower() == "true":
-        print("✓ WhatsApp is already enabled")
-
-    # ── Step 3: Allowed users ────────────────────────────────────────────
-    current_users = get_env_value("WHATSAPP_ALLOWED_USERS") or ""
-    if current_users:
-        print(f"✓ Allowed users: {current_users}")
-        try:
-            response = input("\n  Update allowed users? [y/N] ").strip()
-        except (EOFError, KeyboardInterrupt):
-            response = "n"
-        if response.lower() in {"y", "yes"}:
-            if wa_mode == "bot":
-                phone = input(
-                    "  Phone numbers that can message the bot (comma-separated): "
-                ).strip()
-            else:
-                phone = input("  Your phone number (e.g. 15551234567): ").strip()
-            if phone:
-                save_env_value("WHATSAPP_ALLOWED_USERS", phone.replace(" ", ""))
-                print(f"  ✓ Updated to: {phone}")
-    else:
-        print()
-        if wa_mode == "bot":
-            print("  Who should be allowed to message the bot?")
-            phone = input(
-                "  Phone numbers (comma-separated, or * for anyone): "
-            ).strip()
-        else:
-            phone = input("  Your phone number (e.g. 15551234567): ").strip()
-        if phone:
-            save_env_value("WHATSAPP_ALLOWED_USERS", phone.replace(" ", ""))
-            print(f"  ✓ Allowed users set: {phone}")
-        else:
-            print("  ⚠ No allowlist — the agent will respond to ALL incoming messages")
-
-    # ── Step 4: Install bridge dependencies ──────────────────────────────
-    from gateway.platforms.whatsapp_common import resolve_whatsapp_bridge_dir
-    bridge_dir = resolve_whatsapp_bridge_dir()
-    bridge_script = bridge_dir / "bridge.js"
-
-    if not bridge_script.exists():
-        print(f"\n✗ Bridge script not found at {bridge_script}")
-        return
-
-    if not (bridge_dir / "node_modules").exists():
-        print(
-            "\n→ Installing WhatsApp bridge dependencies (this can take a few minutes)..."
-        )
-        npm = find_node_executable("npm")
-        if not npm:
-            print("  ✗ npm not found on PATH — install Node.js first")
-            return
-        try:
-            result = subprocess.run(
-                [npm, "install", "--no-fund", "--no-audit", "--progress=false"],
-                cwd=str(bridge_dir),
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                env=with_hermes_node_path(),
-            )
-        except KeyboardInterrupt:
-            print("\n  ✗ Install cancelled")
-            return
-        if result.returncode != 0:
-            err = (result.stderr or "").strip()
-            preview = "\n".join(err.splitlines()[-30:]) if err else "(no output)"
-            print("  ✗ npm install failed:")
-            print(preview)
-            return
-        print("  ✓ Dependencies installed")
-    else:
-        print("✓ Bridge dependencies already installed")
-
-    # ── Step 5: Check for existing session ───────────────────────────────
-    session_dir = get_hermes_home() / "whatsapp" / "session"
-    session_dir.mkdir(parents=True, exist_ok=True)
-
-    if (session_dir / "creds.json").exists():
-        print("✓ Existing WhatsApp session found")
-        try:
-            response = input(
-                "\n  Re-pair? This will clear the existing session. [y/N] "
-            ).strip()
-        except (EOFError, KeyboardInterrupt):
-            response = "n"
-        if response.lower() in {"y", "yes"}:
-            shutil.rmtree(session_dir, ignore_errors=True)
-            session_dir.mkdir(parents=True, exist_ok=True)
-            print("  ✓ Session cleared")
-        else:
-            # Existing pairing — ensure WHATSAPP_ENABLED reflects that.
-            # (Older installs may have lost the env var; covers re-runs
-            # where the user picked "no, keep my session" but the var
-            # was never set or got removed.)
-            if (get_env_value("WHATSAPP_ENABLED") or "").lower() != "true":
-                save_env_value("WHATSAPP_ENABLED", "true")
-            print("\n✓ WhatsApp is configured and paired!")
-            print("  Start the gateway with: hermes gateway")
-            return
-
-    # ── Step 6: QR code pairing ──────────────────────────────────────────
-    print()
-    print("─" * 50)
-    if wa_mode == "bot":
-        print("📱 Open WhatsApp (or WhatsApp Business) on the")
-        print("   phone with the BOT's number, then scan:")
-    else:
-        print("📱 Open WhatsApp on your phone, then scan:")
-    print()
-    print("   Settings → Linked Devices → Link a Device")
-    print("─" * 50)
-    print()
-
-    try:
-        subprocess.run(
-            [
-                find_node_executable("node") or "node",
-                str(bridge_script),
-                "--pair-only",
-                "--session",
-                str(session_dir),
-            ],
-            cwd=str(bridge_dir),
-            env=with_hermes_node_path(),
-        )
-    except KeyboardInterrupt:
-        pass
-
-    # ── Step 7: Post-pairing ─────────────────────────────────────────────
-    print()
-    if (session_dir / "creds.json").exists():
-        # Only enable WhatsApp now that pairing actually succeeded.  If the
-        # user Ctrl+C'd at any earlier step, WHATSAPP_ENABLED stays unset
-        # and `hermes gateway` skips it cleanly instead of paying a 30s
-        # bridge timeout + queueing the platform for indefinite retries.
-        save_env_value("WHATSAPP_ENABLED", "true")
-        print("✓ WhatsApp paired successfully!")
-        print()
-        if wa_mode == "bot":
-            print("  Next steps:")
-            print("    1. Start the gateway:  hermes gateway")
-            print("    2. Send a message to the bot's WhatsApp number")
-            print("    3. The agent will reply automatically")
-            print()
-            print("  Tip: Agent responses are prefixed with '⚕ Hermes Agent'")
-        else:
-            print("  Next steps:")
-            print("    1. Start the gateway:  hermes gateway")
-            print("    2. Open WhatsApp → Message Yourself")
-            print("    3. Type a message — the agent will reply")
-            print()
-            print("  Tip: Agent responses are prefixed with '⚕ Hermes Agent'")
-            print("  so you can tell them apart from your own messages.")
-        print()
-        print("  Or install as a service: hermes gateway install")
-    else:
-        print("⚠ Pairing may not have completed. Run 'hermes whatsapp' to try again.")
-
-
-def cmd_whatsapp_cloud(args):
-    """Set up WhatsApp Business Cloud API (official Meta integration).
-
-    Walks the user through the Meta-side credentials (Phone Number ID,
-    Access Token, App Secret, optional App/WABA IDs) plus webhook
-    configuration. Includes field-shape validators that catch the most
-    common setup mistakes (e.g. pasting a phone number into the Phone
-    Number ID field).
-
-    Distinct from ``hermes whatsapp`` (the Baileys bridge wizard) — the
-    two adapters are complementary, not alternatives. See
-    ``hermes_cli/setup_whatsapp_cloud.py``.
-    """
-    _require_tty("whatsapp-cloud")
-    from hermes_cli.setup_whatsapp_cloud import run_whatsapp_cloud_setup
-
-    return run_whatsapp_cloud_setup()
-
-
 def cmd_setup(args):
     """Interactive setup wizard."""
     from hermes_cli.setup import run_setup_wizard
@@ -4224,37 +3954,6 @@ def cmd_webhook(args):
     from hermes_cli.webhook import webhook_command
 
     webhook_command(args)
-
-
-def cmd_slack(args):
-    """Slack integration helpers.
-
-    Dispatches ``hermes slack <subcommand>``. Currently supports:
-      manifest — print or write a Slack app manifest with every gateway
-                 command registered as a first-class slash.
-    """
-    sub = getattr(args, "slack_command", None)
-    if sub in {None, ""}:
-        # No subcommand — print usage hint.
-        print(
-            "usage: hermes slack <subcommand>\n"
-            "\n"
-            "subcommands:\n"
-            "  manifest   Generate a Slack app manifest with every gateway\n"
-            "             command registered as a native slash\n"
-            "\n"
-            "Run `hermes slack manifest -h` for details.",
-            file=sys.stderr,
-        )
-        return 1
-
-    if sub == "manifest":
-        from hermes_cli.slack_cli import slack_manifest_command
-
-        return slack_manifest_command(args)
-
-    print(f"Unknown slack subcommand: {sub}", file=sys.stderr)
-    return 1
 
 
 def cmd_kanban(args):
@@ -8294,8 +7993,8 @@ def _log_only_write(text: str) -> None:
 
     During ``hermes update`` ``sys.stdout`` is an ``_UpdateOutputStream`` that
     mirrors to both the terminal and ``update.log``. Loud, low-signal
-    subprocess output (npm installs, the Electron/vite build, the cua-driver
-    installer's "Next steps" wall) should be captured and tucked into the log
+    subprocess output (npm installs, Electron/vite builds, post-setup
+    installers) should be captured and tucked into the log
     so failures stay debuggable, without flooding the user's terminal. This
     reaches past the mirroring stream straight to the underlying log handle.
     """
@@ -9804,16 +9503,6 @@ def _cmd_update_impl(args, gateway_mode: bool):
         except Exception:
             pass  # profiles module not available or no profiles
 
-        # Sync Honcho host blocks to all profiles
-        try:
-            from plugins.memory.honcho.cli import sync_honcho_profiles_quiet
-
-            synced = sync_honcho_profiles_quiet()
-            if synced:
-                print(f"\n-> Honcho: synced {synced} profile(s)")
-        except Exception:
-            pass  # honcho plugin not installed or not configured
-
         # Check for config migrations
         print()
         print("→ Checking configuration for new options...")
@@ -9984,22 +9673,6 @@ def _cmd_update_impl(args, gateway_mode: bool):
             _ensure_fhs_path_guard()
         except Exception as e:
             logger.debug("FHS PATH guard check failed: %s", e)
-
-        # Refresh the cua-driver binary used by the Computer Use toolset.
-        # The upstream installer is gated on supported platforms and on the
-        # binary already being on PATH, so this is a no-op for users who
-        # don't have it. Tying the refresh to ``hermes update`` gives users a
-        # predictable cadence (matches when they pull new agent code) without
-        # adding startup latency or a per-launch GitHub API call.
-        try:
-            if sys.platform in ("darwin", "win32", "linux") and shutil.which("cua-driver"):
-                from hermes_cli.tools_config import install_cua_driver
-
-                print()
-                print("→ Refreshing cua-driver (Computer Use)...")
-                install_cua_driver(upgrade=True)
-        except Exception as e:
-            logger.debug("cua-driver refresh failed: %s", e)
 
         # Write exit code *before* the gateway restart attempt.
         # When running as ``hermes update --gateway`` (spawned by the gateway's
@@ -10732,8 +10405,6 @@ def _coalesce_session_name_args(argv: list) -> list:
         "model",
         "gateway",
         "setup",
-        "whatsapp",
-        "whatsapp-cloud",
         "login",
         "logout",
         "auth",
@@ -10755,7 +10426,6 @@ def _coalesce_session_name_args(argv: list) -> list:
         "serve",
         "desktop",
         "gui",
-        "honcho",
         "claw",
         "plugins",
         "security",
@@ -10927,16 +10597,6 @@ def cmd_profile(args):
                     print(
                         f"Cloned config, .env, SOUL.md, and skills from {source_label}."
                     )
-
-            # Auto-clone Honcho config for the new profile (only with clone operations)
-            if clone_config or clone_all:
-                try:
-                    from plugins.memory.honcho.cli import clone_honcho_for_profile
-
-                    if clone_honcho_for_profile(name):
-                        print(f"Honcho config cloned (peer: {name})")
-                except Exception:
-                    pass  # Honcho plugin not installed or not configured
 
             # Seed bundled skills for fresh profiles only. Clone operations
             # already copied the source profile's skills, including any
@@ -11934,7 +11594,6 @@ def _build_provider_choices() -> list[str]:
 _BUILTIN_SUBCOMMANDS = frozenset(
     {
         "acp", "auth", "backup", "bundles", "checkpoints", "claw", "completion",
-        "computer-use",
         "config", "cron", "curator", "dashboard", "serve", "debug", "doctor",
         "dump", "fallback", "gateway", "hooks", "import", "insights",
         "gui", "desktop", "kanban", "login", "logout", "logs", "lsp", "mcp", "memory", "migrate", "moa",
@@ -11943,8 +11602,8 @@ _BUILTIN_SUBCOMMANDS = frozenset(
         "project", "proxy",
         "prompt-size",
         "send", "sessions", "setup",
-        "skills", "slack", "status", "tools", "uninstall", "update",
-        "version", "webhook", "whatsapp", "whatsapp-cloud", "chat", "secrets", "security",
+        "skills", "status", "tools", "uninstall", "update",
+        "version", "webhook", "chat", "secrets", "security",
         # Help-ish invocations — plugin commands not being listed in
         # top-level --help is an acceptable trade-off for skipping an
         # expensive eager import of every bundled plugin module.
@@ -12620,31 +12279,6 @@ def main():
     build_postinstall_parser(subparsers, cmd_postinstall=cmd_postinstall)
 
     # =========================================================================
-    # whatsapp command  (parser built in hermes_cli/subcommands/whatsapp.py)
-    # =========================================================================
-    build_whatsapp_parser(subparsers, cmd_whatsapp=cmd_whatsapp)
-
-    # =========================================================================
-    # whatsapp-cloud command (official Meta Cloud API; complement to Baileys)
-    # =========================================================================
-    whatsapp_cloud_parser = subparsers.add_parser(
-        "whatsapp-cloud",
-        help="Set up WhatsApp Business Cloud API integration",
-        description=(
-            "Configure the official Meta WhatsApp Business Cloud API "
-            "adapter (Business account required, public webhook URL "
-            "required). Distinct from `hermes whatsapp` which sets up "
-            "the Baileys bridge for personal accounts."
-        ),
-    )
-    whatsapp_cloud_parser.set_defaults(func=cmd_whatsapp_cloud)
-
-    # =========================================================================
-    # slack command  (parser built in hermes_cli/subcommands/slack.py)
-    # =========================================================================
-    build_slack_parser(subparsers, cmd_slack=cmd_slack)
-
-    # =========================================================================
     # send command — pipe shell-script output to any configured platform
     # =========================================================================
     # =========================================================================
@@ -12905,206 +12539,6 @@ def main():
     # =========================================================================
     build_tools_parser(subparsers, cmd_tools=cmd_tools)
 
-    # =========================================================================
-    # computer-use command — manage Computer Use (cua-driver) on macOS
-    # =========================================================================
-    computer_use_parser = subparsers.add_parser(
-        "computer-use",
-        help="Manage the Computer Use (cua-driver) backend (macOS/Windows/Linux)",
-        description=(
-            "Install or check the cua-driver binary used by the\n"
-            "`computer_use` toolset. Supported on macOS, Windows, and\n"
-            "Linux.\n\n"
-            "Use `hermes computer-use install` to fetch and run the\n"
-            "upstream cua-driver installer. This is equivalent to the\n"
-            "post-setup hook that `hermes tools` runs when you first\n"
-            "enable the Computer Use toolset, and is a stable target\n"
-            "for re-running the install if it didn't fire (e.g. when\n"
-            "toggling the toolset on a returning-user setup).\n\n"
-            "Use `hermes computer-use doctor` to run cua-driver's\n"
-            "`health_report` MCP tool and surface its check matrix\n"
-            "(TCC, bundle identity, version, platform support, ...)\n"
-            "in human-readable form."
-        ),
-    )
-    computer_use_sub = computer_use_parser.add_subparsers(dest="computer_use_action")
-
-    computer_use_install = computer_use_sub.add_parser(
-        "install",
-        help="Install or repair the cua-driver binary (macOS/Windows/Linux)",
-    )
-    computer_use_install.add_argument(
-        "--upgrade",
-        action="store_true",
-        help=(
-            "Re-run the upstream installer even if cua-driver is already on "
-            "PATH. The upstream install.sh always pulls the latest release, "
-            "so this performs an in-place upgrade."
-        ),
-    )
-    computer_use_sub.add_parser(
-        "status",
-        help="Print whether cua-driver is installed and on PATH",
-    )
-    computer_use_doctor = computer_use_sub.add_parser(
-        "doctor",
-        help="Run cua-driver `health_report` and surface the check matrix",
-        description=(
-            "Drive cua-driver's stable `health_report` MCP tool and render\n"
-            "its check matrix (TCC permissions, bundle identity, version,\n"
-            "platform support, screenshot probe, …) as human-readable\n"
-            "output. cua-driver owns the health model; this command stays\n"
-            "thin so new checks added upstream surface here without code\n"
-            "changes. Exits 0 when overall=ok, 1 when degraded/failed, 2\n"
-            "when the binary is missing or unreachable."
-        ),
-    )
-    computer_use_doctor.add_argument(
-        "--include",
-        action="append",
-        default=[],
-        metavar="CHECK",
-        help=(
-            "Run only the listed checks. Repeat for multiple "
-            "(e.g. --include tcc_accessibility --include bundle_identity). "
-            "Unknown names are reported by cua-driver."
-        ),
-    )
-    computer_use_doctor.add_argument(
-        "--skip",
-        action="append",
-        default=[],
-        metavar="CHECK",
-        help="Skip the listed checks. Repeat for multiple. Wins over --include.",
-    )
-    computer_use_doctor.add_argument(
-        "--json",
-        action="store_true",
-        help="Emit the raw structured payload as JSON (same shape as `tools/call`).",
-    )
-    computer_use_perms = computer_use_sub.add_parser(
-        "permissions",
-        help="Check or grant macOS Accessibility + Screen Recording (macOS)",
-        description=(
-            "Computer Use drives the Mac through cua-driver, whose TCC grants\n"
-            "attach to cua-driver's own identity (com.trycua.driver) — not the\n"
-            "terminal or the Hermes app. `status` reports the driver's grant\n"
-            "state; `grant` launches CuaDriver via LaunchServices so the macOS\n"
-            "permission dialog is attributed to the process that does the work."
-        ),
-    )
-    computer_use_perms_sub = computer_use_perms.add_subparsers(
-        dest="computer_use_perms_action"
-    )
-    computer_use_perms_status = computer_use_perms_sub.add_parser(
-        "status",
-        help="Report Accessibility + Screen Recording grant state (read-only)",
-    )
-    computer_use_perms_status.add_argument(
-        "--json",
-        action="store_true",
-        help="Emit the normalized permission payload as JSON.",
-    )
-    computer_use_perms_sub.add_parser(
-        "grant",
-        help="Request the grants (opens the dialog attributed to CuaDriver)",
-    )
-
-    def cmd_computer_use(args):
-        action = getattr(args, "computer_use_action", None)
-        if action == "install":
-            from hermes_cli.tools_config import install_cua_driver
-            install_cua_driver(upgrade=bool(getattr(args, "upgrade", False)))
-            return
-        if action == "status":
-            import shutil
-            import subprocess
-            from hermes_cli.tools_config import _cua_driver_cmd
-            # Honor HERMES_CUA_DRIVER_CMD for local-build testing — same
-            # resolver `install_cua_driver` and the runtime backend use,
-            # so `status` reports what `computer_use` will actually invoke.
-            driver_cmd = _cua_driver_cmd()
-            path = shutil.which(driver_cmd)
-            if path:
-                version = ""
-                try:
-                    from hermes_cli.tools_config import _cua_driver_env
-                    version = subprocess.run(
-                        [path, "--version"],
-                        capture_output=True, text=True, timeout=5,
-                        env=_cua_driver_env(),
-                    ).stdout.strip()
-                except Exception:
-                    pass
-                if version:
-                    print(f"cua-driver: installed at {path} ({version})")
-                else:
-                    print(f"cua-driver: installed at {path}")
-                try:
-                    from tools.computer_use.cua_backend import cua_driver_update_check
-                    st = cua_driver_update_check()
-                    if st and st.get("update_available"):
-                        latest = st.get("latest_version") or "?"
-                        print(f"  ⬆ Update available: cua-driver {latest}.")
-                        print("    Run: hermes computer-use install --upgrade")
-                    elif st:
-                        print("  ✓ Up to date.")
-                    else:
-                        # Older driver (no check-update verb) or offline.
-                        print("  Refresh to latest: hermes computer-use install --upgrade")
-                except Exception:
-                    print("  Refresh to latest: hermes computer-use install --upgrade")
-                return
-            print("cua-driver: not installed")
-            print("  Run: hermes computer-use install")
-            return
-        if action == "doctor":
-            from tools.computer_use.doctor import run_doctor
-            code = run_doctor(
-                include=list(getattr(args, "include", []) or []),
-                skip=list(getattr(args, "skip", []) or []),
-                json_output=bool(getattr(args, "json", False)),
-            )
-            sys.exit(code)
-        if action == "permissions":
-            perms_action = getattr(args, "computer_use_perms_action", None)
-            if perms_action == "grant":
-                from tools.computer_use.permissions import request_permissions_grant
-                sys.exit(request_permissions_grant())
-            if perms_action == "status":
-                import json as _json
-                from tools.computer_use.permissions import computer_use_status
-                st = computer_use_status()
-                if bool(getattr(args, "json", False)):
-                    print(_json.dumps(st, indent=2, sort_keys=True))
-                    sys.exit(0 if st["ready"] else 1)
-                if not st["platform_supported"]:
-                    print(f"Computer Use is not supported on {st['platform']}.")
-                    sys.exit(1)
-                if not st["installed"]:
-                    print("cua-driver: not installed. Run: hermes computer-use install")
-                    sys.exit(1)
-                glyph = lambda v: "✅" if v is True else ("❌" if v is False else "•")  # noqa: E731
-                print(f"cua-driver: {st['version'] or 'installed'} ({st['platform']})")
-                if st["can_grant"]:  # macOS TCC permissions
-                    print(f"  {glyph(st['accessibility'])} Accessibility")
-                    print(f"  {glyph(st['screen_recording'])} Screen Recording")
-                    if not st["ready"]:
-                        print("  Grant: hermes computer-use permissions grant")
-                else:  # no TCC model — readiness is driver health
-                    print(f"  {glyph(st['ready'])} driver health (no permission toggles on {st['platform']})")
-                for c in st["checks"]:
-                    if c["status"] != "ok":
-                        print(f"  ⚠ {c['label']}: {c['message']}")
-                if st["error"]:
-                    print(f"  ⚠ {st['error']}")
-                sys.exit(0 if st["ready"] else 1)
-            computer_use_perms.print_help()
-            return
-        # No subcommand → show help
-        computer_use_parser.print_help()
-
-    computer_use_parser.set_defaults(func=cmd_computer_use)
     # =========================================================================
     # mcp command  (parser built in hermes_cli/subcommands/mcp.py)
     # =========================================================================
@@ -13433,7 +12867,7 @@ def main():
             msgs = db.message_count()
             print(f"Total sessions: {total}")
             print(f"Total messages: {msgs}")
-            for src in ["cli", "telegram", "discord", "whatsapp", "slack"]:
+            for src in ["cli"]:
                 c = db.session_count(source=src)
                 if c > 0:
                     print(f"  {src}: {c} sessions")

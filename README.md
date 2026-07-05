@@ -85,11 +85,10 @@ docker compose up       # 镜像 hermes-agent-tob:dev，挂载 .hermes-dev 为 /
 功能开关（默认全关，前端可开）：
 ```yaml
 features:
-  computer_use: false    # 桌面控制（需 cua-driver）
   host_terminal: false   # 宿主机 shell（关=只 Docker 沙盒）
 ```
 
-`deployment.yaml.example` 是客户交付配置模板；默认不存在时系统使用安全默认值（Docker 沙盒、禁止网络出口、关闭 host terminal / computer use）。
+`deployment.yaml.example` 是客户交付配置模板；默认不存在时系统使用安全默认值（Docker 沙盒、禁止网络出口、关闭 host terminal）。
 
 ## 安全模型
 

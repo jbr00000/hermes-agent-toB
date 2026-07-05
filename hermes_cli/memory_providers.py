@@ -1,22 +1,14 @@
 """Declarative configuration schema for desktop memory providers.
 
-Each memory provider *declares* its configurable surface here — the fields, their
-types, which values are secrets, and (for selects) the allowed options. A single
-generic renderer in the desktop UI and a single generic ``GET/PUT
-/api/memory/providers/{name}/config`` endpoint pair drive the whole experience,
-so adding a new provider (mem0, honcho, ...) is pure declaration with zero
-bespoke UI components or endpoints.
-
-This module is intentionally pure data: it imports nothing from the config/env
-layer. ``web_server`` owns the generic read/write logic that interprets these
-declarations against config.yaml, the provider config file, and the env store.
+Bundled third-party memory providers have been removed from the to-B server
+build. The registry remains as an extension point for future providers, but it
+must not expose stale config panels for integrations that are no longer shipped.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field as dataclass_field
 
-# Field kinds understood by the generic renderer.
 KIND_TEXT = "text"
 KIND_SELECT = "select"
 KIND_SECRET = "secret"
@@ -24,7 +16,7 @@ KIND_SECRET = "secret"
 
 @dataclass(frozen=True)
 class ProviderFieldOption:
-    """A single choice for a ``select`` field."""
+    """A single choice for a select field."""
 
     value: str
     label: str
@@ -33,18 +25,7 @@ class ProviderFieldOption:
 
 @dataclass(frozen=True)
 class ProviderField:
-    """One configurable field on a memory provider.
-
-    A field is stored in exactly one place, decided by ``kind``:
-
-    * ``text`` / ``select`` — persisted to the provider's JSON config file
-      (``<hermes_home>/<provider>/config.json``) under ``key``.
-    * ``secret`` — persisted to the env store under ``env_key`` and never read
-      back out over the API (only an ``is_set`` flag is surfaced).
-
-    ``aliases`` and ``env_fallbacks`` let a field read legacy values written by
-    earlier CLI/env setup without re-introducing per-provider code.
-    """
+    """One configurable field on a memory provider."""
 
     key: str
     label: str
@@ -74,76 +55,10 @@ class MemoryProvider:
     fields: tuple[ProviderField, ...] = dataclass_field(default_factory=tuple)
 
 
-HINDSIGHT = MemoryProvider(
-    name="hindsight",
-    label="Hindsight",
-    fields=(
-        ProviderField(
-            key="mode",
-            label="Mode",
-            kind=KIND_SELECT,
-            default="cloud",
-            description="How Hermes connects to Hindsight.",
-            options=(
-                ProviderFieldOption(
-                    "cloud",
-                    "Cloud",
-                    "Hindsight Cloud API (lightweight, just needs an API key)",
-                ),
-                ProviderFieldOption(
-                    "local_external",
-                    "Local External",
-                    "Connect to an existing Hindsight instance",
-                ),
-            ),
-        ),
-        ProviderField(
-            key="api_key",
-            label="API key",
-            kind=KIND_SECRET,
-            env_key="HINDSIGHT_API_KEY",
-            description="Used to authenticate with the Hindsight API.",
-            placeholder="Enter Hindsight API key",
-        ),
-        ProviderField(
-            key="api_url",
-            label="API URL",
-            kind=KIND_TEXT,
-            default="https://api.hindsight.vectorize.io",
-            aliases=("apiUrl",),
-            env_fallbacks=("HINDSIGHT_API_URL",),
-        ),
-        ProviderField(
-            key="bank_id",
-            label="Bank ID",
-            kind=KIND_TEXT,
-            default="hermes",
-            aliases=("bankId",),
-        ),
-        ProviderField(
-            key="recall_budget",
-            label="Recall budget",
-            kind=KIND_SELECT,
-            default="mid",
-            aliases=("budget",),
-            options=(
-                ProviderFieldOption("low", "low"),
-                ProviderFieldOption("mid", "mid"),
-                ProviderFieldOption("high", "high"),
-            ),
-        ),
-    ),
-)
-
-
-# Registry of providers that expose a desktop config surface. Providers without
-# an entry here (e.g. ``builtin``) simply render no config panel.
-MEMORY_PROVIDERS: dict[str, MemoryProvider] = {
-    HINDSIGHT.name: HINDSIGHT,
-}
+MEMORY_PROVIDERS: dict[str, MemoryProvider] = {}
 
 
 def get_memory_provider(name: str) -> MemoryProvider | None:
-    """Return the declared provider for ``name``, or ``None`` if undeclared."""
+    """Return the declared provider for name, or None if undeclared."""
 
     return MEMORY_PROVIDERS.get(name)

@@ -2514,19 +2514,3 @@ class TestMemoryProviderExternalPaths:
                 return []
 
         assert _Dummy().backup_paths() == []
-
-    def test_honcho_provider_declares_global_config_dir(self, tmp_path, monkeypatch):
-        """The honcho provider's backup_paths() resolves to ~/.honcho."""
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        from plugins.memory.honcho import HonchoMemoryProvider
-
-        paths = HonchoMemoryProvider().backup_paths()
-        assert str(tmp_path / ".honcho") in paths
-
-    def test_hindsight_provider_declares_legacy_dir(self, tmp_path, monkeypatch):
-        """The hindsight provider's backup_paths() resolves to ~/.hindsight."""
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        from plugins.memory.hindsight import HindsightMemoryProvider
-
-        paths = HindsightMemoryProvider().backup_paths()
-        assert str(tmp_path / ".hindsight") in paths
