@@ -76,7 +76,10 @@ def build_agent(
         session_id=session_id,
         user_id=user_id,
         platform="headless",
-        enabled_toolsets=["db"],    # read-only (plan mode keeps this; execute adds mutating tools in Step 2.4)
+        # db = read-only queries; terminal = sandboxed shell/code execution
+        # (docker-only since Step 2.4; TERMINAL_ENV=docker + TERMINAL_DOCKER_IMAGE
+        # select the sandbox container). execute_code (PTC) added when needed.
+        enabled_toolsets=["db", "terminal"],
         skip_memory=True,           # AIAgent's memory-provider system is off; server injects memory above
         skip_context_files=True,
         quiet_mode=True,

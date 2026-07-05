@@ -41,7 +41,8 @@
       "Bash(curl -s -m 5 -X POST http://127.0.0.1:8001/auth/login -H \"Content-Type: application/json\" -d '{\"username\":\"admin\",\"password\":\"changeme\"}')",
       "Bash(set -e)",
       "Bash(D:/Anaconda/envs/hermes/python.exe -c \"import tools.terminal_tool; print\\('terminal_tool imports OK'\\)\")",
-      "Bash(D:/Anaconda/envs/hermes/python.exe -c \"import tools.terminal_tool, tools.environments.docker, tools.environments.local, run_agent, model_tools, toolsets, hermes_cli.main; print\\('imports OK'\\)\")"
+      "Bash(D:/Anaconda/envs/hermes/python.exe -c \"import tools.terminal_tool, tools.environments.docker, tools.environments.local, run_agent, model_tools, toolsets, hermes_cli.main; print\\('imports OK'\\)\")",
+      "Bash(docker pull *)"
     ]
   }
 }

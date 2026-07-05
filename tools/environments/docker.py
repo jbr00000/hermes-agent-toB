@@ -631,14 +631,16 @@ class DockerEnvironment(BaseEnvironment):
             resource_args.extend(["--memory", f"{memory}m"])
         if _cgroup_limits_available(image):
             resource_args.extend(["--pids-limit", _DEFAULT_PIDS_LIMIT])
-        if disk > 0 and sys.platform != "darwin":
-            if self._storage_opt_supported():
-                resource_args.extend(["--storage-opt", f"size={disk}m"])
-            else:
-                logger.warning(
-                    "Docker storage driver does not support per-container disk limits "
-                    "(requires overlay2 on XFS with pquota). Container will run without disk quota."
-                )
+        # to-B fork: per-container disk quota (--storage-opt size=) is DISABLED.
+        # It's only supported on overlay2-over-XFS-with-pquota; Docker Desktop's
+        # WSL2 backend rejects it with exit 125, and the _storage_opt_supported()
+        # probe is unreliable there (returns True, then the real run fails). The
+        # sandbox runs fine without an explicit quota — rely on the Docker
+        # daemon/host default filesystem limits. Re-enable on a Linux deploy that
+        # confirms XFS+pquota support if a hard per-container disk cap is needed.
+        # if disk > 0 and sys.platform != "darwin":
+        #     if self._storage_opt_supported():
+        #         resource_args.extend(["--storage-opt", f"size={disk}m"])
         if not network:
             resource_args.append("--network=none")
 
