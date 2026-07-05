@@ -901,6 +901,36 @@ def _emit_post_tool_call_hook(
         logger.debug("post_tool_call hook error: %s", _hook_err)
 
 
+def _record_tool_audit_event(
+    *,
+    function_name: str,
+    function_args: Dict[str, Any],
+    session_id: Optional[str],
+    task_id: Optional[str],
+    tool_call_id: Optional[str],
+    duration_ms: int,
+    status: str,
+    error_message: Optional[str],
+) -> None:
+    if not session_id:
+        return
+    try:
+        from server.audit import record_tool_call
+
+        record_tool_call(
+            tool_name=function_name,
+            args=function_args,
+            session_id=session_id,
+            status=status,
+            duration_ms=duration_ms,
+            task_id=task_id,
+            tool_call_id=tool_call_id,
+            error=error_message,
+        )
+    except Exception as audit_err:
+        logger.debug("tool_call audit error: %s", audit_err)
+
+
 def handle_function_call(
     function_name: str,
     function_args: Dict[str, Any],
@@ -1089,6 +1119,16 @@ def handle_function_call(
                     error_message=block_message,
                     middleware_trace=list(_tool_middleware_trace),
                 )
+                _record_tool_audit_event(
+                    function_name=function_name,
+                    function_args=function_args,
+                    session_id=session_id,
+                    task_id=task_id,
+                    tool_call_id=tool_call_id,
+                    duration_ms=0,
+                    status="blocked",
+                    error_message=block_message,
+                )
                 return result
 
         # ACP/Zed edit approval removed — acp_adapter deleted in this fork
@@ -1162,6 +1202,7 @@ def handle_function_call(
                 except Exception:
                     pass
         duration_ms = int((time.monotonic() - _dispatch_start) * 1000)
+        status, error_type, error_message = _tool_result_observer_fields(result)
 
         _emit_post_tool_call_hook(
             function_name=function_name,
@@ -1173,7 +1214,20 @@ def handle_function_call(
             turn_id=turn_id,
             api_request_id=api_request_id,
             duration_ms=duration_ms,
+            status=status,
+            error_type=error_type,
+            error_message=error_message,
             middleware_trace=list(_tool_middleware_trace),
+        )
+        _record_tool_audit_event(
+            function_name=function_name,
+            function_args=function_args,
+            session_id=session_id,
+            task_id=task_id,
+            tool_call_id=tool_call_id,
+            duration_ms=duration_ms,
+            status=status,
+            error_message=error_message,
         )
 
         # Generic tool-result canonicalization seam: plugins receive the

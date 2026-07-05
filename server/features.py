@@ -20,6 +20,15 @@ def get_features() -> dict:
     """Return the current feature flags (computer_use, host_terminal)."""
     flags = dict(_DEFAULTS)
     try:
+        from server.deployment_config import load_deployment_config
+
+        deployment_features = load_deployment_config().features
+        for key in _DEFAULTS:
+            if key in deployment_features:
+                flags[key] = bool(deployment_features[key])
+    except Exception:
+        pass
+    try:
         from hermes_cli.config import load_config
 
         cfg = load_config().get("features") or {}

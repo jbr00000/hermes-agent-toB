@@ -1,0 +1,28 @@
+customer_id: example-customer
+
+model:
+  provider: deepseek
+  default: deepseek-v4-pro
+
+database:
+  url_env: HERMES_DB_URL
+  max_rows: 200
+  timeout_seconds: 30
+
+sandbox:
+  backend: docker
+  network_egress: deny
+  allowed_hosts: []
+  cpu_limit: "2"
+  memory_limit: 2g
+  pids_limit: 256
+  timeout_seconds: 300
+
+mcp_servers:
+  - name: internal-metrics
+    url: http://metrics-mcp.internal/sse
+    enabled: false
+
+features:
+  host_terminal: false
+  computer_use: false

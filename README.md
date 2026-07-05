@@ -73,11 +73,13 @@ docker compose up       # 镜像 hermes-agent-tob:dev，挂载 .hermes-dev 为 /
 
 | 文件（都在 `$HERMES_HOME`） | 内容 |
 |---|---|
+| `deployment.yaml` | **交付声明**：客户标识、模型、DB 环境变量名、沙盒策略、MCP server、功能开关 |
 | `.env` | **密钥**：API key、DB URL、沙盒镜像、功能开关 |
 | `config.yaml` | **行为**：model、reasoning_effort、features、terminal |
 | `state.db` | 会话历史（SQLite + FTS5） |
 | `memory.db` | 持久记忆（SQLite） |
 | `users.db` | 用户 |
+| `audit.db` | 审计事件：会话轮次 + 工具调用摘要 |
 | `jwt.key` | JWT 签名密钥 |
 
 功能开关（默认全关，前端可开）：
@@ -87,10 +89,13 @@ features:
   host_terminal: false   # 宿主机 shell（关=只 Docker 沙盒）
 ```
 
+`deployment.yaml.example` 是客户交付配置模板；默认不存在时系统使用安全默认值（Docker 沙盒、禁止网络出口、关闭 host terminal / computer use）。
+
 ## 安全模型
 
 - **沙盒默认**：agent 跑代码只在 Docker，不开 `host_terminal` 就够不到宿主。
 - **DB 只读在 GRANT 层**：db_query + 沙盒共用客户的只读凭证，写操作在数据库被拒。
+- **工具级审计**：headless 会话中的工具调用会记录工具名、参数键、SQL 指纹、耗时和状态，不复制完整 SQL 或 secret 值。
 - **按用户隔离**：会话/记忆/审计按 user_id 隔离（10–50 人共享一个部署，不串）。
 - **无云记忆/无遥测**：记忆本地 SQLite，无外发分析。
 - 详见 [`docs/security/network-egress-isolation.md`](docs/security/network-egress-isolation.md)。
