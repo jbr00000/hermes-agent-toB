@@ -5,7 +5,12 @@ import threading
 from pathlib import Path
 from unittest.mock import patch
 
-from tools.registry import ToolRegistry, _module_registers_tools, discover_builtin_tools
+from tools.registry import (
+    ToolRegistry,
+    _module_registers_tools,
+    _should_skip_builtin_module_in_headless,
+    discover_builtin_tools,
+)
 
 
 def _dummy_handler(args, **kwargs):
@@ -289,7 +294,8 @@ class TestCheckFnExceptionHandling:
 
 
 class TestBuiltinDiscovery:
-    def test_discovers_all_real_self_registering_builtin_tool_modules(self):
+    def test_discovers_all_real_self_registering_builtin_tool_modules(self, monkeypatch):
+        monkeypatch.delenv("HERMES_HEADLESS", raising=False)
         tools_dir = Path(__file__).resolve().parents[2] / "tools"
         expected = [
             f"tools.{path.stem}"
@@ -303,7 +309,8 @@ class TestBuiltinDiscovery:
 
         assert imported == expected
 
-    def test_imports_only_self_registering_modules(self, tmp_path):
+    def test_imports_only_self_registering_modules(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("HERMES_HEADLESS", raising=False)
         tools_dir = tmp_path / "tools"
         tools_dir.mkdir()
         (tools_dir / "__init__.py").write_text("", encoding="utf-8")
@@ -320,7 +327,8 @@ class TestBuiltinDiscovery:
         assert imported == ["tools.alpha"]
         mock_import.assert_called_once_with("tools.alpha")
 
-    def test_skips_mcp_tool_even_if_it_registers(self, tmp_path):
+    def test_skips_mcp_tool_even_if_it_registers(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("HERMES_HEADLESS", raising=False)
         tools_dir = tmp_path / "tools"
         tools_dir.mkdir()
         (tools_dir / "__init__.py").write_text("", encoding="utf-8")
@@ -338,6 +346,41 @@ class TestBuiltinDiscovery:
 
         assert imported == ["tools.alpha"]
         mock_import.assert_called_once_with("tools.alpha")
+
+    def test_headless_skips_legacy_platform_modules_but_keeps_media_and_browser(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("HERMES_HEADLESS", "1")
+        tools_dir = tmp_path / "tools"
+        tools_dir.mkdir()
+        (tools_dir / "__init__.py").write_text("", encoding="utf-8")
+        (tools_dir / "registry.py").write_text("", encoding="utf-8")
+        for name in [
+            "browser_tool",
+            "discord_tool",
+            "image_generation_tool",
+            "tts_tool",
+            "video_generation_tool",
+            "vision_tools",
+        ]:
+            (tools_dir / f"{name}.py").write_text(
+                "from tools.registry import registry\n"
+                "registry.register(name='x', toolset='x', schema={}, handler=lambda *_a, **_k: '{}')\n",
+                encoding="utf-8",
+            )
+
+        with patch("tools.registry.importlib.import_module"):
+            imported = discover_builtin_tools(tools_dir)
+
+        assert not _should_skip_builtin_module_in_headless("browser_tool")
+        assert _should_skip_builtin_module_in_headless("discord_tool")
+        assert imported == [
+            "tools.browser_tool",
+            "tools.image_generation_tool",
+            "tools.tts_tool",
+            "tools.video_generation_tool",
+            "tools.vision_tools",
+        ]
 
 
 class TestEmojiMetadata:

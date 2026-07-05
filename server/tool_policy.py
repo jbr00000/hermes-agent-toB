@@ -12,9 +12,9 @@ def resolve_toolsets(*, mode: str | None, features: Mapping[str, object] | None)
     """
     normalized_mode = (mode or "execute").strip().lower()
     if normalized_mode == "plan":
-        return ["db"]
+        return ["db", "session_search"]
 
-    enabled = ["db", "terminal"]
+    enabled = ["db", "session_search", "terminal"]
     feature_flags = features or {}
     if bool(feature_flags.get("computer_use")):
         enabled.append("computer_use")

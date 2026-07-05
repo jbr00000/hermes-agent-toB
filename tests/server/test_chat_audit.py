@@ -64,6 +64,7 @@ def test_chat_records_runtime_audit_and_session_metadata(monkeypatch, tmp_path) 
     assert json.loads(session["model_config"]) == {
         "enabled_toolsets": ["db", "terminal"],
         "mode": "execute",
+        "plan_state": "execute",
         "provider": "custom",
         "reasoning_config": {"enabled": False},
     }

@@ -10,6 +10,10 @@ FROM docker.m.daocloud.io/library/python:3.12-slim
 
 WORKDIR /app
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends docker.io ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install the project via the Aliyun mirror. Headless server deps are declared
 # in pyproject.toml so local installs and Docker builds stay aligned.
 COPY . /app
@@ -21,7 +25,10 @@ RUN pip install --no-cache-dir \
 # HERMES_HOME holds per-customer state and is provided by a volume.
 # Bind 0.0.0.0 so the published port (-p) reaches uvicorn from the host.
 ENV HERMES_HOME=/data
+ENV HERMES_HEADLESS=1
 ENV HERMES_SERVER_HOST=0.0.0.0
+ENV TERMINAL_ENV=docker
+ENV TERMINAL_DOCKER_NETWORK=false
 VOLUME ["/data"]
 
 EXPOSE 8000

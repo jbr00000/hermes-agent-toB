@@ -1,13 +1,13 @@
-"""Feature flags — toggle elevated capabilities (computer_use, host terminal).
+"""Feature flags for elevated headless-server capabilities.
 
-Both default OFF (least privilege): the agent runs in the Docker sandbox only
-and has no desktop-control capability. The frontend will expose these as opt-in
-buttons (with a warning) — a user flips one on only when they explicitly want
-that power. This is the toggle layer for decision 5's "no host access by
-default, opt-in elevated capabilities."
+Both default off. The normal production path is Docker sandbox execution and
+no desktop-control capability.
 
-Read from config.yaml ``features:`` section, with ``HERMES_FEATURE_*`` env
-override (env wins when set).
+Host terminal is intentionally stricter than a normal feature flag. A to-B
+deployment must not be able to flip the agent into host shell execution from
+deployment.yaml/config.yaml/env alone; that would grant the agent host server
+privileges. It requires an explicit break-glass process env,
+``HERMES_ALLOW_HOST_TERMINAL=1``, and otherwise resolves to false.
 """
 from __future__ import annotations
 
@@ -16,8 +16,17 @@ import os
 _DEFAULTS = {"computer_use": False, "host_terminal": False}
 
 
+def _truthy(value: str | None) -> bool:
+    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _host_terminal_break_glass_enabled() -> bool:
+    """Return true only when an operator explicitly permits host shell access."""
+    return _truthy(os.environ.get("HERMES_ALLOW_HOST_TERMINAL"))
+
+
 def get_features() -> dict:
-    """Return the current feature flags (computer_use, host_terminal)."""
+    """Return the current feature flags."""
     flags = dict(_DEFAULTS)
     try:
         from server.deployment_config import load_deployment_config
@@ -37,19 +46,18 @@ def get_features() -> dict:
                 flags[key] = bool(cfg[key])
     except Exception:
         pass
-    # Env override (precedence when set).
+
     for key in _DEFAULTS:
         env_val = os.environ.get(f"HERMES_FEATURE_{key.upper()}")
         if env_val is not None and env_val.strip():
-            flags[key] = env_val.strip().lower() in ("1", "true", "yes", "on")
+            flags[key] = _truthy(env_val)
+
+    if flags.get("host_terminal") and not _host_terminal_break_glass_enabled():
+        flags["host_terminal"] = False
     return flags
 
 
 def apply_terminal_backend() -> None:
-    """Force TERMINAL_ENV from the host_terminal flag, before the agent runs.
-
-    host_terminal=True  -> 'local' (agent may run shell on the HOST/server).
-    host_terminal=False -> 'docker' (sandbox only — the to-B default).
-    """
+    """Force TERMINAL_ENV from the resolved host_terminal flag."""
     flags = get_features()
     os.environ["TERMINAL_ENV"] = "local" if flags.get("host_terminal") else "docker"

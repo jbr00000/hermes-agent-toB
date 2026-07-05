@@ -32,9 +32,15 @@ def _distribution_name(requirement: str) -> str:
     return spec.strip().lower()
 
 
-def _packages_find_include():
+def _packages_find_config():
     data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    return data["tool"]["setuptools"]["packages"]["find"]["include"]
+    config = data["tool"]["setuptools"]["packages"]["find"]
+    return config["include"], config.get("exclude", [])
+
+
+def _exclude_package_data_plugins():
+    data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    return set(data["tool"]["setuptools"]["exclude-package-data"]["plugins"])
 
 
 def test_every_on_disk_subpackage_is_covered_by_packages_find():
@@ -54,10 +60,10 @@ def test_every_on_disk_subpackage_is_covered_by_packages_find():
     any listed package without the matching wildcard fails here instead of in a
     user's container.
     """
-    include = _packages_find_include()
+    include, exclude = _packages_find_config()
 
     # What the real include list actually selects.
-    selected = set(find_packages(where=str(REPO_ROOT), include=include))
+    selected = set(find_packages(where=str(REPO_ROOT), include=include, exclude=exclude))
 
     # Top-level packages we ship (bare names in the include list, no wildcard).
     top_level = sorted({name for name in include if "." not in name})
@@ -68,6 +74,7 @@ def test_every_on_disk_subpackage_is_covered_by_packages_find():
         find_packages(
             where=str(REPO_ROOT),
             include=[pattern for name in top_level for pattern in (name, f"{name}.*")],
+            exclude=exclude,
         )
     )
 
@@ -77,6 +84,51 @@ def test_every_on_disk_subpackage_is_covered_by_packages_find():
         "[tool.setuptools.packages.find] include is missing a wildcard. Add the "
         f"matching '<name>.*' entry in pyproject.toml: {missing}"
     )
+
+
+def test_headless_distribution_excludes_legacy_platform_plugins():
+    include, exclude = _packages_find_config()
+    selected = set(find_packages(where=str(REPO_ROOT), include=include, exclude=exclude))
+    excluded_plugin_data = _exclude_package_data_plugins()
+    dockerignore = (REPO_ROOT / ".dockerignore").read_text(encoding="utf-8")
+
+    for plugin_dir in ["plugins/browser", "plugins/image_gen", "plugins/video_gen"]:
+        assert (REPO_ROOT / plugin_dir).is_dir()
+        assert list((REPO_ROOT / plugin_dir).rglob("plugin.yaml"))
+        assert f"{plugin_dir}/" not in dockerignore
+    for tool_file in [
+        "tools/browser_tool.py",
+        "tools/image_generation_tool.py",
+        "tools/transcription_tools.py",
+        "tools/tts_tool.py",
+        "tools/video_generation_tool.py",
+        "tools/vision_tools.py",
+        "tools/xai_video_tools.py",
+    ]:
+        assert tool_file not in dockerignore
+    for tool_file in [
+        "tools/computer_use_tool.py",
+        "tools/discord_tool.py",
+        "tools/feishu_doc_tool.py",
+        "tools/feishu_drive_tool.py",
+        "tools/homeassistant_tool.py",
+        "tools/project_tools.py",
+        "tools/send_message_tool.py",
+        "tools/yuanbao_tools.py",
+    ]:
+        assert tool_file in dockerignore
+    assert "plugins.platforms" not in selected
+    assert not any(package.startswith("plugins.platforms.") for package in selected)
+    assert "plugins.spotify" not in selected
+    assert "plugins.google_meet" not in selected
+    assert "plugins.teams_pipeline" not in selected
+    assert {
+        "google_meet/**",
+        "memory/**",
+        "platforms/**",
+        "spotify/**",
+        "teams_pipeline/**",
+    }.issubset(excluded_plugin_data)
 
 
 def test_packaging_declared_as_core_dependency():
@@ -110,11 +162,11 @@ def test_faster_whisper_is_not_a_base_dependency():
     assert any(dep.startswith("faster-whisper") for dep in voice_extra)
 
 
-def test_manifest_includes_bundled_skills():
+def test_manifest_includes_bundled_skills_only():
     manifest = (REPO_ROOT / "MANIFEST.in").read_text(encoding="utf-8")
 
     assert "graft skills" in manifest
-    assert "graft optional-skills" in manifest
+    assert "graft optional-skills" not in manifest
 
 
 def test_bundled_plugin_manifests_ship_in_both_wheel_and_sdist():

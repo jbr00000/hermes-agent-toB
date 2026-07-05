@@ -1,17 +1,49 @@
-# Hermes headless server (to-B fork) — local/dev compose. See docs/改造计划.md Step 3.6.
-# Per-customer state lives in ./.hermes-dev (config.yaml, .env with API keys,
-# users.db, sessions, business.db) and is mounted as HERMES_HOME=/data.
+# Hermes headless server (to-B fork) local/dev compose.
+#
+# The server never mounts the host Docker socket. Tool/code execution uses a
+# dedicated Docker-in-Docker sidecar over the internal compose network, so the
+# sandbox daemon can be replaced/isolated per customer deployment.
 services:
+  sandbox-docker:
+    image: docker:27-dind
+    container_name: hermes-sandbox-docker
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    command:
+      - --host=tcp://0.0.0.0:2375
+      - --tls=false
+    volumes:
+      - sandbox-docker-data:/var/lib/docker
+    networks:
+      - hermes-internal
+    restart: unless-stopped
+
   hermes-server:
     build: .
     image: hermes-agent-tob:dev
     container_name: hermes-server
+    depends_on:
+      - sandbox-docker
     ports:
       - "8000:8000"
     volumes:
       - ./.hermes-dev:/data
     environment:
-      - HERMES_SERVER_PORT=8000
+      HERMES_SERVER_PORT: "8000"
+      HERMES_HEADLESS: "1"
+      TERMINAL_ENV: docker
+      TERMINAL_DOCKER_NETWORK: "false"
+      DOCKER_HOST: tcp://sandbox-docker:2375
       # HERMES_ADMIN_PASSWORD, HERMES_DB_URL, DEEPSEEK_API_KEY, etc. come
       # from /data/.env (loaded by the server).
+    networks:
+      - hermes-internal
     restart: unless-stopped
+
+networks:
+  hermes-internal:
+    driver: bridge
+
+volumes:
+  sandbox-docker-data:

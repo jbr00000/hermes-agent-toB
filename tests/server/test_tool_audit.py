@@ -33,6 +33,7 @@ def test_handle_function_call_records_tool_audit(monkeypatch, tmp_path) -> None:
                 "stage3_audit_probe",
                 {"sql": "SELECT * FROM private_table", "secret": "should-not-be-logged"},
                 session_id="s1",
+                user_id="u1",
                 task_id="task-1",
                 tool_call_id="call-1",
             )
@@ -46,6 +47,7 @@ def test_handle_function_call_records_tool_audit(monkeypatch, tmp_path) -> None:
     assert len(events) == 1
     event = events[0]
     assert event["event_type"] == "tool_call"
+    assert event["user_id"] == "u1"
     assert event["status"] == "completed"
     assert event["metadata"]["tool_name"] == "stage3_audit_probe"
     assert event["metadata"]["tool_call_id"] == "call-1"

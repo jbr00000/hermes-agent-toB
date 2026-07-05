@@ -82,6 +82,5 @@ setup(
     },
     data_files=[
         *_data_file_tree("skills"),
-        *_data_file_tree("optional-skills"),
     ]
 )

@@ -46,7 +46,7 @@ features:
     assert captured["provider"] == "custom"
     assert captured["model"] == "llama-3.3"
     assert captured["reasoning_config"] == {"enabled": True, "effort": "low"}
-    assert captured["enabled_toolsets"] == ["db", "terminal", "computer_use"]
+    assert captured["enabled_toolsets"] == ["db", "session_search", "terminal", "computer_use"]
 
 
 def test_build_agent_plan_mode_removes_terminal_toolset(monkeypatch, tmp_path) -> None:
@@ -74,6 +74,43 @@ features:
 
     build_agent(session_id="s1", user_id="u1", mode="plan")
 
-    assert captured["enabled_toolsets"] == ["db"]
+    assert captured["enabled_toolsets"] == ["db", "session_search"]
     assert "PLAN mode" in captured["ephemeral_system_prompt"]
     assert "remember this" in captured["ephemeral_system_prompt"]
+
+
+def test_build_agent_adds_enabled_deployment_mcp_toolsets(monkeypatch, tmp_path) -> None:
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    (home / "deployment.yaml").write_text(
+        """
+mcp_servers:
+  - name: metrics
+    url: http://metrics.example/sse
+    enabled: true
+  - name: disabled-one
+    url: http://disabled.example/sse
+    enabled: false
+""",
+        encoding="utf-8",
+    )
+    captured = {}
+
+    class CapturingAgent:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setitem(sys.modules, "run_agent", SimpleNamespace(AIAgent=CapturingAgent))
+    import server.memory as memory
+    import server.mcp as mcp
+
+    registered = []
+    monkeypatch.setattr(memory, "list_memory_contents", lambda _user_id: [])
+    monkeypatch.setattr(mcp, "register_deployment_mcp_servers", lambda: registered.append(True) or [])
+
+    build_agent(session_id="s1", user_id="u1", mode="execute")
+
+    assert registered == [True]
+    assert "mcp-metrics" in captured["enabled_toolsets"]
+    assert "mcp-disabled-one" not in captured["enabled_toolsets"]

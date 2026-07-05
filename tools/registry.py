@@ -18,6 +18,7 @@ import ast
 import importlib
 import json
 import logging
+import os
 import sys
 import threading
 import time
@@ -25,6 +26,34 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
+
+_TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
+
+# Product/headless server pruning. These modules remain in source for old CLI
+# compatibility and tests, but they should not be auto-registered in the B-side
+# server runtime. Browser automation and voice/image/video tools are intentionally
+# not listed here.
+_HEADLESS_SKIP_TOOL_MODULES = {
+    "computer_use_tool",
+    "discord_tool",
+    "feishu_doc_tool",
+    "feishu_drive_tool",
+    "homeassistant_tool",
+    "project_tools",
+    "send_message_tool",
+    "skill_manager_tool",
+    "skills_tool",
+    "yuanbao_tools",
+}
+
+
+def _headless_tool_pruning_enabled() -> bool:
+    return os.environ.get("HERMES_HEADLESS", "").strip().lower() in _TRUTHY_ENV_VALUES
+
+
+def _should_skip_builtin_module_in_headless(module_stem: str) -> bool:
+    """Return True for legacy modules hidden from the headless product runtime."""
+    return _headless_tool_pruning_enabled() and module_stem in _HEADLESS_SKIP_TOOL_MODULES
 
 
 def _is_registry_register_call(node: ast.AST) -> bool:
@@ -62,6 +91,7 @@ def discover_builtin_tools(tools_dir: Optional[Path] = None) -> List[str]:
         f"tools.{path.stem}"
         for path in sorted(tools_path.glob("*.py"))
         if path.name not in {"__init__.py", "registry.py", "mcp_tool.py"}
+        and not _should_skip_builtin_module_in_headless(path.stem)
         and _module_registers_tools(path)
     ]
 

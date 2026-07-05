@@ -34,3 +34,23 @@ def resume_session(session_id: str, user: dict = Depends(get_current_user)):
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     return {"session_id": session_id, "resumable": True}
+
+
+@router.get("/{session_id}/mode")
+def get_mode(session_id: str, user: dict = Depends(get_current_user)):
+    return {"mode": sess.get_session_mode(user["id"], session_id)}
+
+
+@router.post("/{session_id}/plan")
+def start_plan(session_id: str, user: dict = Depends(get_current_user)):
+    return {"mode": sess.start_plan_mode(user["id"], session_id)}
+
+
+@router.post("/{session_id}/approve")
+def approve_plan(session_id: str, user: dict = Depends(get_current_user)):
+    return {"mode": sess.approve_plan(user["id"], session_id)}
+
+
+@router.post("/{session_id}/execute")
+def execute_plan(session_id: str, user: dict = Depends(get_current_user)):
+    return {"mode": sess.enter_execute_mode(user["id"], session_id)}

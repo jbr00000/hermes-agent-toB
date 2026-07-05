@@ -906,6 +906,7 @@ def _record_tool_audit_event(
     function_name: str,
     function_args: Dict[str, Any],
     session_id: Optional[str],
+    user_id: Optional[str],
     task_id: Optional[str],
     tool_call_id: Optional[str],
     duration_ms: int,
@@ -921,6 +922,7 @@ def _record_tool_audit_event(
             tool_name=function_name,
             args=function_args,
             session_id=session_id,
+            user_id=user_id,
             status=status,
             duration_ms=duration_ms,
             task_id=task_id,
@@ -937,6 +939,7 @@ def handle_function_call(
     task_id: Optional[str] = None,
     tool_call_id: Optional[str] = None,
     session_id: Optional[str] = None,
+    user_id: Optional[str] = None,
     turn_id: Optional[str] = None,
     api_request_id: Optional[str] = None,
     user_task: Optional[str] = None,
@@ -1043,6 +1046,7 @@ def handle_function_call(
                 task_id=task_id,
                 tool_call_id=tool_call_id,
                 session_id=session_id,
+                user_id=user_id,
                 user_task=user_task,
                 enabled_tools=enabled_tools,
                 skip_pre_tool_call_hook=skip_pre_tool_call_hook,
@@ -1123,6 +1127,7 @@ def handle_function_call(
                     function_name=function_name,
                     function_args=function_args,
                     session_id=session_id,
+                    user_id=user_id,
                     task_id=task_id,
                     tool_call_id=tool_call_id,
                     duration_ms=0,
@@ -1172,6 +1177,7 @@ def handle_function_call(
                         function_name, next_args,
                         task_id=task_id,
                         session_id=session_id,
+                        user_id=user_id,
                         enabled_tools=sandbox_enabled,
                     )
             else:
@@ -1180,6 +1186,7 @@ def handle_function_call(
                         function_name, next_args,
                         task_id=task_id,
                         session_id=session_id,
+                        user_id=user_id,
                         user_task=user_task,
                     )
             from hermes_cli.middleware import run_tool_execution_middleware
@@ -1223,6 +1230,7 @@ def handle_function_call(
             function_name=function_name,
             function_args=function_args,
             session_id=session_id,
+            user_id=user_id,
             task_id=task_id,
             tool_call_id=tool_call_id,
             duration_ms=duration_ms,

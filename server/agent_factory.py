@@ -1,6 +1,8 @@
 """Build AIAgent instances for the headless server."""
 from __future__ import annotations
 
+import os
+
 
 def build_agent(
     *,
@@ -30,16 +32,22 @@ def build_agent(
         prefill_messages: prior turns (OpenAI format) for session resume.
         mode: "plan" | "execute" | None.
     """
+    os.environ.setdefault("HERMES_HEADLESS", "1")
+
     from run_agent import AIAgent
     from server.memory import list_memory_contents
     from server.features import get_features
+    from server.mcp import enabled_mcp_toolsets, register_deployment_mcp_servers
     from server.runtime_config import load_runtime_config
     from server.tool_policy import resolve_toolsets
 
     is_plan = mode == "plan"
     features = get_features()
     runtime_config = load_runtime_config()
-    toolsets = resolve_toolsets(mode=mode, features=features)
+    mcp_toolsets = enabled_mcp_toolsets()
+    if mcp_toolsets:
+        register_deployment_mcp_servers()
+    toolsets = resolve_toolsets(mode=mode, features=features) + mcp_toolsets
 
     # Build an ephemeral system-prompt section combining persistent memory
     # (per-user, loaded fresh each request) and the plan-mode instruction.

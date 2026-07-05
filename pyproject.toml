@@ -83,7 +83,7 @@ dependencies = [
   # it out of the lazy-install path that exists only for the heavy matrix deps.
   "Markdown==3.10.2",
   # Skills Hub (GitHub App JWT auth — optional, only needed for bot identity)
-  "PyJWT[crypto]==2.13.0",  # PYSEC-2026-175/177/178/179
+  "PyJWT==2.13.0",  # PYSEC-2026-175/177/178/179
   # urllib3 2.7.0 fixes GHSA-mf9v-mfxr-j63j (decompression-bomb bypass)
   # and GHSA-qccp-gfcp-xxvc (header leak across origins).
   "urllib3>=2.7.0,<3",
@@ -261,9 +261,7 @@ google = [
   "google-auth-httplib2==0.3.1",
 ]
 youtube = [
-  # Required by skills/media/youtube-content and
-  # optional-skills/productivity/memento-flashcards (youtube_quiz.py).
-  # Without this declaration uv sync omits the package and both skills fail
+  # Required by skills/media/youtube-content. Without this declaration uv sync omits the package and the skill fails
   # at first invocation with ModuleNotFoundError (issue #22243).
   "youtube-transcript-api==1.2.4",
 ]
@@ -307,6 +305,7 @@ all = [
 [project.scripts]
 hermes = "hermes_cli.main:main"
 hermes-agent = "run_agent:main"
+hermes-server = "server.__main__:main"
 
 [tool.setuptools]
 py-modules = ["run_agent", "model_tools", "toolsets", "cli", "hermes_bootstrap", "hermes_constants", "hermes_state", "hermes_time", "hermes_logging", "utils"]
@@ -322,24 +321,43 @@ locales = ["locales/*.yaml"]
 
 [tool.setuptools.package-data]
 hermes_cli = ["scripts/install.sh", "scripts/install.ps1"]
-gateway = ["assets/**/*"]
 plugins = [
   "*/dashboard/manifest.json",
   "*/dashboard/dist/*",
   "*/dashboard/dist/**/*",
-  # Plugin discovery (hermes_cli/plugins.py) reads a plugin.yaml/plugin.yml
-  # manifest from each bundled plugin directory to register it. Wheels only
-  # carry files declared here, so without this glob the wheel ships every
-  # plugin's Python code but none of its manifests — the scan finds zero
-  # plugins and all gateway platforms fail with "No adapter available for
-  # <platform>" (#34034), web-search providers go missing (#28149), etc.
+  # Plugin discovery reads plugin.yaml/plugin.yml manifests. Wheels only carry
+  # files declared here; legacy platform bundles are filtered below by
+  # exclude-package-data and packages.find.exclude.
   "**/plugin.yaml",
   "**/plugin.yml",
   "**/README.md",
 ]
 
+[tool.setuptools.exclude-package-data]
+plugins = [
+  "google_meet/**",
+  "memory/**",
+  "platforms/**",
+  "spotify/**",
+  "teams_pipeline/**",
+]
+
 [tool.setuptools.packages.find]
-include = ["agent", "agent.*", "tools", "tools.*", "hermes_cli", "hermes_cli.*", "gateway", "gateway.*", "cron", "cron.*", "plugins", "plugins.*", "providers", "providers.*"]
+include = ["agent", "agent.*", "tools", "tools.*", "server", "server.*", "hermes_cli", "hermes_cli.*", "cron", "cron.*", "plugins", "plugins.*", "providers", "providers.*"]
+exclude = [
+  # Legacy consumer/platform plugin bundles stay in source for old CLI tests,
+  # but are not part of the headless B-side server distribution.
+  "plugins.google_meet",
+  "plugins.google_meet.*",
+  "plugins.memory",
+  "plugins.memory.*",
+  "plugins.platforms",
+  "plugins.platforms.*",
+  "plugins.spotify",
+  "plugins.spotify.*",
+  "plugins.teams_pipeline",
+  "plugins.teams_pipeline.*",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -375,5 +393,4 @@ select = ["PLW1514"]
 "tests/**" = ["PLW1514"]
 # Skills and plugins are partially user-authored — their own conventions.
 "skills/**" = ["PLW1514"]
-"optional-skills/**" = ["PLW1514"]
 "plugins/**" = ["PLW1514"]

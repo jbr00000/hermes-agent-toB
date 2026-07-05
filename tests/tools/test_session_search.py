@@ -149,6 +149,18 @@ class TestBrowseShape:
         titles = [r.get("title") for r in result["results"]]
         assert any("Modpack" in (t or "") for t in titles)
 
+    def test_browse_filters_by_user_id_when_scoped(self, db):
+        db.create_session("u1_s", source="headless", user_id="u1")
+        db.append_message("u1_s", role="user", content="u1 private topic")
+        db.create_session("u2_s", source="headless", user_id="u2")
+        db.append_message("u2_s", role="user", content="u2 private topic")
+
+        result = json.loads(session_search(db=db, user_id="u1"))
+
+        sids = [r["session_id"] for r in result["results"]]
+        assert "u1_s" in sids
+        assert "u2_s" not in sids
+
 
 # =========================================================================
 # Discovery shape (with query)
@@ -253,6 +265,17 @@ class TestDiscoveryShape:
         result = json.loads(session_search(query="modpack", db=db, current_session_id="s_newest"))
         sids = [r["session_id"] for r in result["results"]]
         assert "s_newest" not in sids
+
+    def test_discovery_filters_by_user_id_when_scoped(self, db):
+        db.create_session("u1_s", source="headless", user_id="u1")
+        db.append_message("u1_s", role="user", content="shared needle belongs to u1")
+        db.create_session("u2_s", source="headless", user_id="u2")
+        db.append_message("u2_s", role="user", content="shared needle belongs to u2")
+
+        result = json.loads(session_search(query="shared needle", db=db, user_id="u1"))
+
+        sids = [r["session_id"] for r in result["results"]]
+        assert sids == ["u1_s"]
 
 
 class TestDiscoverySort:
@@ -397,6 +420,20 @@ class TestScrollShape:
         ))
         assert result["success"] is False
 
+    def test_scroll_rejects_other_user_session_when_scoped(self, db):
+        db.create_session("u2_s", source="headless", user_id="u2")
+        mid = db.append_message("u2_s", role="user", content="private")
+
+        result = json.loads(session_search(
+            session_id="u2_s",
+            around_message_id=mid,
+            db=db,
+            user_id="u1",
+        ))
+
+        assert result["success"] is False
+        assert "not found" in result.get("error", "")
+
 
 class TestScrollPattern:
     """The forward/backward scroll loop using tool output."""
@@ -487,6 +524,25 @@ class TestReadShape:
         assert result["message_count"] == 50
         assert result["truncated"] is True
         assert len(result["messages"]) == 30  # head 20 + tail 10
+
+    def test_read_rejects_other_user_session_when_scoped(self, db):
+        db.create_session("u2_s", source="headless", user_id="u2")
+        db.append_message("u2_s", role="user", content="private")
+
+        result = json.loads(session_search(session_id="u2_s", db=db, user_id="u1"))
+
+        assert result["success"] is False
+        assert "not found" in result.get("error", "")
+
+    def test_cross_profile_disabled_when_scoped(self, db):
+        result = json.loads(session_search(
+            session_id="other/s1",
+            db=db,
+            user_id="u1",
+        ))
+
+        assert result["success"] is False
+        assert "cross-profile" in result.get("error", "")
 
 
 # =========================================================================

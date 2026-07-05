@@ -103,6 +103,26 @@ def _resolve_to_parent(db, session_id: str) -> str:
     return cur
 
 
+def _session_visible_to_user(db, session_id: str, user_id: str = None) -> bool:
+    """Return true when a session belongs to user_id, or no user scope is set."""
+    if not user_id:
+        return True
+    try:
+        meta = db.get_session(session_id) or {}
+    except Exception:
+        return False
+    return meta.get("user_id") == user_id
+
+
+def _session_row_visible_to_user(db, row: Dict[str, Any], user_id: str = None) -> bool:
+    if not user_id:
+        return True
+    if row.get("user_id") is not None:
+        return row.get("user_id") == user_id
+    sid = row.get("id") or row.get("session_id")
+    return bool(sid and _session_visible_to_user(db, sid, user_id))
+
+
 def _order_for_recall(raw_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Stable-sort FTS rows so interactive sessions rank above automation.
 
@@ -208,7 +228,13 @@ def _locate_session_db(session_id: str):
     return None, None
 
 
-def _read_session(db, session_id: str, head: int = 20, tail: int = 10) -> str:
+def _read_session(
+    db,
+    session_id: str,
+    head: int = 20,
+    tail: int = 10,
+    user_id: str = None,
+) -> str:
     """Read shape: dump a whole session by id (head + tail when large).
 
     Serves the linked-session case — the user dropped an @session reference and
@@ -222,6 +248,8 @@ def _read_session(db, session_id: str, head: int = 20, tail: int = 10) -> str:
         logging.debug("get_session failed for %s: %s", session_id, e, exc_info=True)
         meta = {}
     if not meta:
+        return tool_error(f"session_id not found: {session_id}", success=False)
+    if user_id and meta.get("user_id") != user_id:
         return tool_error(f"session_id not found: {session_id}", success=False)
 
     try:
@@ -257,7 +285,12 @@ def _read_session(db, session_id: str, head: int = 20, tail: int = 10) -> str:
     return json.dumps(response, ensure_ascii=False)
 
 
-def _list_recent_sessions(db, limit: int, current_session_id: str = None) -> str:
+def _list_recent_sessions(
+    db,
+    limit: int,
+    current_session_id: str = None,
+    user_id: str = None,
+) -> str:
     """Return metadata for the most recent sessions (no LLM calls, no FTS5)."""
     try:
         sessions = db.list_sessions_rich(
@@ -270,6 +303,8 @@ def _list_recent_sessions(db, limit: int, current_session_id: str = None) -> str
 
         results = []
         for s in sessions:
+            if not _session_row_visible_to_user(db, s, user_id):
+                continue
             sid = s.get("id", "")
             if current_root and (sid == current_root or sid == current_session_id):
                 continue
@@ -306,6 +341,7 @@ def _scroll(
     around_message_id: int,
     window: int = 5,
     current_session_id: str = None,
+    user_id: str = None,
 ) -> str:
     """Scroll shape: return a window of messages centered on an anchor.
 
@@ -348,6 +384,8 @@ def _scroll(
         logging.debug("get_session failed for %s: %s", session_id, e, exc_info=True)
         session_meta = {}
     if not session_meta:
+        return tool_error(f"session_id not found: {session_id}", success=False)
+    if user_id and session_meta.get("user_id") != user_id:
         return tool_error(f"session_id not found: {session_id}", success=False)
 
     # Fetch the window
@@ -393,6 +431,8 @@ def _scroll(
                             session_meta = db.get_session(owning) or session_meta
                         except Exception:
                             pass
+                        if user_id and session_meta.get("user_id") != user_id:
+                            return tool_error(f"session_id not found: {owning}", success=False)
                         session_id = owning
                 except Exception as e:
                     logging.debug("rebind get_messages_around failed: %s", e, exc_info=True)
@@ -433,6 +473,7 @@ def _title_match_result(
     db,
     query: str,
     current_lineage_root: Optional[str],
+    user_id: str = None,
 ) -> Optional[Dict[str, Any]]:
     """Return a discovery-shaped result when the query matches a session title."""
     title_query = _normalize_title_query(query)
@@ -456,6 +497,8 @@ def _title_match_result(
     except Exception:
         logging.debug("get_session failed for title match %s", session_id, exc_info=True)
         session_meta = {}
+    if user_id and session_meta.get("user_id") != user_id:
+        return None
     if session_meta.get("source") in _HIDDEN_SESSION_SOURCES:
         return None
 
@@ -503,11 +546,12 @@ def _discover(
     limit: int,
     sort: Optional[str],
     current_session_id: str = None,
+    user_id: str = None,
 ) -> str:
     """Discovery shape: FTS5 + anchored window + bookends per hit. Single call."""
     role_list = role_filter if role_filter else ["user", "assistant"]
     current_lineage_root = _resolve_to_parent(db, current_session_id) if current_session_id else None
-    title_result = _title_match_result(db, query, current_lineage_root)
+    title_result = _title_match_result(db, query, current_lineage_root, user_id=user_id)
 
     try:
         raw_results = db.search_messages(
@@ -557,6 +601,8 @@ def _discover(
             break
         raw_sid = r["session_id"]
         resolved_sid = _resolve_to_parent(db, raw_sid)
+        if not _session_visible_to_user(db, resolved_sid, user_id):
+            continue
         # Skip the current session lineage
         if current_lineage_root and resolved_sid == current_lineage_root:
             continue
@@ -584,6 +630,8 @@ def _discover(
             session_meta = db.get_session(lineage_root) or {}
         except Exception:
             session_meta = {}
+        if user_id and session_meta.get("user_id") != user_id:
+            continue
 
         entry = {
             "session_id": hit_sid,
@@ -630,6 +678,8 @@ def session_search(
     sort: str = None,
     # Cross-profile (any shape)
     profile: str = None,
+    # Headless server scope
+    user_id: str = None,
 ) -> str:
     """Single-shape tool. Mode inferred from which args are set.
 
@@ -663,6 +713,12 @@ def session_search(
             if emb_profile and (profile is None or not str(profile).strip()):
                 profile = emb_profile
 
+    if user_id and profile is not None and str(profile).strip():
+        return tool_error(
+            "cross-profile session_search is disabled for user-scoped sessions",
+            success=False,
+        )
+
     # Cross-profile read: swap in the named profile's DB (read-only) for every
     # shape below. The current-session-lineage guards no longer apply across
     # profiles, but they key off ids that won't collide, so they stay inert.
@@ -683,13 +739,16 @@ def session_search(
             around_message_id=around_message_id,
             window=window,
             current_session_id=current_session_id,
+            user_id=user_id,
         )
 
     # Read shape: a session_id with no anchor → dump the whole session.
     if isinstance(session_id, str) and session_id.strip():
         sid = session_id.strip()
-        result = _read_session(db, sid)
+        result = _read_session(db, sid, user_id=user_id)
         if json.loads(result).get("success"):
+            return result
+        if user_id:
             return result
 
         # Miss in the target profile — the model may have dropped the owning
@@ -716,7 +775,7 @@ def session_search(
 
     # Browse shape: no query → recent sessions.
     if not query or not isinstance(query, str) or not query.strip():
-        return _list_recent_sessions(db, limit, current_session_id)
+        return _list_recent_sessions(db, limit, current_session_id, user_id=user_id)
 
     # Parse role_filter
     role_list: Optional[List[str]] = None
@@ -737,6 +796,7 @@ def session_search(
         limit=limit,
         sort=sort_norm,
         current_session_id=current_session_id,
+        user_id=user_id,
     )
 
 
@@ -915,6 +975,7 @@ registry.register(
         profile=args.get("profile"),
         db=kw.get("db"),
         current_session_id=kw.get("current_session_id"),
+        user_id=kw.get("user_id"),
     ),
     check_fn=check_session_search_requirements,
     emoji="🔍",
