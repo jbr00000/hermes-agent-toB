@@ -65,6 +65,11 @@ environments/benchmarks/evals/
 
 # Web UI build output
 hermes_cli/web_dist/
+apps/web/dist/
+apps/web/*.tsbuildinfo
+apps/web/vite-dev*.log
+apps/web/vite.config.js
+apps/web/vite.config.d.ts
 apps/desktop/build/
 apps/desktop/dist/
 apps/desktop/release/
