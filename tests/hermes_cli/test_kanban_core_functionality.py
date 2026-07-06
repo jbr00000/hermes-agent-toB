@@ -3606,6 +3606,7 @@ def test_cli_daemon_help_marks_deprecated():
 # Gateway embedded dispatcher watcher
 # ---------------------------------------------------------------------------
 
+@pytest.mark.skip(reason="gateway dispatcher watcher removed with the messaging gateway")
 def test_gateway_dispatcher_watcher_respects_config_flag_off(monkeypatch):
     """dispatch_in_gateway=false -> watcher exits fast, no loop."""
     import asyncio
@@ -3627,6 +3628,7 @@ def test_gateway_dispatcher_watcher_respects_config_flag_off(monkeypatch):
     )
 
 
+@pytest.mark.skip(reason="gateway dispatcher watcher removed with the messaging gateway")
 def test_gateway_dispatcher_watcher_respects_env_override(monkeypatch):
     """HERMES_KANBAN_DISPATCH_IN_GATEWAY=0 disables without touching config."""
     import asyncio
@@ -3643,6 +3645,7 @@ def test_gateway_dispatcher_watcher_respects_env_override(monkeypatch):
     )
 
 
+@pytest.mark.skip(reason="gateway dispatcher watcher removed with the messaging gateway")
 def test_gateway_dispatcher_watcher_env_truthy_uses_config(monkeypatch):
     """Truthy env value doesn't force-enable — config still decides.
     (We only treat explicit falses as an override; unset or truthy
@@ -3670,6 +3673,7 @@ def test_gateway_dispatcher_watcher_env_truthy_uses_config(monkeypatch):
 
 
 @pytest.mark.parametrize("corrupt_exc", ["sqlite", "guard"])
+@pytest.mark.skip(reason="gateway dispatcher watcher removed with the messaging gateway")
 def test_gateway_dispatcher_disables_corrupt_board_without_traceback(
     monkeypatch, tmp_path, caplog, corrupt_exc
 ):
@@ -3763,6 +3767,7 @@ def test_gateway_dispatcher_disables_corrupt_board_without_traceback(
     assert calls["connect"] == 5
 
 
+@pytest.mark.skip(reason="gateway dispatcher watcher removed with the messaging gateway")
 def test_gateway_dispatcher_retries_corrupt_board_after_quarantine(
     monkeypatch, tmp_path, caplog
 ):

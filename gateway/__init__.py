@@ -1,12 +1,8 @@
-"""
-Hermes Gateway - Multi-platform messaging integration.
+"""Shared gateway primitives retained by the to-B fork.
 
-This module provides a unified gateway for connecting the Hermes agent
-to various messaging platforms (Telegram, Discord, WhatsApp, Weixin, and more) with:
-- Session management (persistent conversations with reset policies)
-- Dynamic context injection (agent knows where messages come from)
-- Delivery routing (cron job outputs to appropriate channels)
-- Platform-specific toolsets (different capabilities per platform)
+Concrete messaging platform adapters and the long-running gateway runner have
+been removed.  Cron delivery, session metadata, status helpers, and cache/path
+utilities still reuse these lightweight models.
 """
 
 from .config import GatewayConfig, PlatformConfig, HomeChannel, load_gateway_config

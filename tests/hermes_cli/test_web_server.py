@@ -267,6 +267,7 @@ class TestWebServerEndpoints:
         assert "active_sessions" in data
         assert data["can_update_hermes"] is True
 
+    @pytest.mark.skip(reason="gateway drain endpoint removed with the messaging gateway")
     def test_gateway_drain_begin_writes_marker(self):
         from gateway import drain_control
 
@@ -279,6 +280,7 @@ class TestWebServerEndpoints:
         # cleanup
         drain_control.clear_drain_request()
 
+    @pytest.mark.skip(reason="gateway drain endpoint removed with the messaging gateway")
     def test_gateway_drain_defaults_to_begin(self):
         from gateway import drain_control
 
@@ -288,6 +290,7 @@ class TestWebServerEndpoints:
         assert drain_control.drain_requested() is True
         drain_control.clear_drain_request()
 
+    @pytest.mark.skip(reason="gateway drain endpoint removed with the messaging gateway")
     def test_gateway_drain_suppress_notification_passthrough(self):
         from gateway import drain_control
 
@@ -304,6 +307,7 @@ class TestWebServerEndpoints:
         assert drain_control.drain_notification_suppressed() is True
         drain_control.clear_drain_request()
 
+    @pytest.mark.skip(reason="gateway drain endpoint removed with the messaging gateway")
     def test_gateway_drain_suppress_defaults_false(self):
         from gateway import drain_control
 
@@ -313,6 +317,7 @@ class TestWebServerEndpoints:
         assert drain_control.drain_notification_suppressed() is False
         drain_control.clear_drain_request()
 
+    @pytest.mark.skip(reason="gateway drain endpoint removed with the messaging gateway")
     def test_gateway_drain_cancel_removes_marker(self):
         from gateway import drain_control
 
@@ -324,6 +329,7 @@ class TestWebServerEndpoints:
         assert data["was_draining"] is True
         assert drain_control.drain_requested() is False
 
+    @pytest.mark.skip(reason="gateway drain endpoint removed with the messaging gateway")
     def test_gateway_drain_cancel_idempotent(self):
         from gateway import drain_control
 
@@ -332,6 +338,7 @@ class TestWebServerEndpoints:
         assert resp.json()["was_draining"] is False
         assert drain_control.drain_requested() is False
 
+    @pytest.mark.skip(reason="gateway drain endpoint removed with the messaging gateway")
     def test_gateway_drain_bad_action_400(self):
         resp = self.client.post("/api/gateway/drain", json={"action": "explode"})
         assert resp.status_code == 400

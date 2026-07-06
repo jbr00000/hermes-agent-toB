@@ -11519,6 +11519,8 @@ def cmd_dashboard_register(args):
 
 
 def cmd_gateway_enroll(args):
+    print("hermes gateway enroll has been removed in this to-B fork.")
+    return
     """Enroll a self-hosted gateway with a relay connector."""
     from hermes_cli.gateway_enroll import cmd_gateway_enroll as _impl
 

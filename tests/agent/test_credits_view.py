@@ -9,8 +9,6 @@ the view-core tests plus manual verification).
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
 import agent.account_usage as account_usage
@@ -149,6 +147,7 @@ def _make_gateway_stub():
     return _Stub()
 
 
+@pytest.mark.skip(reason="messaging gateway handler removed in the to-B fork")
 def test_gateway_credits_renders_block_and_url(monkeypatch):
     view = CreditsView(
         logged_in=True,
@@ -171,6 +170,7 @@ def test_gateway_credits_renders_block_and_url(monkeypatch):
     assert "📈 Nous credits" not in out
 
 
+@pytest.mark.skip(reason="messaging gateway handler removed in the to-B fork")
 def test_gateway_credits_not_logged_in(monkeypatch):
     monkeypatch.setattr(
         account_usage, "build_credits_view", lambda *a, **kw: CreditsView(logged_in=False)
@@ -180,6 +180,7 @@ def test_gateway_credits_not_logged_in(monkeypatch):
     assert "Not logged into Nous Portal" in out
 
 
+@pytest.mark.skip(reason="messaging gateway handler removed in the to-B fork")
 def test_gateway_credits_fetch_exception_is_not_logged_in(monkeypatch):
     def _boom(*a, **kw):
         raise RuntimeError("boom")

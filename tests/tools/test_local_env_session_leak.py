@@ -27,7 +27,7 @@ import os
 
 import pytest
 
-import gateway.session_context as sc
+import agent.session_context as sc
 from agent.session_context import _VAR_MAP, clear_session_vars, set_session_vars
 from tools.environments.local import _make_run_env, _sanitize_subprocess_env, hermes_subprocess_env
 

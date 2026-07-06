@@ -15653,10 +15653,7 @@ def main(
     
     # Handle gateway mode (messaging + cron)
     if gateway:
-        import asyncio
-        from gateway.run import start_gateway
-        print("Starting Hermes Gateway (messaging platforms)...")
-        asyncio.run(start_gateway())
+        print("Hermes gateway (messaging platforms) has been removed in this to-B fork.")
         return
 
     # Skip worktree for list commands (they exit immediately)

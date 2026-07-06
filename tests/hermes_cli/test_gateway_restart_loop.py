@@ -488,6 +488,7 @@ class TestCreateJobBlocksLifecycleCommands:
 # Defense 3: auto-resume restart-loop breaker
 # ---------------------------------------------------------------------------
 
+@pytest.mark.skip(reason="gateway restart loop guard removed with the messaging gateway")
 class TestRestartLoopGuard:
     """gateway.restart_loop_guard trips after >= max_restarts
     restart-interrupted boots inside window_seconds, breaking a

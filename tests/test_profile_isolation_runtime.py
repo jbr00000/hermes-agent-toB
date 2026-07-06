@@ -129,6 +129,7 @@ class TestGatewayCacheDirResolution:
         assert seen == forced
 
 
+@pytest.mark.skip(reason="gateway rich sent store removed in the to-B fork")
 class TestRichSentStorePathResolution:
     """gateway/rich_sent_store.py must honor the override, not read os.environ."""
 

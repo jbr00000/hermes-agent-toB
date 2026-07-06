@@ -5433,6 +5433,8 @@ def _is_service_running() -> bool:
 
 def _setup_weixin():
     """Interactive setup for Weixin / WeChat personal accounts."""
+    print_warning("  Weixin gateway setup has been removed in this to-B fork.")
+    return
     print()
     print(color("  ─── 💬 Weixin / WeChat Setup ───", Colors.CYAN))
     print()
@@ -5454,7 +5456,7 @@ def _setup_weixin():
             return
 
     try:
-        from gateway.platforms.weixin import check_weixin_requirements, qr_login
+        raise RuntimeError("Weixin gateway setup has been removed in this to-B fork")
     except Exception as exc:
         print_error(f"  Weixin adapter import failed: {exc}")
         print_info("  Install gateway dependencies first, then retry.")
@@ -5603,6 +5605,8 @@ def _setup_weixin():
 
 
 def _setup_qqbot():
+    print_warning("  QQ Bot gateway setup has been removed in this to-B fork.")
+    return
     """Interactive setup for QQ Bot — scan-to-configure or manual credentials."""
     print()
     print(color("  ─── 🐧 QQ Bot Setup ───", Colors.CYAN))
@@ -5630,7 +5634,7 @@ def _setup_qqbot():
     if method_idx == 0:
         # ── QR scan-to-configure ──
         try:
-            from gateway.platforms.qqbot import qr_register
+            raise RuntimeError("QQ Bot gateway setup has been removed in this to-B fork")
 
             credentials = qr_register()
         except KeyboardInterrupt:

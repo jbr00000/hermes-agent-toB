@@ -143,7 +143,6 @@ agent/                  provider adapters, memory, caching, compression, curator
 tools/                  tool implementations, auto-discovered via tools/registry.py
 tools/environments/     terminal backends: local, docker, ssh, modal, daytona, singularity
 gateway/run.py + session.py + platforms/   messaging gateway (20 platform adapters)
-gateway/platforms/ADDING_A_PLATFORM.md     how to add a platform adapter
 cron/                   jobs.py (store) + scheduler.py (tick loop)
 acp_adapter/            ACP server (VS Code / Zed / JetBrains)
 ui-tui/ + tui_gateway/  Ink (React) TUI front-end + Python JSON-RPC backend
