@@ -106,6 +106,8 @@ features:
 | [`改造计划.md`](docs/改造计划.md) | 需求 + 9 个架构决策 + 改造记录 |
 | [`项目架构详解.md`](docs/项目架构详解.md) | 每个模块的作用 + 数据流 |
 | [`API文档.md`](docs/API文档.md) | 前端对接的 API 接口（含 SSE 格式） |
+| [`B端前端设计方案.md`](docs/B端前端设计方案.md) | to-B Web 工作台前端设计方向（参考 Proma，非 Electron） |
+| [`B端后续开发计划.md`](docs/B端后续开发计划.md) | 去 gateway 后的企业服务层建设路线（不复活消息平台） |
 | [`CLAUDE.md`](CLAUDE.md) | 给 AI 助手的项目导览 |
 | [`AGENTS.md`](AGENTS.md) | 开发指南 + 硬性约束 + 编码规范 |
 | [`UPSTREAM.md`](UPSTREAM.md) | 硬分叉基线记录 |
