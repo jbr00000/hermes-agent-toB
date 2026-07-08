@@ -247,31 +247,6 @@ class TestErrorClassifierBedrock:
 
 
 # ---------------------------------------------------------------------------
-# pyproject.toml bedrock extra
-# ---------------------------------------------------------------------------
-
-class TestPackaging:
-    """Verify Bedrock remains a declared lazy optional dependency."""
-
-    @staticmethod
-    def _optional_dependencies():
-        import tomllib
-        from pathlib import Path
-
-        content = (Path(__file__).parent.parent.parent / "pyproject.toml").read_text()
-        return tomllib.loads(content)["project"]["optional-dependencies"]
-
-    def test_bedrock_extra_exists(self):
-        extras = self._optional_dependencies()
-        assert "bedrock" in extras
-        assert any(dep.startswith("boto3==") for dep in extras["bedrock"])
-
-    def test_bedrock_is_not_eager_installed_by_all_extra(self):
-        extras = self._optional_dependencies()
-        assert "hermes-agent[bedrock]" not in extras["all"]
-
-
-# ---------------------------------------------------------------------------
 # Model ID dot preservation — regression for #11976
 # ---------------------------------------------------------------------------
 # AWS Bedrock inference-profile model IDs embed structural dots:

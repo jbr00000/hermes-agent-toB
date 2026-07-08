@@ -9307,6 +9307,20 @@ def _cmd_update_impl(args, gateway_mode: bool):
             sys.exit(1)
 
 
+def cmd_update(args):
+    """Handle ``hermes update`` parser dispatch."""
+    gateway_mode = bool(getattr(args, "gateway", False))
+    output_state = _install_hangup_protection(gateway_mode)
+    try:
+        if getattr(args, "check", False):
+            branch = _resolve_update_branch(args)
+            branch_explicit = bool(getattr(args, "branch", None))
+            return _cmd_update_check(branch, branch_explicit=branch_explicit)
+        return _cmd_update_impl(args, gateway_mode)
+    finally:
+        _finalize_update_output(output_state)
+
+
 def _coalesce_session_name_args(argv: list) -> list:
     """Join unquoted multi-word session names after -c/--continue and -r/--resume.
 
