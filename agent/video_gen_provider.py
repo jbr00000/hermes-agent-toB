@@ -20,7 +20,7 @@ One tool — ``video_generate`` — covers **text-to-video** and **image-to-vide
 The router is the presence of ``image_url``: if it's set, the provider routes
 to its image-to-video endpoint; if it's omitted, the provider routes to
 text-to-video. Users pick one **model family** (e.g. Pixverse v6, Veo 3.1,
-Kling O3 Standard); the provider handles which underlying FAL/xAI endpoint
+Kling O3 Standard); the provider handles which underlying FAL/Google endpoint
 to hit.
 
 Video edit and video extend are intentionally NOT exposed in this surface —
@@ -57,7 +57,7 @@ from typing import Any, Dict, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 
-# Common aspect ratios across providers (Veo / Kling / xAI / Pixverse). The
+# Common aspect ratios across providers (Veo / Kling / Pixverse). The
 # tool schema advertises this set as an enum hint, but providers may accept
 # a narrower or wider set — they are responsible for clamping.
 COMMON_ASPECT_RATIOS: Tuple[str, ...] = ("16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3")
@@ -84,7 +84,7 @@ class VideoGenProvider(abc.ABC):
     def name(self) -> str:
         """Stable short identifier used in ``video_gen.provider`` config.
 
-        Lowercase, no spaces. Examples: ``xai``, ``fal``, ``google``.
+        Lowercase, no spaces. Examples: ``fal``, ``google``.
         """
 
     @property

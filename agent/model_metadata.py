@@ -65,7 +65,6 @@ _PROVIDER_PREFIXES: frozenset[str] = frozenset({
     "tencent", "tokenhub", "tencent-cloud", "tencentmaas",
     "arcee-ai", "arceeai",
     "gmi-cloud", "gmicloud",
-    "xai", "x-ai", "x.ai", "grok",
     "nvidia", "nim", "nvidia-nim", "nemotron",
     "qwen-portal", "novita-ai", "novitaai",
 })
@@ -278,27 +277,6 @@ DEFAULT_CONTEXT_LENGTHS = {
     # generic 202K fallback.
     "glm-5.2": 1_048_576,
     "glm": 202752,
-    # xAI Grok — xAI /v1/models does not return context_length metadata,
-    # so these hardcoded fallbacks prevent Hermes from probing-down to
-    # the default 128k when the user points at https://api.x.ai/v1
-    # via a custom provider. Values sourced from models.dev (2026-04).
-    # Keys use substring matching (longest-first), so e.g. "grok-4.20"
-    # matches "grok-4.20-0309-reasoning" / "-non-reasoning" / "-multi-agent-0309".
-    # OAuth-only slug; absent from GET /v1/models. xAI publishes a 200k
-    # usable context window for Composer 2.5 on Grok Build (SuperGrok /
-    # Premium+); /v1/responses additionally enforces a ~262144 input+output
-    # budget, but the usable context (what we track here) is 200k.
-    "grok-composer": 200000,    # grok-composer-2.5-fast (Grok Build CLI)
-    "grok-build": 256000,       # grok-build-0.1
-    "grok-code-fast": 256000,   # grok-code-fast-1
-    "grok-2-vision": 8192,      # grok-2-vision, -1212, -latest
-    "grok-4-fast": 2000000,     # grok-4-fast-(non-)reasoning, also matches -reasoning
-    "grok-4.20": 2000000,       # grok-4.20-0309-(non-)reasoning, -multi-agent-0309
-    "grok-4.3": 1000000,        # grok-4.3, grok-4.3-latest — 1M context per docs.x.ai
-    "grok-4": 256000,           # grok-4, grok-4-0709
-    "grok-3": 131072,           # grok-3, grok-3-mini, grok-3-fast, grok-3-mini-fast
-    "grok-2": 131072,           # grok-2, grok-2-1212, grok-2-latest
-    "grok": 131072,             # catch-all (grok-beta, unknown grok-*)
     # Kimi
     "kimi": 262144,
     # Tencent — Hy3 Preview (Hunyuan) with 256K context window.
@@ -327,44 +305,6 @@ DEFAULT_CONTEXT_LENGTHS = {
     "mimo-v2-flash": 262144,
     "zai-org/GLM-5": 202752,
 }
-
-# xAI Grok models that ACCEPT the `reasoning.effort` parameter on
-# api.x.ai. Verified live against /v1/responses 2026-05-10:
-#
-#   ACCEPTS effort:  grok-3-mini, grok-3-mini-fast, grok-4.20-multi-agent-0309,
-#                    grok-4.3
-#   REJECTS effort:  grok-3, grok-4, grok-4-0709, grok-4-fast-(non-)reasoning,
-#                    grok-4-1-fast-(non-)reasoning, grok-4.20-0309-(non-)reasoning,
-#                    grok-code-fast-1
-#
-# REJECTS-side models still reason natively — they just don't expose an
-# effort dial — so callers should send no `reasoning` key at all rather
-# than a default `medium` (which 400s with "Model X does not support
-# parameter reasoningEffort").
-_GROK_EFFORT_CAPABLE_PREFIXES = (
-    "grok-3-mini",
-    "grok-4.20-multi-agent",
-    "grok-4.3",
-)
-
-
-def grok_supports_reasoning_effort(model: str) -> bool:
-    """Return True when an xAI Grok model accepts ``reasoning.effort``.
-
-    Allowlist by substring (matches both bare ``grok-3-mini`` and
-    aggregator-prefixed ``x-ai/grok-3-mini``). Conservative by design:
-    if a future Grok model isn't listed, we send no effort dial rather
-    than 400.
-    """
-    name = (model or "").strip().lower()
-    if not name:
-        return False
-    # Strip common aggregator prefixes (x-ai/, openrouter/x-ai/, xai/, ...)
-    for sep in ("/",):
-        if sep in name:
-            name = name.rsplit(sep, 1)[-1]
-    return any(name.startswith(prefix) for prefix in _GROK_EFFORT_CAPABLE_PREFIXES)
-
 
 _CONTEXT_LENGTH_KEYS = (
     "context_length",
@@ -451,7 +391,6 @@ _URL_TO_PROVIDER: Dict[str, str] = {
     "models.inference.ai.azure.com": "copilot",
     "api.fireworks.ai": "fireworks",
     "opencode.ai": "opencode-go",
-    "api.x.ai": "xai",
     "integrate.api.nvidia.com": "nvidia",
     "api.xiaomimimo.com": "xiaomi",
     "xiaomimimo.com": "xiaomi",
@@ -1511,18 +1450,6 @@ def _model_name_suggests_minimax_m3(model: str) -> bool:
     return "minimax-m3" in model.lower()
 
 
-def _model_name_suggests_grok_4_3(model: str) -> bool:
-    """Return True if the model name looks like a Grok 4.3 variant.
-
-    Catches ``grok-4.3``, ``grok-4.3-latest``, and similar slugs.
-    Used as a guard against stale cache entries seeded by pre-catalog builds
-    that resolved grok-4.3 via the generic ``grok-4`` catch-all (256,000)
-    before the ``grok-4.3`` (1M) entry was added to DEFAULT_CONTEXT_LENGTHS
-    on 2026-05-15.
-    """
-    return "grok-4.3" in model.lower()
-
-
 def _query_local_context_length(model: str, base_url: str, api_key: str = "") -> Optional[int]:
     """Query a local server for the model's context length (short-TTL cached).
 
@@ -2006,19 +1933,6 @@ def get_model_context_length(
             elif cached <= 204_800 and _model_name_suggests_minimax_m3(model):
                 logger.info(
                     "Dropping stale MiniMax-M3 cache entry %s@%s -> %s (pre-catalog value); "
-                    "re-resolving via hardcoded defaults",
-                    model, base_url, f"{cached:,}",
-                )
-                _invalidate_cached_context_length(model, base_url)
-            # Invalidate stale ≤256,000 cache entries for Grok-4.3.  The
-            # ``grok-4.3`` (1M) entry was added to DEFAULT_CONTEXT_LENGTHS on
-            # 2026-05-15; prior to that, grok-4.3 slugs resolved via the
-            # ``grok-4`` catch-all (256,000) and that value was persisted.
-            # grok-4.3 is 1M, so any sub-262K cached value is a pre-catalog
-            # leftover — drop it and fall through to the hardcoded default.
-            elif cached <= 256_000 and _model_name_suggests_grok_4_3(model):
-                logger.info(
-                    "Dropping stale Grok-4.3 cache entry %s@%s -> %s (pre-catalog value); "
                     "re-resolving via hardcoded defaults",
                     model, base_url, f"{cached:,}",
                 )

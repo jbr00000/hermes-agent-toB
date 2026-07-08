@@ -84,8 +84,7 @@ VIDEO_GENERATE_SCHEMA: Dict[str, Any] = {
                     "Optional public HTTPS URL of a still image. When provided, "
                     "the active backend routes to its image-to-video "
                     "endpoint (animate the image); when omitted, it routes "
-                    "to text-to-video. For xAI chaining, use the `image` or "
-                    "`public_url` HTTPS URL from a prior Imagine result."
+                    "to text-to-video."
                 ),
             },
             "reference_image_urls": {
@@ -93,8 +92,7 @@ VIDEO_GENERATE_SCHEMA: Dict[str, Any] = {
                 "items": {"type": "string"},
                 "description": (
                     "Optional list of public HTTPS reference image URLs "
-                    "(style or character refs). For xAI chaining, use "
-                    "`image` or `public_url` from prior Imagine results."
+                    "(style or character refs)."
                 ),
             },
             "duration": {
@@ -258,7 +256,7 @@ def _missing_provider_error(configured: Optional[str]) -> str:
         ))
     msg = (
         "No video generation backend is configured. Run `hermes tools` → "
-        "Video Generation to enable one (xAI, FAL, or Google Veo)."
+        "Video Generation to enable one (FAL or Google Veo)."
     )
     return json.dumps(error_response(
         error=msg, error_type="no_provider_configured",
@@ -548,22 +546,6 @@ def _build_dynamic_video_schema() -> Dict[str, Any]:
     max_refs = caps.get("max_reference_images") or 0
     if max_refs:
         parts.append(f"- reference_image_urls: up to {max_refs} images")
-    if configured == "xai":
-        parts.append(
-            "- chaining: for edit/extend pass the public HTTPS MP4 in `video` "
-            "or `public_url` from the prior Imagine result (files-cdn). For "
-            "image-to-video / reference-to-video pass public image URLs the "
-            "same way"
-        )
-        try:
-            from tools.xai_http import xai_storage_notice_text
-
-            notice = xai_storage_notice_text("video_gen")
-        except Exception:
-            notice = ""
-        if notice:
-            parts.append(f"- storage: {notice}")
-
     return {"description": "\n".join(parts)}
 
 

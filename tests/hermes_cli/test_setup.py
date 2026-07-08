@@ -141,97 +141,13 @@ def test_setup_custom_providers_synced(tmp_path, monkeypatch):
     assert reloaded.get("custom_providers") == [{"name": "Local", "base_url": "http://localhost:8080/v1"}]
 
 
-def test_setup_gateway_skips_service_install_when_systemctl_missing(monkeypatch, capsys):
-    env = {
-        "TELEGRAM_BOT_TOKEN": "",
-        "TELEGRAM_HOME_CHANNEL": "",
-        "DISCORD_BOT_TOKEN": "",
-        "DISCORD_HOME_CHANNEL": "",
-        "SLACK_BOT_TOKEN": "",
-        "SLACK_HOME_CHANNEL": "",
-        "MATRIX_HOMESERVER": "https://matrix.example.com",
-        "MATRIX_USER_ID": "@alice:example.com",
-        "MATRIX_PASSWORD": "",
-        "MATRIX_ACCESS_TOKEN": "token",
-        "BLUEBUBBLES_SERVER_URL": "",
-        "BLUEBUBBLES_HOME_CHANNEL": "",
-        "WHATSAPP_ENABLED": "",
-        "WEBHOOK_ENABLED": "",
-    }
-
-    import hermes_cli.gateway as gateway_mod
-
-    monkeypatch.setattr(setup_mod, "get_env_value", lambda key: env.get(key, ""))
-    monkeypatch.setattr(gateway_mod, "get_env_value", lambda key: env.get(key, ""))
-    monkeypatch.setattr(setup_mod, "prompt_yes_no", lambda *args, **kwargs: False)
-    # Keep the checklist pre-selection (so matrix stays "configured" and the
-    # post-config service guidance runs), but stub the migrated plugins'
-    # interactive_setup so their wizards don't read real stdin. #41112.
-    monkeypatch.setattr(setup_mod, "prompt_checklist", lambda _q, _items, pre=(), **k: list(pre))
-    import hermes_cli.gateway as _gw_mod
-    monkeypatch.setattr(_gw_mod, "_configure_platform", lambda *a, **k: None)
-    monkeypatch.setattr("platform.system", lambda: "Linux")
-
-    monkeypatch.setattr(gateway_mod, "supports_systemd_services", lambda: False)
-    monkeypatch.setattr(gateway_mod, "is_macos", lambda: False)
-    monkeypatch.setattr(gateway_mod, "_is_service_installed", lambda: False)
-    monkeypatch.setattr(gateway_mod, "_is_service_running", lambda: False)
-
+def test_setup_gateway_reports_removed_in_tob_build(capsys):
     setup_mod.setup_gateway({})
 
     out = capsys.readouterr().out
-    assert "Messaging platforms configured!" in out
-    assert "Start the gateway to bring your bots online:" in out
-    assert "hermes gateway" in out
-
-
-def test_setup_gateway_in_container_shows_docker_guidance(monkeypatch, capsys):
-    """setup_gateway() in a Docker container shows Docker-specific restart instructions."""
-    env = {
-        "TELEGRAM_BOT_TOKEN": "",
-        "TELEGRAM_HOME_CHANNEL": "",
-        "DISCORD_BOT_TOKEN": "",
-        "DISCORD_HOME_CHANNEL": "",
-        "SLACK_BOT_TOKEN": "",
-        "SLACK_HOME_CHANNEL": "",
-        "MATRIX_HOMESERVER": "https://matrix.example.com",
-        "MATRIX_USER_ID": "@alice:example.com",
-        "MATRIX_PASSWORD": "",
-        "MATRIX_ACCESS_TOKEN": "token",
-        "BLUEBUBBLES_SERVER_URL": "",
-        "BLUEBUBBLES_HOME_CHANNEL": "",
-        "WHATSAPP_ENABLED": "",
-        "WEBHOOK_ENABLED": "",
-    }
-
-    import hermes_cli.gateway as gateway_mod
-
-    monkeypatch.setattr(setup_mod, "get_env_value", lambda key: env.get(key, ""))
-    monkeypatch.setattr(gateway_mod, "get_env_value", lambda key: env.get(key, ""))
-    monkeypatch.setattr(setup_mod, "prompt_yes_no", lambda *args, **kwargs: False)
-    # Keep the checklist pre-selection (so matrix stays "configured" and the
-    # post-config service guidance runs), but stub the migrated plugins'
-    # interactive_setup so their wizards don't read real stdin. #41112.
-    monkeypatch.setattr(setup_mod, "prompt_checklist", lambda _q, _items, pre=(), **k: list(pre))
-    import hermes_cli.gateway as _gw_mod
-    monkeypatch.setattr(_gw_mod, "_configure_platform", lambda *a, **k: None)
-    monkeypatch.setattr("platform.system", lambda: "Linux")
-
-    monkeypatch.setattr(gateway_mod, "supports_systemd_services", lambda: False)
-    monkeypatch.setattr(gateway_mod, "is_macos", lambda: False)
-    monkeypatch.setattr(gateway_mod, "_is_service_installed", lambda: False)
-    monkeypatch.setattr(gateway_mod, "_is_service_running", lambda: False)
-
-    # Patch is_container at the import location in setup.py
-    import hermes_constants
-    monkeypatch.setattr(hermes_constants, "is_container", lambda: True)
-
-    setup_mod.setup_gateway({})
-
-    out = capsys.readouterr().out
-    assert "Messaging platforms configured!" in out
-    assert "docker" in out.lower() or "Docker" in out
-    assert "restart" in out.lower()
+    assert "Messaging Platforms" in out
+    assert "Messaging gateway integrations are removed in this to-B build." in out
+    assert "enterprise API/front-end integration layer" in out
 
 
 def test_setup_syncs_custom_provider_removal_from_disk(tmp_path, monkeypatch):

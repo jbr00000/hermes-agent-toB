@@ -143,7 +143,6 @@ def show_status(args):
         "Anthropic": ("ANTHROPIC_API_KEY", "ANTHROPIC_TOKEN"),
         "Google / Gemini": ("GOOGLE_API_KEY", "GEMINI_API_KEY"),
         "DeepSeek": "DEEPSEEK_API_KEY",
-        "xAI / Grok": "XAI_API_KEY",
         "NVIDIA NIM": "NVIDIA_API_KEY",
         "Z.AI / GLM": "GLM_API_KEY",
         "Kimi": "KIMI_API_KEY",
@@ -304,26 +303,6 @@ def show_status(args):
     if minimax_status.get("error") and not minimax_logged_in:
         print(f"    Error:      {minimax_status.get('error')}")
 
-    # xAI OAuth — separate try/except so an import failure here cannot
-    # disrupt the already-printed Nous/Codex/Qwen/MiniMax rows above.
-    try:
-        from hermes_cli.auth import get_xai_oauth_auth_status
-        xai_oauth_status = get_xai_oauth_auth_status() or {}
-    except Exception:
-        xai_oauth_status = {}
-
-    xai_oauth_logged_in = bool(xai_oauth_status.get("logged_in"))
-    print(
-        f"  {'xAI OAuth':<12}  {check_mark(xai_oauth_logged_in)} "
-        f"{'logged in' if xai_oauth_logged_in else 'not logged in (run: hermes auth add xai-oauth)'}"
-    )
-    xai_auth_file = xai_oauth_status.get("auth_store")
-    if xai_auth_file:
-        print(f"    Auth file:  {xai_auth_file}")
-    if xai_oauth_status.get("last_refresh"):
-        print(f"    Refreshed:  {_format_iso_timestamp(xai_oauth_status.get('last_refresh'))}")
-    if xai_oauth_status.get("error") and not xai_oauth_logged_in:
-        print(f"    Error:      {xai_oauth_status.get('error')}")
 
     # =========================================================================
     # Nous Subscription Features
@@ -434,88 +413,15 @@ def show_status(args):
     # =========================================================================
     print()
     print(color("◆ Messaging Platforms", Colors.CYAN, Colors.BOLD))
-
-    platforms = {
-        "Telegram": ("TELEGRAM_BOT_TOKEN", "TELEGRAM_HOME_CHANNEL"),
-        "Discord": ("DISCORD_BOT_TOKEN", "DISCORD_HOME_CHANNEL"),
-        "WhatsApp": ("WHATSAPP_ENABLED", None),
-        "Signal": ("SIGNAL_HTTP_URL", "SIGNAL_HOME_CHANNEL"),
-        "Slack": ("SLACK_BOT_TOKEN", None),
-        "Email": ("EMAIL_ADDRESS", "EMAIL_HOME_ADDRESS"),
-        "SMS": ("TWILIO_ACCOUNT_SID", "SMS_HOME_CHANNEL"),
-        "DingTalk": ("DINGTALK_CLIENT_ID", None),
-        "Feishu": ("FEISHU_APP_ID", "FEISHU_HOME_CHANNEL"),
-        "WeCom": ("WECOM_BOT_ID", "WECOM_HOME_CHANNEL"),
-        "WeCom Callback": ("WECOM_CALLBACK_CORP_ID", None),
-        "Weixin": ("WEIXIN_ACCOUNT_ID", "WEIXIN_HOME_CHANNEL"),
-        "BlueBubbles": ("BLUEBUBBLES_SERVER_URL", "BLUEBUBBLES_HOME_CHANNEL"),
-        "QQBot": ("QQ_APP_ID", "QQ_HOME_CHANNEL"),
-        "Yuanbao": ("YUANBAO_APP_ID", "YUANBAO_HOME_CHANNEL"),
-    }
-
-    for name, (token_var, home_var) in platforms.items():
-        token = os.getenv(token_var, "")
-        has_token = bool(token)
-        
-        home_channel = ""
-        if home_var:
-            home_channel = os.getenv(home_var, "")
-        # Back-compat: QQBot home channel was renamed from QQ_HOME_CHANNEL to QQBOT_HOME_CHANNEL
-        if not home_channel and home_var == "QQBOT_HOME_CHANNEL":
-            home_channel = os.getenv("QQ_HOME_CHANNEL", "")
-        
-        status = "configured" if has_token else "not configured"
-        if home_channel:
-            status += f" (home: {home_channel})"
-        
-        print(f"  {name:<12}  {check_mark(has_token)} {status}")
-
-    # Plugin-registered platforms
-    try:
-        from gateway.platform_registry import platform_registry
-        for entry in platform_registry.plugin_entries():
-            configured = entry.check_fn()
-            status_str = "configured" if configured else "not configured"
-            label = entry.label
-            print(f"  {label:<12}  {check_mark(configured)} {status_str} (plugin)")
-    except Exception:
-        pass
-
+    print(f"  Status:       {color('removed in to-B build', Colors.DIM)}")
+    print("  Replacement:  enterprise API/front-end access layer")
     # =========================================================================
     # Gateway Status
     # =========================================================================
     print()
     print(color("◆ Gateway Service", Colors.CYAN, Colors.BOLD))
-
-    try:
-        from hermes_cli.gateway import get_gateway_runtime_snapshot, _format_gateway_pids
-
-        snapshot = get_gateway_runtime_snapshot()
-        is_running = snapshot.running
-        print(f"  Status:       {check_mark(is_running)} {'running' if is_running else 'stopped'}")
-        print(f"  Manager:      {snapshot.manager}")
-        if snapshot.gateway_pids:
-            print(f"  PID(s):       {_format_gateway_pids(snapshot.gateway_pids)}")
-        if snapshot.has_process_service_mismatch:
-            print("  Service:      installed but not managing the current running gateway")
-        elif _is_termux() and not snapshot.gateway_pids:
-            print("  Start with:   hermes gateway")
-            print("  Note:         Android may stop background jobs when Termux is suspended")
-        elif snapshot.service_installed and not snapshot.service_running:
-            print("  Service:      installed but stopped")
-    except Exception:
-        if _is_termux():
-            print(f"  Status:       {color('unknown', Colors.DIM)}")
-            print("  Manager:      Termux / manual process")
-        elif sys.platform.startswith('linux'):
-            print(f"  Status:       {color('unknown', Colors.DIM)}")
-            print("  Manager:      systemd/manual")
-        elif sys.platform == 'darwin':
-            print(f"  Status:       {color('unknown', Colors.DIM)}")
-            print("  Manager:      launchd")
-        else:
-            print(f"  Status:       {color('N/A', Colors.DIM)}")
-            print("  Manager:      (not supported on this platform)")
+    print(f"  Status:       {color('removed in to-B build', Colors.DIM)}")
+    print("  Manager:      API/front-end orchestration replaces messaging gateway")
 
     # =========================================================================
     # Cron Jobs

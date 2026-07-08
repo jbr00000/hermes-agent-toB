@@ -185,7 +185,8 @@ class TestCreateProfile:
             for line in content.splitlines()
         )
         mode = stat.S_IMODE(env_path.stat().st_mode)
-        assert mode == 0o600
+        if os.name != "nt":
+            assert mode == 0o600
 
     def test_seeded_env_does_not_clobber_cloned_env(self, profile_env):
         tmp_path = profile_env
@@ -211,17 +212,17 @@ class TestCreateProfile:
         tmp_path = profile_env
         default_home = tmp_path / ".hermes"
         # Create source config files in default profile
-        (default_home / "config.yaml").write_text("model: test")
-        (default_home / ".env").write_text("KEY=val")
-        (default_home / "SOUL.md").write_text("Be helpful.")
+        (default_home / "config.yaml").write_text("model: test", encoding="utf-8")
+        (default_home / ".env").write_text("KEY=val", encoding="utf-8")
+        (default_home / "SOUL.md").write_text("Be helpful.", encoding="utf-8")
 
         profile_dir = create_profile("coder", clone_config=True, no_alias=True)
 
-        cloned_config = yaml.safe_load((profile_dir / "config.yaml").read_text())
+        cloned_config = yaml.safe_load((profile_dir / "config.yaml").read_text(encoding="utf-8"))
         assert cloned_config["_config_version"] == DEFAULT_CONFIG["_config_version"]
         assert cloned_config["model"] == "test"
-        assert (profile_dir / ".env").read_text().strip() == "KEY=val"
-        assert (profile_dir / "SOUL.md").read_text() == "Be helpful."
+        assert (profile_dir / ".env").read_text(encoding="utf-8").strip() == "KEY=val"
+        assert (profile_dir / "SOUL.md").read_text(encoding="utf-8") == "Be helpful."
 
     def test_clone_config_migrates_legacy_config_version(self, profile_env):
         tmp_path = profile_env
@@ -232,7 +233,7 @@ class TestCreateProfile:
         )
 
         profile_dir = create_profile("coder", clone_config=True, no_alias=True)
-        cloned_config = yaml.safe_load((profile_dir / "config.yaml").read_text())
+        cloned_config = yaml.safe_load((profile_dir / "config.yaml").read_text(encoding="utf-8"))
 
         assert cloned_config["_config_version"] == DEFAULT_CONFIG["_config_version"]
         assert cloned_config["model"]["provider"] == "openrouter"
@@ -525,7 +526,8 @@ class TestBackfillProfileEnvs:
         assert sorted(backfilled) == ["old1", "old2"]
         for p in (p1, p2):
             assert (p / ".env").read_text() == "OPENROUTER_API_KEY=root-key\n"
-            assert stat.S_IMODE((p / ".env").stat().st_mode) == 0o600
+            if os.name != "nt":
+                assert stat.S_IMODE((p / ".env").stat().st_mode) == 0o600
 
     def test_never_overwrites_existing_profile_env(self, profile_env):
         tmp_path = profile_env
@@ -597,8 +599,8 @@ class TestDeleteProfile:
 
         with patch("hermes_cli.profiles._cleanup_gateway_service"), \
              patch("hermes_cli.profiles._profile_bound_backend_pids", return_value=[4242]) as pids, \
-             patch("gateway.status.terminate_pid") as terminate, \
-             patch("gateway.status._pid_exists", return_value=False):
+             patch("hermes_core.process_status.terminate_pid") as terminate, \
+             patch("hermes_core.process_status._pid_exists", return_value=False):
             delete_profile("coder", yes=True)
 
         pids.assert_called_once()
@@ -1562,175 +1564,11 @@ class TestEdgeCases:
         assert default.gateway_running is False
         assert default.skill_count == 0
 
-    def test_gateway_running_check_with_pid_file(self, profile_env):
-        """Verify _check_gateway_running uses the shared gateway PID validator."""
+    def test_gateway_running_check_is_removed_in_tob(self, profile_env):
         from hermes_cli.profiles import _check_gateway_running
-        tmp_path = profile_env
-        default_home = tmp_path / ".hermes"
+        default_home = profile_env / ".hermes"
 
-        with patch("gateway.status.get_running_pid", return_value=99999) as mock_get_running_pid:
-            assert _check_gateway_running(default_home) is True
-        mock_get_running_pid.assert_called_once_with(
-            default_home / "gateway.pid",
-            cleanup_stale=False,
-        )
-
-    def test_gateway_running_check_plain_pid(self, profile_env):
-        """Shared PID validator returning None means the profile is not running."""
-        from hermes_cli.profiles import _check_gateway_running
-        tmp_path = profile_env
-        default_home = tmp_path / ".hermes"
-
-        with patch("gateway.status.get_running_pid", return_value=None) as mock_get_running_pid:
-            assert _check_gateway_running(default_home) is False
-        mock_get_running_pid.assert_called_once_with(
-            default_home / "gateway.pid",
-            cleanup_stale=False,
-        )
-
-    def test_gateway_running_check_falls_back_to_runtime_state(self, profile_env):
-        """A live gateway whose PID-file/lock check fails closed (separate-process
-        reader, e.g. the dashboard s6 service in Docker) is still detected via the
-        profile's gateway_state.json validated against the live process table.
-
-        Regression: the Profiles view used to show "Gateway stopped" while the
-        sidebar (which already has this fallback) showed "Gateway running" for the
-        same live gateway. See get_running_pid() short-circuiting on an
-        unheld runtime lock before it inspects the PID record.
-        """
-        import os
-        import gateway.status as gw_status
-        from hermes_cli.profiles import _check_gateway_running
-
-        tmp_path = profile_env
-        default_home = tmp_path / ".hermes"
-        default_home.mkdir(parents=True, exist_ok=True)
-
-        # Write a realistic gateway_state.json pointing at THIS live process with
-        # a gateway-shaped argv, so get_runtime_status_running_pid validates it.
-        live_pid = os.getpid()
-        (default_home / "gateway_state.json").write_text(
-            json.dumps(
-                {
-                    "pid": live_pid,
-                    "kind": "hermes-gateway",
-                    "argv": ["hermes", "gateway", "run"],
-                    "start_time": gw_status._get_process_start_time(live_pid),
-                    "gateway_state": "running",
-                    "active_agents": 0,
-                }
-            ),
-            encoding="utf-8",
-        )
-
-        # Primary pid-file/lock check returns None (no lock held by this reader),
-        # exactly as it does for a separate-process dashboard. The fallback must
-        # then read the state file and confirm the gateway is alive by checking
-        # the recorded PID's live command line. In the real separate-process
-        # scenario that PID belongs to the live gateway, so mock its command
-        # line to a bare ``gateway run`` (this is the default/root home, which
-        # runs the gateway with no profile flag).
-        with patch("gateway.status.get_running_pid", return_value=None), patch(
-            "gateway.status._read_process_cmdline",
-            return_value="hermes gateway run --replace",
-        ):
-            assert _check_gateway_running(default_home) is True
-
-    def test_gateway_running_check_runtime_state_stopped(self, profile_env):
-        """A gateway_state.json with state 'stopped' must NOT be reported running,
-        even when the recorded PID happens to be alive."""
-        import os
-        from hermes_cli.profiles import _check_gateway_running
-
-        tmp_path = profile_env
-        default_home = tmp_path / ".hermes"
-        default_home.mkdir(parents=True, exist_ok=True)
-        (default_home / "gateway_state.json").write_text(
-            json.dumps(
-                {
-                    "pid": os.getpid(),
-                    "kind": "hermes-gateway",
-                    "argv": ["hermes", "gateway", "run"],
-                    "gateway_state": "stopped",
-                }
-            ),
-            encoding="utf-8",
-        )
-
-        with patch("gateway.status.get_running_pid", return_value=None):
-            assert _check_gateway_running(default_home) is False
-
-    def test_gateway_running_check_rejects_pid_reused_by_other_profile(self, profile_env):
-        """Regression (user report): the dashboard showed a NAMED profile's
-        gateway green while ``hermes -p <name> gateway status`` showed it
-        stopped.
-
-        Per-profile Docker supervision: a named profile (``coder``) left a
-        ``gateway_state=running`` record whose PID the OS later recycled onto a
-        DIFFERENT live process (here the default profile's gateway).  The
-        ``_check_gateway_running`` fallback must scope the live PID to *this*
-        profile's command line, so a recycled PID hosting another profile's
-        gateway is not reported running for ``coder``.
-        """
-        from hermes_cli.profiles import _check_gateway_running
-
-        tmp_path = profile_env
-        coder_home = tmp_path / ".hermes" / "profiles" / "coder"
-        coder_home.mkdir(parents=True, exist_ok=True)
-        (coder_home / "gateway_state.json").write_text(
-            json.dumps(
-                {
-                    "pid": 139,
-                    "kind": "hermes-gateway",
-                    "argv": ["hermes", "gateway", "run"],
-                    "gateway_state": "running",
-                    "active_agents": 0,
-                }
-            ),
-            encoding="utf-8",
-        )
-
-        # PID 139 is alive but is the DEFAULT gateway (bare, no -p coder), not
-        # coder's. start_time is absent so the PID-reuse guard cannot catch it;
-        # the profile scope must.
-        with patch("gateway.status.get_running_pid", return_value=None), patch(
-            "gateway.status._pid_exists", return_value=True
-        ), patch("gateway.status._get_process_start_time", return_value=None), patch(
-            "gateway.status._read_process_cmdline",
-            return_value="hermes gateway run --replace",
-        ):
-            assert _check_gateway_running(coder_home) is False
-
-    def test_gateway_running_check_detects_matching_named_profile(self, profile_env):
-        """A genuinely-live named gateway (``-p coder`` on its command line) is
-        still reported running for that profile."""
-        from hermes_cli.profiles import _check_gateway_running
-
-        tmp_path = profile_env
-        coder_home = tmp_path / ".hermes" / "profiles" / "coder"
-        coder_home.mkdir(parents=True, exist_ok=True)
-        (coder_home / "gateway_state.json").write_text(
-            json.dumps(
-                {
-                    "pid": 139,
-                    "kind": "hermes-gateway",
-                    "argv": ["hermes", "gateway", "run"],
-                    "start_time": 1000,
-                    "gateway_state": "running",
-                    "active_agents": 0,
-                }
-            ),
-            encoding="utf-8",
-        )
-
-        with patch("gateway.status.get_running_pid", return_value=None), patch(
-            "gateway.status._pid_exists", return_value=True
-        ), patch("gateway.status._get_process_start_time", return_value=1000), patch(
-            "gateway.status._read_process_cmdline",
-            return_value="hermes -p coder gateway run --replace",
-        ):
-            assert _check_gateway_running(coder_home) is True
-
+        assert _check_gateway_running(default_home) is False
     def test_profile_name_boundary_single_char(self):
         """Single alphanumeric character is valid."""
         validate_profile_name("a")
@@ -1751,16 +1589,16 @@ class TestEdgeCases:
         tmp_path = profile_env
         # Create source profile with config
         source_dir = create_profile("source", no_alias=True)
-        (source_dir / "config.yaml").write_text("model: cloned")
-        (source_dir / ".env").write_text("SECRET=yes")
+        (source_dir / "config.yaml").write_text("model: cloned", encoding="utf-8")
+        (source_dir / ".env").write_text("SECRET=yes", encoding="utf-8")
 
         target_dir = create_profile(
             "target", clone_from="source", clone_config=True, no_alias=True,
         )
-        cloned_config = yaml.safe_load((target_dir / "config.yaml").read_text())
+        cloned_config = yaml.safe_load((target_dir / "config.yaml").read_text(encoding="utf-8"))
         assert cloned_config["_config_version"] == DEFAULT_CONFIG["_config_version"]
         assert cloned_config["model"] == "cloned"
-        assert (target_dir / ".env").read_text().strip() == "SECRET=yes"
+        assert (target_dir / ".env").read_text(encoding="utf-8").strip() == "SECRET=yes"
 
     def test_delete_clears_active_profile(self, profile_env):
         """Deleting the active profile resets active to default."""

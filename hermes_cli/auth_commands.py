@@ -34,7 +34,7 @@ from hermes_cli.secret_prompt import masked_secret_prompt
 
 
 # Providers that support OAuth login in addition to API keys.
-_OAUTH_CAPABLE_PROVIDERS = {"anthropic", "nous", "openai-codex", "xai-oauth", "qwen-oauth", "minimax-oauth"}
+_OAUTH_CAPABLE_PROVIDERS = {"anthropic", "nous", "openai-codex", "qwen-oauth", "minimax-oauth"}
 
 
 def _get_custom_provider_names() -> list:
@@ -78,8 +78,6 @@ def _normalize_provider(provider: str) -> str:
     normalized = (provider or "").strip().lower()
     if normalized in {"or", "open-router"}:
         return "openrouter"
-    if normalized in {"grok-oauth", "xai-oauth", "x-ai-oauth", "xai-grok-oauth"}:
-        return "xai-oauth"
     # Check if it matches a custom provider name
     custom_key = _resolve_custom_provider_input(normalized)
     if custom_key:
@@ -314,7 +312,7 @@ def auth_add_command(args) -> None:
             _oauth_default_label(provider, len(pool.entries()) + 1),
         )
         # Add a distinct, self-contained pool entry per account (matching the
-        # xai-oauth / qwen-oauth patterns) instead of
+        # qwen-oauth patterns) instead of
         # routing through the singleton ``_save_codex_tokens`` save path.
         # The singleton round-trip collapsed every added account into the
         # latest login: a second ``hermes auth add openai-codex`` overwrote
@@ -342,26 +340,6 @@ def auth_add_command(args) -> None:
         if first_credential:
             auth_mod.mark_provider_active_if_unset(provider)
         print(f'Added {provider} OAuth credential #{len(pool.entries())}: "{entry.label}"')
-        return
-
-    if provider == "xai-oauth":
-        creds = auth_mod._xai_oauth_device_code_login(
-            timeout_seconds=getattr(args, "timeout", None) or 20.0,
-            open_browser=not getattr(args, "no_browser", False),
-        )
-        auth_mod._save_xai_oauth_tokens(
-            creds["tokens"],
-            discovery=creds.get("discovery"),
-            redirect_uri=creds.get("redirect_uri", ""),
-            last_refresh=creds.get("last_refresh"),
-            auth_mode="oauth_device_code",
-        )
-        pool = load_pool(provider)
-        entry = next((e for e in pool.entries() if getattr(e, "source", "") == "device_code"), None)
-        shown_label = entry.label if entry is not None else label_from_token(
-            creds["tokens"]["access_token"], _oauth_default_label(provider, 1)
-        )
-        print(f'Saved {provider} OAuth credentials: "{shown_label}"')
         return
 
     if provider == "qwen-oauth":

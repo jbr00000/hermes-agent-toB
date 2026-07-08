@@ -149,12 +149,6 @@ def _has_healthy_oauth_fallback_for_apikey_provider(provider_label: str) -> bool
             return bool((get_minimax_oauth_auth_status() or {}).get("logged_in"))
         except Exception:
             return False
-    if normalized == "xai":
-        try:
-            from hermes_cli.auth import get_xai_oauth_auth_status
-            return bool((get_xai_oauth_auth_status() or {}).get("logged_in"))
-        except Exception:
-            return False
     return False
 
 
@@ -264,51 +258,8 @@ def _check_version_consistency(issues: list[str]) -> None:
 
 
 def _check_s6_supervision(issues: list[str]) -> None:
-    """Inside a container under our s6 /init, surface what s6 sees.
-
-    Runs as a counterpart to :func:`_check_gateway_service_linger` for
-    the systemd-on-host case. No-op everywhere except in the s6
-    container so host runs aren't cluttered with irrelevant output.
-
-    Reports:
-      - Whether the main-hermes and dashboard static services are up
-      - How many per-profile gateway slots are registered (via
-        ``S6ServiceManager.list_profile_gateways()``) and how many are
-        currently supervised as ``up``
-    """
-    try:
-        from hermes_cli.service_manager import (
-            S6ServiceManager,
-            detect_service_manager,
-        )
-    except Exception:
-        return
-
-    if detect_service_manager() != "s6":
-        return
-
-    _section("s6 Supervision")
-
-    mgr = S6ServiceManager()
-
-    # Static services. They live under /run/service/ via s6-rc symlinks,
-    # so the same s6-svstat probe works.
-    for static in ("main-hermes", "dashboard"):
-        if mgr.is_running(static):
-            check_ok(f"{static}: up")
-        else:
-            check_info(f"{static}: down (expected if not enabled via env)")
-
-    profiles = mgr.list_profile_gateways()
-    if not profiles:
-        check_info("No per-profile gateways registered yet — create one with `hermes profile create <name>`")
-        return
-
-    up_count = sum(1 for p in profiles if mgr.is_running(f"gateway-{p}"))
-    check_ok(
-        f"Per-profile gateways: {up_count}/{len(profiles)} supervised up"
-        + (f" ({', '.join(sorted(profiles))})" if len(profiles) <= 8 else "")
-    )
+    """No-op: per-profile gateway supervision was removed in the to-B fork."""
+    return None
 
 
 def check_certificates() -> None:
@@ -329,47 +280,8 @@ def check_certificates() -> None:
 
 
 def _check_gateway_service_linger(issues: list[str]) -> None:
-    """Warn when a systemd user gateway service will stop after logout.
-
-    Skipped inside a container running under s6 — the linger concept
-    (user-systemd surviving SSH logout) doesn't apply there, and the
-    s6 supervision state is surfaced separately by
-    ``_check_s6_supervision``.
-    """
-    try:
-        from hermes_cli.gateway import (
-            get_systemd_linger_status,
-            get_systemd_unit_path,
-            is_linux,
-        )
-        from hermes_cli.service_manager import detect_service_manager
-    except Exception as e:
-        check_warn("Gateway service linger", f"(could not import gateway helpers: {e})")
-        return
-
-    if not is_linux():
-        return
-
-    # Inside a container under our s6 /init, _check_s6_supervision
-    # reports the live supervision state; the linger warning would be
-    # confusing here (no systemd, no logout, no "lingering" concept).
-    if detect_service_manager() == "s6":
-        return
-
-    unit_path = get_systemd_unit_path()
-    if not unit_path.exists():
-        return
-
-    _section("Gateway Service")
-    linger_enabled, linger_detail = get_systemd_linger_status()
-    if linger_enabled is True:
-        check_ok("Systemd linger enabled", "(gateway service survives logout)")
-    elif linger_enabled is False:
-        check_warn("Systemd linger disabled", "(gateway may stop after logout)")
-        check_info("Run: sudo loginctl enable-linger $USER")
-        issues.append("Enable linger for the gateway user service: sudo loginctl enable-linger $USER")
-    else:
-        check_warn("Could not verify systemd linger", f"({linger_detail})")
+    """No-op: messaging gateway services were removed in the to-B fork."""
+    return None
 
 
 _APIKEY_PROVIDERS_CACHE: list | None = None
@@ -1051,31 +963,6 @@ def run_doctor(args):
         except Exception:
             pass
 
-    _section("xAI Model Retirement (May 15, 2026)")
-
-    try:
-        from hermes_cli.config import load_config
-        from hermes_cli.xai_retirement import (
-            MIGRATION_GUIDE_URL,
-            find_retired_xai_refs,
-            format_issue,
-        )
-
-        _xai_cfg = load_config()
-        retired_refs = find_retired_xai_refs(_xai_cfg)
-        if not retired_refs:
-            check_ok("No retired xAI models in config")
-        else:
-            for ref in retired_refs:
-                check_warn(format_issue(ref))
-            check_info(f"Migration guide: {MIGRATION_GUIDE_URL}")
-            manual_issues.append(
-                f"Update {len(retired_refs)} retired xAI model reference(s) "
-                f"in config.yaml — see {MIGRATION_GUIDE_URL}"
-            )
-    except Exception as _xai_check_err:
-        check_warn("xAI retirement check skipped", f"({_xai_check_err})")
-
     _section("Auth Providers")
 
     try:
@@ -1117,20 +1004,6 @@ def run_doctor(args):
             check_warn("MiniMax OAuth", "(not logged in)")
     except Exception as e:
         check_warn("Auth provider status", f"(could not check: {e})")
-
-    # xAI OAuth — separate try/except so an import failure here cannot
-    # disrupt the already-printed Nous/Codex/Gemini/MiniMax rows above.
-    try:
-        from hermes_cli.auth import get_xai_oauth_auth_status
-        xai_oauth_status = get_xai_oauth_auth_status() or {}
-        if xai_oauth_status.get("logged_in"):
-            check_ok("xAI OAuth", "(logged in)")
-        else:
-            check_warn("xAI OAuth", "(not logged in)")
-            if xai_oauth_status.get("error"):
-                check_info(xai_oauth_status["error"])
-    except Exception:
-        pass
 
     _section("Directory Structure")
     hermes_home = HERMES_HOME

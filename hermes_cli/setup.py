@@ -866,58 +866,6 @@ def _install_kittentts_deps() -> bool:
         return False
 
 
-def _xai_oauth_logged_in_for_setup() -> bool:
-    """True iff xAI Grok OAuth credentials are already stored locally.
-
-    Lets TTS / STT setup skip the API-key prompt for users who logged in
-    through ``hermes model`` -> xAI Grok OAuth (SuperGrok / Premium+).
-    """
-    try:
-        from hermes_cli.auth import get_xai_oauth_auth_status
-
-        return bool(get_xai_oauth_auth_status().get("logged_in"))
-    except Exception:
-        return False
-
-
-def _run_xai_oauth_login_from_setup() -> bool:
-    """Run the xAI Grok OAuth device-code login from inside the setup wizard.
-
-    Returns True on success, False on any failure (the caller falls back
-    to whatever the user picked next, e.g. Edge TTS).
-    """
-    try:
-        from hermes_cli.auth import (
-            DEFAULT_XAI_OAUTH_BASE_URL,
-            _is_remote_session,
-            _save_xai_oauth_tokens,
-            _update_config_for_provider,
-            _xai_oauth_device_code_login,
-        )
-    except Exception as exc:
-        print_warning(f"xAI Grok OAuth helpers unavailable: {exc}")
-        return False
-
-    open_browser = not _is_remote_session()
-    print()
-    print_info("Signing in to xAI Grok OAuth (SuperGrok / Premium+)...")
-    try:
-        creds = _xai_oauth_device_code_login(open_browser=open_browser)
-        _save_xai_oauth_tokens(
-            creds["tokens"],
-            discovery=creds.get("discovery"),
-            redirect_uri=creds.get("redirect_uri", ""),
-            last_refresh=creds.get("last_refresh"),
-            auth_mode="oauth_device_code",
-        )
-        _update_config_for_provider(
-            "xai-oauth", creds.get("base_url", DEFAULT_XAI_OAUTH_BASE_URL)
-        )
-        return True
-    except Exception as exc:
-        print_warning(f"xAI Grok OAuth login failed: {exc}")
-        return False
-
 
 def _setup_tts_provider(config: dict):
     """Interactive TTS provider selection with install flow for NeuTTS."""
@@ -929,7 +877,6 @@ def _setup_tts_provider(config: dict):
         "edge": "Edge TTS",
         "elevenlabs": "ElevenLabs",
         "openai": "OpenAI TTS",
-        "xai": "xAI TTS",
         "minimax": "MiniMax TTS",
         "mistral": "Mistral Voxtral TTS",
         "gemini": "Google Gemini TTS",
@@ -953,7 +900,6 @@ def _setup_tts_provider(config: dict):
             "Edge TTS (free, cloud-based, no setup needed)",
             "ElevenLabs (premium quality, needs API key)",
             "OpenAI TTS (good quality, needs API key)",
-            "xAI TTS (Grok voices — OAuth login or API key)",
             "MiniMax TTS (high quality with voice cloning, needs API key)",
             "Mistral Voxtral TTS (multilingual, native Opus, needs API key)",
             "Google Gemini TTS (30 prebuilt voices, prompt-controllable, needs API key)",
@@ -961,7 +907,7 @@ def _setup_tts_provider(config: dict):
             "KittenTTS (local on-device, free, lightweight ~25-80MB ONNX)",
         ]
     )
-    providers.extend(["edge", "elevenlabs", "openai", "xai", "minimax", "mistral", "gemini", "neutts", "kittentts"])
+    providers.extend(["edge", "elevenlabs", "openai", "minimax", "mistral", "gemini", "neutts", "kittentts"])
     choices.append(f"Keep current ({current_label})")
     keep_current_idx = len(choices) - 1
     idx = prompt_choice("Select TTS provider:", choices, keep_current_idx)
@@ -1026,66 +972,6 @@ def _setup_tts_provider(config: dict):
                 print_warning("No API key provided. Falling back to Edge TTS.")
                 selected = "edge"
 
-    elif selected == "xai":
-        # Resolution order: existing OAuth tokens (free for SuperGrok subscribers
-        # via the Hermes auth store) > existing XAI_API_KEY > prompt the user.
-        # When neither is configured, offer both options instead of forcing the
-        # API-key path — xAI TTS works fine with OAuth bearer tokens too.
-        oauth_logged_in = _xai_oauth_logged_in_for_setup()
-        existing_api_key = get_env_value("XAI_API_KEY")
-
-        if oauth_logged_in:
-            print_success(
-                "xAI TTS will use your xAI Grok OAuth (SuperGrok / Premium+) "
-                "credentials"
-            )
-        elif existing_api_key:
-            print_success("xAI TTS will use your existing XAI_API_KEY")
-        else:
-            print()
-            choice_idx = prompt_choice(
-                "How do you want xAI TTS to authenticate?",
-                choices=[
-                    "Sign in with xAI Grok OAuth (SuperGrok / Premium+) — browser login",
-                    "Paste an xAI API key (console.x.ai)",
-                    "Skip → fallback to Edge TTS",
-                ],
-                default=0,
-            )
-            if choice_idx == 0:
-                if _run_xai_oauth_login_from_setup():
-                    print_success(
-                        "Logged in — xAI TTS will use these OAuth credentials"
-                    )
-                else:
-                    print_warning(
-                        "xAI Grok OAuth login did not complete. "
-                        "Falling back to Edge TTS."
-                    )
-                    selected = "edge"
-            elif choice_idx == 1:
-                api_key = prompt("xAI API key for TTS", password=True)
-                if api_key:
-                    save_env_value("XAI_API_KEY", api_key)
-                    print_success("xAI TTS API key saved")
-                else:
-                    from hermes_constants import display_hermes_home as _dhh
-                    print_warning(
-                        "No xAI API key provided for TTS. Configure XAI_API_KEY "
-                        f"via hermes setup model or {_dhh()}/.env to use xAI TTS. "
-                        "Falling back to Edge TTS."
-                    )
-                    selected = "edge"
-            else:
-                print_warning("xAI TTS skipped. Falling back to Edge TTS.")
-                selected = "edge"
-
-        if selected == "xai":
-            print()
-            voice_id = prompt("xAI voice_id (Enter for 'eve', or paste a custom voice ID)")
-            if voice_id and voice_id.strip():
-                config.setdefault("tts", {}).setdefault("xai", {})["voice_id"] = voice_id.strip()
-                print_success(f"xAI voice_id set to: {voice_id.strip()}")
 
 
     elif selected == "minimax":
@@ -1910,10 +1796,10 @@ def _setup_bluebubbles():
 
 
 def _setup_qqbot():
-    """Configure QQ Bot (Official API v2) via gateway setup."""
-    from hermes_cli.gateway import _setup_qqbot as _gateway_setup_qqbot
-    _gateway_setup_qqbot()
-
+    """QQBot gateway setup is removed in the to-B fork."""
+    print_header("QQBot")
+    print_info("Messaging gateway integrations are removed in this to-B build.")
+    print_info("Use the enterprise API/front-end integration layer instead.")
 
 def _setup_webhooks():
     """Configure webhook integration."""
@@ -1963,243 +1849,10 @@ def _setup_webhooks():
 
 
 def setup_gateway(config: dict):
-    """Configure messaging platform integrations."""
-    from hermes_cli.gateway import _all_platforms, _platform_status, _configure_platform
-
+    """Messaging platform setup is removed in the to-B fork."""
     print_header("Messaging Platforms")
-    print_info("Connect to messaging platforms to chat with Hermes from anywhere.")
-    print_info("Toggle with Space, confirm with Enter.")
-    print()
-
-    platforms = _all_platforms()
-
-    # Build checklist, pre-selecting already-configured platforms.
-    items = []
-    pre_selected = []
-    for i, plat in enumerate(platforms):
-        status = _platform_status(plat)
-        items.append(f"{plat['emoji']} {plat['label']}  ({status})")
-        if status == "configured":
-            pre_selected.append(i)
-
-    selected = prompt_checklist("Select platforms to configure:", items, pre_selected)
-
-    if not selected:
-        print_info("No platforms selected. Run 'hermes setup gateway' later to configure.")
-        return
-
-    for idx in selected:
-        _configure_platform(platforms[idx])
-
-    # ── Gateway Service Setup ──
-    # Count any platform (built-in or plugin) the user configured during this
-    # setup pass — reuses ``_platform_status`` so plugin platforms like IRC
-    # are picked up without another hard-coded env-var list.
-    def _is_progress(status: str) -> bool:
-        s = status.lower()
-        return not (
-            s == "not configured"
-            or s.startswith("partially")
-            or s.startswith("plugin disabled")
-        )
-
-    any_messaging = any(
-        _is_progress(_platform_status(p)) for p in _all_platforms()
-    )
-    if any_messaging:
-        print()
-        print_info("━" * 50)
-        print_success("Messaging platforms configured!")
-
-        # Check if any home channels are missing
-        missing_home = []
-        if get_env_value("TELEGRAM_BOT_TOKEN") and not get_env_value(
-            "TELEGRAM_HOME_CHANNEL"
-        ):
-            missing_home.append("Telegram")
-        if get_env_value("DISCORD_BOT_TOKEN") and not get_env_value(
-            "DISCORD_HOME_CHANNEL"
-        ):
-            missing_home.append("Discord")
-        if get_env_value("SLACK_BOT_TOKEN") and not get_env_value("SLACK_HOME_CHANNEL"):
-            missing_home.append("Slack")
-        if get_env_value("BLUEBUBBLES_SERVER_URL") and not get_env_value("BLUEBUBBLES_HOME_CHANNEL"):
-            missing_home.append("BlueBubbles")
-        if get_env_value("QQ_APP_ID") and not (
-            get_env_value("QQBOT_HOME_CHANNEL") or get_env_value("QQ_HOME_CHANNEL")
-        ):
-            missing_home.append("QQBot")
-
-        if missing_home:
-            print()
-            print_warning(f"No home channel set for: {', '.join(missing_home)}")
-            print_info("   Without a home channel, cron jobs and cross-platform")
-            print_info("   messages can't be delivered to those platforms.")
-            print_info("   Set one later with /set-home in your chat, or:")
-            for plat in missing_home:
-                print_info(
-                    f"     hermes config set {plat.upper()}_HOME_CHANNEL <channel_id>"
-                )
-
-        # Offer to install the gateway as a system service
-        import platform as _platform
-
-        _is_linux = _platform.system() == "Linux"
-        _is_macos = _platform.system() == "Darwin"
-        _is_windows = _platform.system() == "Windows"
-
-        from hermes_cli.gateway import (
-            _is_service_installed,
-            _is_service_running,
-            supports_systemd_services,
-            has_conflicting_systemd_units,
-            has_legacy_hermes_units,
-            install_linux_gateway_from_setup,
-            print_systemd_scope_conflict_warning,
-            print_legacy_unit_warning,
-            systemd_start,
-            systemd_restart,
-            launchd_install,
-            launchd_start,
-            launchd_restart,
-            UserSystemdUnavailableError,
-            SystemScopeRequiresRootError,
-            _system_scope_wizard_would_need_root,
-            _print_system_scope_remediation,
-        )
-
-        service_installed = _is_service_installed()
-        service_running = _is_service_running()
-        supports_systemd = supports_systemd_services()
-        supports_service_manager = supports_systemd or _is_macos or _is_windows
-
-        print()
-        if supports_systemd and has_conflicting_systemd_units():
-            print_systemd_scope_conflict_warning()
-            print()
-
-        if supports_systemd and has_legacy_hermes_units():
-            print_legacy_unit_warning()
-            print()
-
-        if service_running:
-            if supports_systemd and _system_scope_wizard_would_need_root():
-                _print_system_scope_remediation("restart")
-            elif prompt_yes_no("  Restart the gateway to pick up changes?", True):
-                try:
-                    if supports_systemd:
-                        systemd_restart()
-                    elif _is_macos:
-                        launchd_restart()
-                    elif _is_windows:
-                        from hermes_cli import gateway_windows
-                        gateway_windows.restart()
-                except UserSystemdUnavailableError as e:
-                    print_error("  Restart failed — user systemd not reachable:")
-                    for line in str(e).splitlines():
-                        print(f"  {line}")
-                except SystemScopeRequiresRootError as e:
-                    # Defense in depth: the pre-check above should have
-                    # caught this, but a race (unit file appearing mid-run)
-                    # could still land here. Previously this exited the
-                    # whole wizard via sys.exit(1).
-                    print_error(f"  Restart failed: {e}")
-                    _print_system_scope_remediation("restart")
-                except Exception as e:
-                    print_error(f"  Restart failed: {e}")
-        elif service_installed:
-            if supports_systemd and _system_scope_wizard_would_need_root():
-                _print_system_scope_remediation("start")
-            elif prompt_yes_no("  Start the gateway service?", True):
-                try:
-                    if supports_systemd:
-                        systemd_start()
-                    elif _is_macos:
-                        launchd_start()
-                    elif _is_windows:
-                        from hermes_cli import gateway_windows
-                        gateway_windows.start()
-                except UserSystemdUnavailableError as e:
-                    print_error("  Start failed — user systemd not reachable:")
-                    for line in str(e).splitlines():
-                        print(f"  {line}")
-                except SystemScopeRequiresRootError as e:
-                    print_error(f"  Start failed: {e}")
-                    _print_system_scope_remediation("start")
-                except Exception as e:
-                    print_error(f"  Start failed: {e}")
-        elif supports_service_manager:
-            if supports_systemd:
-                svc_name = "systemd"
-            elif _is_macos:
-                svc_name = "launchd"
-            else:
-                svc_name = "Scheduled Task"
-            if prompt_yes_no(
-                f"  Install the gateway as a {svc_name} service? (runs in background, starts on boot)",
-                True,
-            ):
-                try:
-                    installed_scope = None
-                    did_install = False
-                    started_inline = False
-                    if supports_systemd:
-                        installed_scope, did_install = install_linux_gateway_from_setup(force=False)
-                    elif _is_macos:
-                        launchd_install(force=False)
-                        did_install = True
-                    else:
-                        # gateway_windows.install() registers the Scheduled
-                        # Task AND starts it immediately (via schtasks /Run
-                        # or a direct spawn fallback), so no separate start
-                        # prompt is needed here.
-                        from hermes_cli import gateway_windows
-                        gateway_windows.install(force=False)
-                        did_install = True
-                        started_inline = True
-                    print()
-                    if did_install and not started_inline and prompt_yes_no("  Start the service now?", True):
-                        try:
-                            if supports_systemd:
-                                systemd_start(system=installed_scope == "system")
-                            elif _is_macos:
-                                launchd_start()
-                        except UserSystemdUnavailableError as e:
-                            print_error("  Start failed — user systemd not reachable:")
-                            for line in str(e).splitlines():
-                                print(f"  {line}")
-                        except SystemScopeRequiresRootError as e:
-                            print_error(f"  Start failed: {e}")
-                            _print_system_scope_remediation("start")
-                        except Exception as e:
-                            print_error(f"  Start failed: {e}")
-                except Exception as e:
-                    print_error(f"  Install failed: {e}")
-                    print_info("  You can try manually: hermes gateway install")
-            else:
-                print_info("  You can install later: hermes gateway install")
-                if supports_systemd and os.geteuid() == 0:  # windows-footgun: ok — guarded by supports_systemd (Linux only)
-                    print_info("  Or as a boot-time service: hermes gateway install --system")
-                print_info("  Or run in foreground:  hermes gateway")
-        else:
-            from hermes_constants import is_container
-            if is_container():
-                print_info("Start the gateway to bring your bots online:")
-                print_info("   hermes gateway run          # Run as container main process")
-                print_info("")
-                print_info("For automatic restarts, use a Docker restart policy:")
-                print_info("   docker run --restart unless-stopped ...")
-                print_info("   docker restart <container>  # Manual restart")
-            else:
-                print_info("Start the gateway to bring your bots online:")
-                print_info("   hermes gateway              # Run in foreground")
-
-        print_info("━" * 50)
-
-
-# =============================================================================
-# Section 5: Tool Configuration (delegates to unified tools_config.py)
-# =============================================================================
+    print_info("Messaging gateway integrations are removed in this to-B build.")
+    print_info("Use the enterprise API/front-end integration layer for user access, files, audit, and task status.")
 
 
 def setup_tools(config: dict, first_install: bool = False):
@@ -2316,20 +1969,7 @@ def _get_section_config_summary(config: dict, section_key: str) -> Optional[str]
         return f"max turns: {max_turns}"
 
     elif section_key == "gateway":
-        from hermes_cli.gateway import _all_platforms, _platform_status
-        # Count any non-empty status other than the "not configured" sentinel —
-        # platforms like WhatsApp ("enabled, not paired"), Matrix ("configured
-        # + E2EE"), and Signal ("partially configured") all indicate the user
-        # has already started setup and we shouldn't force the section to rerun.
-        configured = [
-            _gateway_platform_short_label(plat["label"])
-            for plat in _all_platforms()
-            if _platform_status(plat) and _platform_status(plat) != "not configured"
-        ]
-        if configured:
-            return ", ".join(configured)
-        return None  # No platforms configured — section must run
-
+        return "removed in to-B build"
     elif section_key == "tools":
         tools = []
         if get_env_value("ELEVENLABS_API_KEY"):
@@ -2410,7 +2050,6 @@ _HIGH_IMPACT_KIND_KEYWORDS = {
     "telegram": "⚠ Telegram — this will point Hermes at your OpenClaw Telegram bot",
     "slack": "⚠ Slack — this will point Hermes at your OpenClaw Slack workspace",
     "discord": "⚠ Discord — this will point Hermes at your OpenClaw Discord bot",
-    "whatsapp": "⚠ WhatsApp — this will point Hermes at your OpenClaw WhatsApp connection",
     "config": "⚠ Config values — OpenClaw settings may not map 1:1 to Hermes equivalents",
     "soul": "⚠ Instruction file — may contain OpenClaw-specific setup/restart procedures",
     "memory": "⚠ Memory/context file — may reference OpenClaw-specific infrastructure",
@@ -3315,91 +2954,6 @@ def _run_quick_setup(config: dict, hermes_home):
 
     # Split missing optional vars by category
     missing_tools = [v for v in missing_optional if v.get("category") == "tool"]
-    missing_messaging = [
-        v
-        for v in missing_optional
-        if v.get("category") == "messaging" and not v.get("advanced")
-    ]
-
-    # ── Tool API keys (checklist) ──
-    if missing_tools:
-        print()
-        print_header("Tool API Keys")
-
-        checklist_labels = []
-        for var in missing_tools:
-            tools = var.get("tools", [])
-            tools_str = f" → {', '.join(tools[:2])}" if tools else ""
-            checklist_labels.append(f"{var.get('description', var['name'])}{tools_str}")
-
-        selected_indices = prompt_checklist(
-            "Which tools would you like to configure?",
-            checklist_labels,
-        )
-
-        for idx in selected_indices:
-            var = missing_tools[idx]
-            _prompt_api_key(var)
-
-    # ── Messaging platforms (checklist then prompt for selected) ──
-    if missing_messaging:
-        print()
-        print_header("Messaging Platforms")
-        print_info("Connect Hermes to messaging apps to chat from anywhere.")
-        print_info("You can configure these later with 'hermes setup gateway'.")
-
-        # Group by platform (preserving order)
-        platform_order = []
-        platforms = {}
-        for var in missing_messaging:
-            name = var["name"]
-            if "TELEGRAM" in name:
-                plat = "Telegram"
-            elif "DISCORD" in name:
-                plat = "Discord"
-            elif "SLACK" in name:
-                plat = "Slack"
-            else:
-                continue
-            if plat not in platforms:
-                platform_order.append(plat)
-            platforms.setdefault(plat, []).append(var)
-
-        platform_labels = [
-            {
-                "Telegram": "📱 Telegram",
-                "Discord": "💬 Discord",
-                "Slack": "💼 Slack",
-            }.get(p, p)
-            for p in platform_order
-        ]
-
-        selected_indices = prompt_checklist(
-            "Which platforms would you like to set up?",
-            platform_labels,
-        )
-
-        for idx in selected_indices:
-            plat = platform_order[idx]
-            vars_list = platforms[plat]
-            emoji = {"Telegram": "📱", "Discord": "💬", "Slack": "💼"}.get(plat, "")
-            print()
-            print(color(f"  ─── {emoji} {plat} ───", Colors.CYAN))
-            print()
-            for var in vars_list:
-                print_info(f"  {var.get('description', '')}")
-                if var.get("url"):
-                    print_info(f"  {var['url']}")
-                if var.get("password"):
-                    value = prompt(f"  {var.get('prompt', var['name'])}", password=True)
-                else:
-                    value = prompt(f"  {var.get('prompt', var['name'])}")
-                if value:
-                    save_env_value(var["name"], value)
-                    print_success("  ✓ Saved")
-                else:
-                    print_warning("  Skipped")
-                print()
 
     # Handle missing config fields
     if missing_config:

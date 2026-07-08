@@ -32,7 +32,6 @@ from agent.auxiliary_client import (
     OPENROUTER_BASE_URL,
     _resolve_auto,
     _resolve_task_provider_model,
-    _resolve_xai_oauth_for_aux,
     _CodexCompletionsAdapter,
     _pool_runtime_base_url,
 )
@@ -119,7 +118,6 @@ class TestResolveTaskProviderModel:
             "nous",
             "openai-codex",
             "qwen-oauth",
-            "xai-oauth",
         ],
     )
     def test_explicit_base_url_preserves_first_class_provider_identity(self, provider):
@@ -427,77 +425,6 @@ class TestReadCodexAccessToken:
         assert result == "plain-token-no-jwt"
 
 
-class TestResolveXaiOAuthForAux:
-    def test_uses_pool_backed_credentials_without_singleton(self, tmp_path, monkeypatch):
-        """Auxiliary xAI OAuth must see pool-only credentials.
-
-        ``hermes auth status`` already reports these as logged in; compression
-        should not fall through to "no auxiliary provider configured" just
-        because the singleton auth-store entry is absent.
-        """
-        from agent.credential_pool import AUTH_TYPE_OAUTH, PooledCredential, load_pool
-        from hermes_cli.auth import DEFAULT_XAI_OAUTH_BASE_URL
-
-        hermes_home = tmp_path / "hermes"
-        hermes_home.mkdir(parents=True, exist_ok=True)
-        (hermes_home / "auth.json").write_text(json.dumps({
-            "version": 1,
-            "providers": {},
-        }))
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
-        monkeypatch.delenv("HERMES_XAI_BASE_URL", raising=False)
-        monkeypatch.delenv("XAI_BASE_URL", raising=False)
-
-        pool = load_pool("xai-oauth")
-        pool.add_entry(PooledCredential(
-            provider="xai-oauth",
-            id="xai123",
-            label="pool-only",
-            auth_type=AUTH_TYPE_OAUTH,
-            priority=0,
-            source="manual:xai_pkce",
-            access_token="pool-access-token",
-            refresh_token="pool-refresh-token",
-            base_url=DEFAULT_XAI_OAUTH_BASE_URL,
-        ))
-
-        assert _resolve_xai_oauth_for_aux() == (
-            "pool-access-token",
-            DEFAULT_XAI_OAUTH_BASE_URL,
-        )
-
-    def test_pool_backed_credentials_honor_base_url_env_override(self, tmp_path, monkeypatch):
-        from agent.credential_pool import AUTH_TYPE_OAUTH, PooledCredential, load_pool
-        from hermes_cli.auth import DEFAULT_XAI_OAUTH_BASE_URL
-
-        hermes_home = tmp_path / "hermes"
-        hermes_home.mkdir(parents=True, exist_ok=True)
-        (hermes_home / "auth.json").write_text(json.dumps({
-            "version": 1,
-            "providers": {},
-        }))
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
-        monkeypatch.setenv("HERMES_XAI_BASE_URL", "https://example.x.ai/v1/")
-
-        pool = load_pool("xai-oauth")
-        pool.add_entry(PooledCredential(
-            provider="xai-oauth",
-            id="xai456",
-            label="pool-only",
-            auth_type=AUTH_TYPE_OAUTH,
-            priority=0,
-            source="manual:xai_pkce",
-            access_token="pool-access-token",
-            refresh_token="pool-refresh-token",
-            base_url=DEFAULT_XAI_OAUTH_BASE_URL,
-        ))
-
-        assert _resolve_xai_oauth_for_aux() == (
-            "pool-access-token",
-            "https://example.x.ai/v1",
-        )
-
-
 class TestAnthropicOAuthFlag:
     """Test that OAuth tokens get is_oauth=True in auxiliary Anthropic client."""
 
@@ -639,44 +566,16 @@ class TestResolveProviderClientUniversalModelFallback:
         2. provider's catalog default   (cheap aux model, if registered)
         3. user's main model            (``model.model`` in config.yaml)
 
-    Pre-fix the OAuth providers (xai-oauth, openai-codex) returned
-    ``(None, None)`` on an empty model — both lack a catalog default
+    Pre-fix the OAuth provider openai-codex returned
+    ``(None, None)`` on an empty model — it lacks a catalog default
     because their accepted-model lists drift on the backend.  That
     silent failure caused ``_resolve_auto`` to drop to its Step-2
     fallback chain (OpenRouter / Nous / etc.), so aux tasks billed
     against the wrong subscription.
     """
 
-    def test_empty_model_for_oauth_provider_falls_back_to_main_model(self):
-        """xai-oauth: no catalog default → uses main model."""
-        from agent.auxiliary_client import resolve_provider_client
-
-        with (
-            patch(
-                "agent.auxiliary_client._read_main_model",
-                return_value="grok-4.3",
-            ),
-            patch(
-                "agent.auxiliary_client._get_aux_model_for_provider",
-                return_value="",  # xai-oauth has no catalog default
-            ),
-            patch(
-                "agent.auxiliary_client._build_xai_oauth_aux_client",
-                return_value=(MagicMock(), "grok-4.3"),
-            ) as mock_build,
-        ):
-            client, model = resolve_provider_client("xai-oauth", "")
-
-        assert client is not None, (
-            "should not fall through when main model is set"
-        )
-        assert model == "grok-4.3"
-        # The builder receives the main-model fallback, never the empty
-        # string the caller passed.
-        assert mock_build.call_args.args[0] == "grok-4.3"
-
     def test_empty_model_for_codex_also_uses_main_model(self):
-        """openai-codex: symmetric with xai-oauth — same universal fallback."""
+        """openai-codex — same universal fallback."""
         from agent.auxiliary_client import resolve_provider_client
 
         with (
@@ -760,18 +659,22 @@ class TestResolveProviderClientUniversalModelFallback:
                 return_value="catalog-default-should-not-be-used",
             ),
             patch(
-                "agent.auxiliary_client._build_xai_oauth_aux_client",
-                return_value=(MagicMock(), "grok-4.20-multi-agent"),
+                "agent.auxiliary_client._build_codex_client",
+                return_value=(MagicMock(), "gpt-5.4"),
             ) as mock_build,
+            patch(
+                "agent.auxiliary_client._select_pool_entry",
+                return_value=(True, None),
+            ),
         ):
             client, model = resolve_provider_client(
-                "xai-oauth", "grok-4.20-multi-agent",
+                "openai-codex", "gpt-5.4",
             )
 
         assert client is not None
-        assert model == "grok-4.20-multi-agent"
+        assert model == "gpt-5.4"
         mock_read_main.assert_not_called()
-        assert mock_build.call_args.args[0] == "grok-4.20-multi-agent"
+        assert mock_build.call_args.args[0] == "gpt-5.4"
 
 
 class TestExpiredCodexFallback:
@@ -3731,15 +3634,6 @@ class TestCodexAdapterPromptCacheKey:
         a2, c2 = self._build_adapter()
         a2.create(messages=[{"role": "system", "content": "SYS-B"}, {"role": "user", "content": "x"}])
         assert c1["prompt_cache_key"] != c2["prompt_cache_key"]
-
-    def test_cache_key_skipped_for_xai_host(self):
-        """xAI Responses takes the key in extra_body, not top-level — skip here."""
-        adapter, captured = self._build_adapter(base_url="https://api.x.ai/v1")
-        adapter.create(messages=[
-            {"role": "system", "content": "SYS"},
-            {"role": "user", "content": "hi"},
-        ])
-        assert "prompt_cache_key" not in captured
 
     def test_cache_key_skipped_for_github_copilot_host(self):
         """GitHub/Copilot Responses opts out of cache-key routing entirely."""

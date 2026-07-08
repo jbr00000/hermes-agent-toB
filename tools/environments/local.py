@@ -165,7 +165,6 @@ def _build_provider_env_blocklist() -> frozenset:
         "PERPLEXITY_API_KEY",
         "COHERE_API_KEY",
         "FIREWORKS_API_KEY",
-        "XAI_API_KEY",
         "HELICONE_API_KEY",
         "PARALLEL_API_KEY",
         "FIRECRAWL_API_KEY",
@@ -180,9 +179,6 @@ def _build_provider_env_blocklist() -> frozenset:
         "SLACK_HOME_CHANNEL",
         "SLACK_HOME_CHANNEL_NAME",
         "SLACK_ALLOWED_USERS",
-        "WHATSAPP_ENABLED",
-        "WHATSAPP_MODE",
-        "WHATSAPP_ALLOWED_USERS",
         "SIGNAL_HTTP_URL",
         "SIGNAL_ACCOUNT",
         "SIGNAL_ALLOWED_USERS",
@@ -1091,7 +1087,7 @@ class LocalEnvironment(BaseEnvironment):
         try:
             if _IS_WINDOWS:
                 try:
-                    from gateway.status import terminate_pid
+                    from hermes_core.process_status import terminate_pid
 
                     terminate_pid(proc.pid, force=True)
                 except Exception:

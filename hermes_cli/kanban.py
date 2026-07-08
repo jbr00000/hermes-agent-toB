@@ -133,57 +133,8 @@ def _parse_branch_flag(value: Optional[str]) -> Optional[str]:
 
 
 def _check_dispatcher_presence() -> tuple[bool, str]:
-    """Return ``(running, message)``.
-
-    - ``running=True``: a gateway is alive for this HERMES_HOME and its
-      config has ``kanban.dispatch_in_gateway`` on (default). Message
-      is a short status line.
-    - ``running=False``: either no gateway is running, or the gateway
-      is running but the config flag is off. Message is human guidance
-      explaining the next step.
-
-    Used by ``hermes kanban create`` (and callers) to warn when a task
-    will sit in ``ready`` because nothing is there to pick it up.
-    Defensive against import failures and config-read errors — if the
-    probe itself errors, we return ``(True, "")`` so we don't spam
-    false warnings (better to miss a warning than to cry wolf).
-    """
-    try:
-        from gateway.status import get_running_pid  # type: ignore
-    except Exception:
-        return (True, "")  # can't probe — silent
-    try:
-        pid = get_running_pid()
-    except Exception:
-        return (True, "")  # probe errored — silent
-
-    # Even if the gateway is up, dispatch_in_gateway may be off.
-    try:
-        from hermes_cli.config import load_config
-        cfg = load_config()
-        dispatch_on = bool(cfg.get("kanban", {}).get("dispatch_in_gateway", True))
-    except Exception:
-        dispatch_on = True  # can't tell — assume default
-
-    if pid and dispatch_on:
-        return (True, f"gateway pid={pid}, dispatch enabled")
-    if pid and not dispatch_on:
-        return (
-            False,
-            "Gateway is running but kanban.dispatch_in_gateway=false in "
-            "config.yaml — the task will sit in 'ready' until you flip it "
-            "back on and restart the gateway, OR run the legacy "
-            "standalone daemon (`hermes kanban daemon --force`)."
-        )
-    return (
-        False,
-        "No gateway is running — the task will sit in 'ready' until you "
-        "start it. Run:\n"
-        "    hermes gateway start\n"
-        "The gateway hosts an embedded dispatcher (tick interval 60s by "
-        "default); your task will be picked up on the next tick after "
-        "the gateway comes up."
-    )
+    """Return dispatcher status without relying on the removed gateway."""
+    return (True, "")
 
 
 # ---------------------------------------------------------------------------
@@ -651,7 +602,7 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
     # --- daemon (deprecated) ---
     p_daemon = sub.add_parser(
         "daemon",
-        help="DEPRECATED — dispatcher now runs in the gateway. Use `hermes gateway start`.",
+        help="DEPRECATED - use explicit `hermes kanban dispatch` or the enterprise task API.",
     )
     p_daemon.add_argument("--interval", type=float, default=60.0,
                           help="Seconds between dispatch ticks (default: 60)")
@@ -1257,13 +1208,13 @@ def _cmd_init(args: argparse.Namespace) -> int:
         print("No profiles found under ~/.hermes/profiles/.")
         print("Create one with `hermes -p <name> setup` before assigning tasks.")
     print()
-    print("Next step: start the gateway so ready tasks actually get picked up.")
-    print("  hermes gateway start")
+    print("Next step: run a dispatch pass so ready tasks get picked up.")
+    print("  hermes kanban dispatch")
     print()
     print(
-        "The gateway hosts an embedded dispatcher that ticks every 60 seconds\n"
-        "by default (config: kanban.dispatch_interval_seconds). Without a\n"
-        "running gateway, tasks stay in 'ready' forever."
+        "Production to-B deployments should route scheduling through the\n"
+        "enterprise API/front-end orchestration layer. For local debugging,\n"
+        "run explicit dispatch passes when you want ready tasks claimed."
     )
     return 0
 
@@ -2222,38 +2173,25 @@ def _cmd_dispatch(args: argparse.Namespace) -> int:
 
 
 def _cmd_daemon(args: argparse.Namespace) -> int:
-    """Deprecated — the dispatcher now runs inside the gateway.
+    """Deprecated long-running daemon entrypoint.
 
-    Left in as a stub so users with the old command in scripts/systemd
-    units get a clear migration message instead of a cryptic
-    "no such command" error. A ``--force`` escape hatch keeps the old
-    standalone daemon alive for the rare edge case where someone truly
-    cannot run the gateway (e.g. running on a host that forbids
-    long-lived background services), but the default path exits 2
-    with guidance so nobody accidentally keeps running two dispatchers
-    against the same kanban.db.
+    The to-B build removed the messaging gateway that used to supervise this
+    loop. Keep the command as a stub so old scripts get clear migration
+    guidance instead of a cryptic no-such-command error.
     """
     # --force lets power users keep the standalone loop for one more
     # release cycle. Undocumented in `--help` so nobody discovers it
     # casually — intentional.
     if not getattr(args, "force", False):
         print(
-            "hermes kanban daemon: DEPRECATED — the dispatcher now runs\n"
-            "inside the gateway. To use kanban:\n"
+            "hermes kanban daemon: DEPRECATED in the to-B build.\n"
+            "To process kanban work explicitly, run:\n"
             "\n"
-            "    hermes gateway start       # starts the gateway + embedded dispatcher\n"
+            "    hermes kanban dispatch\n"
             "\n"
-            "Ready tasks will be picked up on the next dispatcher tick\n"
-            "(default: every 60 seconds). Configure via config.yaml:\n"
-            "\n"
-            "    kanban:\n"
-            "      dispatch_in_gateway: true      # default\n"
-            "      dispatch_interval_seconds: 60\n"
-            "      failure_limit: 2              # consecutive non-success attempts before auto-block\n"
-            "\n"
-            "Running both the gateway AND this standalone daemon will\n"
-            "race for claims. If you truly need the old standalone\n"
-            "daemon (no gateway available), rerun with --force.",
+            "For production use, route task scheduling through the enterprise\n"
+            "API/front-end orchestration layer. If you intentionally need the\n"
+            "legacy standalone loop for local debugging, rerun with --force.",
             file=sys.stderr,
         )
         return 2
@@ -2275,9 +2213,8 @@ def _cmd_daemon(args: argparse.Namespace) -> int:
     print(
         f"Kanban dispatcher running STANDALONE via --force "
         f"(interval={args.interval}s, pid={os.getpid()}). "
-        f"Ctrl-C to stop. NOTE: if a gateway is also running with "
-        f"dispatch_in_gateway=true (default), you have two dispatchers "
-        f"racing for claims.",
+        f"Ctrl-C to stop. NOTE: production to-B deployments should use "
+        f"the enterprise task orchestration layer instead.",
         file=sys.stderr,
     )
 

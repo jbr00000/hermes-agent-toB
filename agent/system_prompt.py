@@ -379,15 +379,6 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     _default_hint = ""
     if platform_key in PLATFORM_HINTS:
         _default_hint = PLATFORM_HINTS[platform_key]
-    elif platform_key:
-        # Check plugin registry for platform-specific LLM guidance
-        try:
-            from gateway.platform_registry import platform_registry
-            _entry = platform_registry.get(platform_key)
-            if _entry and _entry.platform_hint:
-                _default_hint = _entry.platform_hint
-        except Exception:
-            pass
 
     _effective_hint = _resolve_platform_hint(agent, platform_key, _default_hint)
     if _effective_hint:

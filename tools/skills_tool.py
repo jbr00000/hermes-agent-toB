@@ -457,12 +457,10 @@ def _remaining_required_environment_names(
 
 
 def _gateway_setup_hint() -> str:
-    try:
-        from gateway.platforms.base import GATEWAY_SECRET_CAPTURE_UNSUPPORTED_MESSAGE
-
-        return GATEWAY_SECRET_CAPTURE_UNSUPPORTED_MESSAGE
-    except Exception:
-        return f"Secure secret entry is not available. Load this skill in the local CLI to be prompted, or add the key to {display_hermes_home()}/.env manually."
+    return (
+        "Secure secret entry is not supported over remote/headless channels. "
+        f"Load this skill in the local CLI to be prompted, or add the key to {display_hermes_home()}/.env manually."
+    )
 
 
 def _build_setup_note(

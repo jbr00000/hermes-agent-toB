@@ -67,7 +67,7 @@ class ResponsesApiTransport(ProviderTransport):
         """Classify the current Responses endpoint from transport params."""
         from agent.codex_responses_adapter import _classify_responses_issuer
         return _classify_responses_issuer(
-            is_xai_responses=bool(params.get("is_xai_responses")),
+            is_xai_responses=False,
             is_github_responses=bool(params.get("is_github_responses")),
             is_codex_backend=bool(params.get("is_codex_backend")),
             base_url=params.get("base_url"),
@@ -80,7 +80,7 @@ class ResponsesApiTransport(ProviderTransport):
         self._last_issuer_kind = issuer
         return _chat_messages_to_responses_input(
             messages,
-            is_xai_responses=bool(kwargs.get("is_xai_responses")),
+            is_xai_responses=False,
             replay_encrypted_reasoning=bool(
                 kwargs.get("replay_encrypted_reasoning", True)
             ),
@@ -106,8 +106,8 @@ class ResponsesApiTransport(ProviderTransport):
         params:
             instructions: str — system prompt (extracted from messages[0] if not given)
             reasoning_config: dict | None — {effort, enabled}
-            session_id: str | None — transcript/session id; drives the xAI
-                x-grok-conv-id header and the Codex cache-scope headers, and is
+            session_id: str | None — transcript/session id; drives
+                the Codex cache-scope headers, and is
                 the fallback prompt_cache_key when there is no static prefix to
                 content-address
             max_tokens: int | None — max_output_tokens
@@ -118,7 +118,6 @@ class ResponsesApiTransport(ProviderTransport):
             base_url_hostname: str | None — hostname for backend detection
             is_github_responses: bool — Copilot/GitHub models backend
             is_codex_backend: bool — chatgpt.com/backend-api/codex
-            is_xai_responses: bool — xAI/Grok backend
             github_reasoning_extra: dict | None — Copilot reasoning params
         """
         from agent.codex_responses_adapter import (
@@ -139,7 +138,6 @@ class ResponsesApiTransport(ProviderTransport):
 
         is_github_responses = params.get("is_github_responses", False)
         is_codex_backend = params.get("is_codex_backend", False)
-        is_xai_responses = params.get("is_xai_responses", False)
         replay_encrypted_reasoning = bool(
             params.get("replay_encrypted_reasoning", True)
         )
@@ -167,64 +165,6 @@ class ResponsesApiTransport(ProviderTransport):
 
         response_tools = _responses_tools(tools)
 
-        # xAI server-side web search.
-        #
-        # grok models on xAI's /v1/responses surface (notably
-        # grok-composer-2.5-fast on SuperGrok OAuth) have a *native*,
-        # server-executed web search.  When the model is handed a
-        # client-side function literally named ``web_search``, it routes
-        # the intent to that native engine — but because the tool is
-        # declared as a plain ``function`` rather than xAI's first-class
-        # ``{"type": "web_search"}`` built-in, the server-side search is
-        # dispatched but never reconciled: the response streams reasoning
-        # + ``web_search_call`` progress items, the searches never reach
-        # ``status="completed"`` in the assembled output, no final
-        # message is emitted, and ``_normalize_codex_response`` correctly
-        # sees reasoning-with-no-answer and reports ``incomplete``.  The
-        # turn then burns 3 continuation retries and fails with "Codex
-        # response remained incomplete after 3 continuation attempts".
-        # Verified live against grok-composer-2.5-fast (2026-06).
-        #
-        # Fix: when the agent HAS a client-side ``web_search`` function (i.e.
-        # the user enabled the web toolset), declare xAI's native
-        # ``web_search`` built-in instead so the search actually runs to
-        # completion server-side and the model streams a real answer.  The
-        # Responses API rejects two tools sharing the name ``web_search``
-        # (HTTP 400 "Duplicate tool names"), so we drop the client-side
-        # ``web_search`` function for the xAI path and let the native tool
-        # satisfy it.  All other client-side tools (read_file, terminal,
-        # web_extract, MCP tools, …) are untouched and continue to dispatch
-        # through Hermes's agent loop.
-        #
-        # Scope: we ONLY swap in the native built-in when the client
-        # ``web_search`` was actually present.  We do NOT force-enable Grok
-        # server-side search on turns where the user never had web enabled —
-        # that would silently route around Hermes's web-provider config and
-        # tool-trace/citation plumbing for every xai-oauth turn.  The swap is
-        # a 1:1 replacement of an already-requested capability, not an
-        # additive grant.
-        #
-        # NOTE: for the swapped case this routes ``web_search`` to Grok's
-        # native search engine for xAI sessions instead of Hermes's
-        # configured web provider (Tavily/etc.), and those results bypass
-        # Hermes's tool-trace / citation plumbing (they arrive baked into the
-        # model's answer rather than as a tool result the loop observes).
-        # Scoped to ``is_xai_responses`` deliberately; narrow to specific
-        # models if a future grok variant should keep the client-side
-        # function.
-        if is_xai_responses and response_tools:
-            has_client_web_search = any(
-                isinstance(t, dict) and t.get("name") == "web_search"
-                for t in response_tools
-            )
-            if has_client_web_search:
-                filtered = [
-                    t for t in response_tools
-                    if not (isinstance(t, dict) and t.get("name") == "web_search")
-                ]
-                filtered.append({"type": "web_search"})
-                response_tools = filtered
-
         # ``tools`` MUST be omitted entirely when there are no functions to
         # expose: the openai SDK's ``responses.stream()`` / ``responses.parse()``
         # eagerly call ``_make_tools(tools)`` which does ``for tool in tools``
@@ -238,7 +178,7 @@ class ResponsesApiTransport(ProviderTransport):
             "instructions": instructions,
             "input": _chat_messages_to_responses_input(
                 payload_messages,
-                is_xai_responses=is_xai_responses,
+                is_xai_responses=False,
                 replay_encrypted_reasoning=replay_encrypted_reasoning,
                 current_issuer_kind=issuer_kind,
             ),
@@ -257,29 +197,11 @@ class ResponsesApiTransport(ProviderTransport):
         # the cache-scope routing headers below. Falls back to session_id when
         # there is no static content to hash.
         cache_key = _content_cache_key(instructions, response_tools) or session_id
-        # xAI Responses takes prompt_cache_key in extra_body (set further
-        # down); GitHub Models opts out of cache-key routing entirely.
-        if not is_github_responses and not is_xai_responses and cache_key:
+        # GitHub Models opts out of cache-key routing entirely.
+        if not is_github_responses and cache_key:
             kwargs["prompt_cache_key"] = cache_key
 
-        if reasoning_enabled and is_xai_responses:
-            from agent.model_metadata import grok_supports_reasoning_effort
-
-            # Ask xAI to echo back encrypted reasoning items so we can
-            # replay them on subsequent turns for cross-turn coherence.
-            # See agent/codex_responses_adapter._chat_messages_to_responses_input
-            # for the May 2026 reversal of the earlier suppression gate.
-            kwargs["include"] = (
-                ["reasoning.encrypted_content"] if replay_encrypted_reasoning else []
-            )
-            # xAI rejects `reasoning.effort` on grok-4 / grok-4-fast / grok-3
-            # / grok-code-fast / grok-4.20-0309-* with HTTP 400 even though
-            # those models reason natively. Only send the effort dial when
-            # the target model is on the allowlist; otherwise send no
-            # `reasoning` key at all and let the model reason on its own.
-            if grok_supports_reasoning_effort(model):
-                kwargs["reasoning"] = {"effort": reasoning_effort}
-        elif reasoning_enabled:
+        if reasoning_enabled:
             if is_github_responses:
                 github_reasoning = params.get("github_reasoning_extra")
                 if github_reasoning is not None:
@@ -289,23 +211,12 @@ class ResponsesApiTransport(ProviderTransport):
                 kwargs["include"] = (
                     ["reasoning.encrypted_content"] if replay_encrypted_reasoning else []
                 )
-        elif not is_github_responses and not is_xai_responses:
+        elif not is_github_responses:
             kwargs["include"] = []
 
         request_overrides = params.get("request_overrides")
         if request_overrides:
             kwargs.update(request_overrides)
-
-        # xAI Responses API rejects ``service_tier`` (HTTP 400 "Argument not
-        # supported: service_tier") — hit when ``/fast`` priority-processing
-        # mode lingers from a prior model in the same session, or when a
-        # user explicitly sets ``agent.service_tier`` in config.yaml.  The
-        # main-loop guard (``resolve_fast_mode_overrides`` only returns
-        # ``service_tier`` for OpenAI fast-eligible models) doesn't cover
-        # those leak paths, so strip defensively when targeting xAI.  See
-        # #28490 for the original report.
-        if is_xai_responses:
-            kwargs.pop("service_tier", None)
 
         # Forward per-request timeout to the SDK so OpenAI/Anthropic clients
         # honor it.  Without this, ``providers.<id>.request_timeout_seconds``
@@ -348,31 +259,6 @@ class ResponsesApiTransport(ProviderTransport):
         max_tokens = params.get("max_tokens")
         if max_tokens is not None and not is_codex_backend:
             kwargs["max_output_tokens"] = max_tokens
-
-        if is_xai_responses and session_id:
-            existing_extra_headers = kwargs.get("extra_headers")
-            merged_extra_headers: Dict[str, str] = {}
-            if isinstance(existing_extra_headers, dict):
-                merged_extra_headers.update(
-                    {
-                        str(key): str(value)
-                        for key, value in existing_extra_headers.items()
-                        if key and value is not None
-                    }
-                )
-            merged_extra_headers["x-grok-conv-id"] = session_id
-            kwargs["extra_headers"] = merged_extra_headers
-
-            # xAI Responses cache-routing — body-level field per
-            # https://docs.x.ai/developers/advanced-api-usage/prompt-caching/maximizing-cache-hits.
-            # Sent via extra_body (not the typed kwarg) so it survives openai
-            # SDK builds whose Responses.stream() signature has dropped the field.
-            existing_extra_body = kwargs.get("extra_body")
-            merged_extra_body: Dict[str, Any] = {}
-            if isinstance(existing_extra_body, dict):
-                merged_extra_body.update(existing_extra_body)
-            merged_extra_body.setdefault("prompt_cache_key", cache_key)
-            kwargs["extra_body"] = merged_extra_body
 
         return kwargs
 

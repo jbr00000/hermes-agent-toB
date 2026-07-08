@@ -270,7 +270,7 @@ plugins = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["agent", "agent.*", "tools", "tools.*", "server", "server.*", "hermes_cli", "hermes_cli.*", "cron", "cron.*", "plugins", "plugins.*", "providers", "providers.*"]
+include = ["agent", "agent.*", "tools", "tools.*", "server", "server.*", "hermes_cli", "hermes_cli.*", "hermes_core", "hermes_core.*", "cron", "cron.*", "plugins", "plugins.*", "providers", "providers.*"]
 exclude = [
   # The headless B-side server uses server/memory.py instead of the legacy
   # plugin memory providers.

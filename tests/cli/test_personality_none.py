@@ -1,7 +1,5 @@
 """Tests for /personality none — clearing personality overlay."""
-import pytest
 from unittest.mock import MagicMock, patch
-import yaml
 
 
 # ── CLI tests ──────────────────────────────────────────────────────────────
@@ -68,93 +66,6 @@ class TestCLIPersonalityNone:
             cli._handle_personality_command("/personality")
         output = " ".join(str(c) for c in mock_print.call_args_list)
         assert "none" in output.lower()
-
-
-# ── Gateway tests ──────────────────────────────────────────────────────────
-
-class TestGatewayPersonalityNone:
-
-    def _make_event(self, args=""):
-        event = MagicMock()
-        event.get_command.return_value = "personality"
-        event.get_command_args.return_value = args
-        return event
-
-    def _make_runner(self, personalities=None):
-        from gateway.run import GatewayRunner
-        runner = GatewayRunner.__new__(GatewayRunner)
-        runner._ephemeral_system_prompt = "You are kawaii~"
-        runner.config = {
-            "agent": {
-                "personalities": personalities or {"helpful": "You are helpful."}
-            }
-        }
-        return runner
-
-    @pytest.mark.asyncio
-    async def test_none_clears_ephemeral_prompt(self, tmp_path):
-        runner = self._make_runner()
-        config_data = {"agent": {"personalities": {"helpful": "You are helpful."}, "system_prompt": "kawaii"}}
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(yaml.dump(config_data))
-
-        with patch("gateway.run._hermes_home", tmp_path):
-            event = self._make_event("none")
-            result = await runner._handle_personality_command(event)
-
-        assert runner._ephemeral_system_prompt == ""
-        assert "cleared" in result.lower()
-
-    @pytest.mark.asyncio
-    async def test_default_clears_ephemeral_prompt(self, tmp_path):
-        runner = self._make_runner()
-        config_data = {"agent": {"personalities": {"helpful": "You are helpful."}}}
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(yaml.dump(config_data))
-
-        with patch("gateway.run._hermes_home", tmp_path):
-            event = self._make_event("default")
-            result = await runner._handle_personality_command(event)
-
-        assert runner._ephemeral_system_prompt == ""
-
-    @pytest.mark.asyncio
-    async def test_list_includes_none(self, tmp_path):
-        runner = self._make_runner()
-        config_data = {"agent": {"personalities": {"helpful": "You are helpful."}}}
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(yaml.dump(config_data))
-
-        with patch("gateway.run._hermes_home", tmp_path):
-            event = self._make_event("")
-            result = await runner._handle_personality_command(event)
-
-        assert "none" in result.lower()
-
-    @pytest.mark.asyncio
-    async def test_unknown_shows_none_in_available(self, tmp_path):
-        runner = self._make_runner()
-        config_data = {"agent": {"personalities": {"helpful": "You are helpful."}}}
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(yaml.dump(config_data))
-
-        with patch("gateway.run._hermes_home", tmp_path):
-            event = self._make_event("nonexistent")
-            result = await runner._handle_personality_command(event)
-
-        assert "none" in result.lower()
-
-    @pytest.mark.asyncio
-    async def test_empty_personality_list_uses_profile_display_path(self, tmp_path):
-        runner = self._make_runner(personalities={})
-        (tmp_path / "config.yaml").write_text(yaml.dump({"agent": {"personalities": {}}}))
-
-        with patch("gateway.run._hermes_home", tmp_path), \
-             patch("hermes_constants.display_hermes_home", return_value="~/.hermes/profiles/coder"):
-            event = self._make_event("")
-            result = await runner._handle_personality_command(event)
-
-        assert result == "No personalities configured in `~/.hermes/profiles/coder/config.yaml`"
 
 
 class TestPersonalityDictFormat:

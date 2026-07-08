@@ -67,7 +67,6 @@ CONFIGURABLE_TOOLSETS = [
     ("video",           "🎬 Video Analysis",            "video_analyze (requires video-capable model)"),
     ("image_gen",       "🎨 Image Generation",          "image_generate"),
     ("video_gen",       "🎬 Video Generation",          "video_generate (text/image/reference)"),
-    ("x_search",        "🐦 X (Twitter) Search",        "x_search (requires xAI OAuth or XAI_API_KEY)"),
     ("tts",             "🔊 Text-to-Speech",            "text_to_speech"),
     ("skills",          "📚 Skills",                    "list, view, manage"),
     ("todo",            "📋 Task Planning",             "todo"),
@@ -103,38 +102,7 @@ def gui_toolset_label(label: str) -> str:
 # who want it opt in via `hermes tools` → Video Generation, which walks
 # them through provider + model selection.
 #
-# X search is off by default for users without xAI credentials, but
-# auto-enables when SuperGrok OAuth tokens are stored OR XAI_API_KEY is set. The
-# `hermes tools` → X (Twitter) Search setup walks users through credential
-# setup. The tool's check_fn means the schema still won't appear to the
-# model if the credential later goes missing or expires.
-_DEFAULT_OFF_TOOLSETS = {"video", "video_gen", "x_search"}
-
-
-def _xai_credentials_present() -> bool:
-    """Cheap, side-effect-free check for usable xAI credentials.
-
-    Used to auto-enable the ``x_search`` toolset when the user has either
-    completed xAI Grok OAuth (SuperGrok / Premium+) or set
-    ``XAI_API_KEY``. Does NOT hit the network — only inspects the local
-    auth store and environment. The tool's runtime ``check_fn`` still
-    gates schema registration if creds later expire or get revoked.
-    """
-    try:
-        from hermes_cli.auth import _read_xai_oauth_tokens
-
-        _read_xai_oauth_tokens()
-        return True
-    except Exception:
-        pass
-    try:
-        from tools.xai_http import get_env_value as _xai_get_env_value
-
-        if str(_xai_get_env_value("XAI_API_KEY") or "").strip():
-            return True
-    except Exception:
-        pass
-    return bool(str(os.environ.get("XAI_API_KEY") or "").strip())
+_DEFAULT_OFF_TOOLSETS = {"video", "video_gen"}
 
 # Platform-scoped toolsets: only appear in the `hermes tools` checklist for
 # these platforms, and only resolve/save for these platforms.  A toolset
@@ -261,13 +229,6 @@ TOOL_CATEGORIES = {
                 "tts_provider": "openai",
             },
             {
-                "name": "xAI TTS",
-                "tag": "Grok voices — uses xAI Grok OAuth or XAI_API_KEY",
-                "env_vars": [],
-                "tts_provider": "xai",
-                "post_setup": "xai_grok",
-            },
-            {
                 "name": "ElevenLabs",
                 "badge": "paid",
                 "tag": "Most natural voices",
@@ -353,7 +314,7 @@ TOOL_CATEGORIES = {
         "name": "Image Generation",
         "icon": "🎨",
         # Per-provider rows for FAL.ai (`plugins/image_gen/fal`), OpenAI,
-        # OpenAI Codex, and xAI are injected at runtime from each
+        # and OpenAI Codex are injected at runtime from each
         # ``plugins.image_gen.<vendor>`` package via
         # ``_plugin_image_gen_providers()`` in ``_visible_providers``.
         # Only non-provider UX setup-flow rows remain here:
@@ -380,7 +341,7 @@ TOOL_CATEGORIES = {
         "icon": "🎬",
         # "Nous Subscription" row mirrors the image_gen pattern — managed
         # FAL video generation billed via the Nous Portal.  Plugin-backed
-        # provider rows (FAL BYOK, xAI, …) are injected at runtime by
+        # provider rows are injected at runtime by
         # ``_plugin_video_gen_providers()`` in ``_visible_providers``.
         "providers": [
             {
@@ -396,39 +357,6 @@ TOOL_CATEGORIES = {
                 # and video_gen.use_gateway = True so the FAL plugin
                 # routes through the managed queue gateway.
                 "video_gen_plugin_name": "fal",
-            },
-        ],
-    },
-    "x_search": {
-        "name": "X (Twitter) Search",
-        "setup_title": "Select xAI Credential Source",
-        "setup_note": (
-            "Hermes routes X searches through xAI's built-in x_search "
-            "Responses tool. Both credential sources hit the same "
-            "https://api.x.ai/v1/responses endpoint — pick whichever you "
-            "already have. SuperGrok OAuth is preferred when both are set "
-            "(uses your subscription quota instead of API spend)."
-        ),
-        "icon": "🐦",
-        "providers": [
-            {
-                "name": "xAI Grok OAuth (SuperGrok / Premium+)",
-                "badge": "subscription",
-                "tag": "Browser login at accounts.x.ai — no API key required",
-                "env_vars": [],
-                "post_setup": "xai_grok",
-            },
-            {
-                "name": "xAI API key",
-                "badge": "paid",
-                "tag": "Direct xAI API billing via XAI_API_KEY",
-                "env_vars": [
-                    {
-                        "key": "XAI_API_KEY",
-                        "prompt": "xAI API key",
-                        "url": "https://console.x.ai/",
-                    },
-                ],
             },
         ],
     },
@@ -839,72 +767,6 @@ def _run_post_setup(post_setup_key: str):
         _print_info("    Restart Hermes for tracing to take effect.")
         _print_info("    Verify: hermes plugins list")
 
-    elif post_setup_key == "xai_grok":
-        # Shared credential bootstrap for any picker entry that talks to xAI
-        # (TTS, Video Gen, future Image Gen, etc.). Accepts either a
-        # SuperGrok-tier OAuth bearer token (preferred — billed against the
-        # user's existing subscription) or a raw XAI_API_KEY from
-        # console.x.ai. The picker entries declare empty env_vars so we
-        # drive the full auth UX here.
-        try:
-            from hermes_cli.auth import get_xai_oauth_auth_status
-            oauth_logged_in = bool(get_xai_oauth_auth_status().get("logged_in"))
-        except Exception:
-            oauth_logged_in = False
-        existing_api_key = get_env_value("XAI_API_KEY")
-
-        if oauth_logged_in:
-            _print_success(
-                "    xAI will use your xAI Grok OAuth (SuperGrok / Premium+) credentials"
-            )
-            return
-        if existing_api_key:
-            _print_success("    xAI will use your existing XAI_API_KEY")
-            return
-
-        _print_info("    xAI needs credentials. Choose one:")
-        try:
-            from hermes_cli.setup import (
-                _run_xai_oauth_login_from_setup,
-                prompt_choice,
-                prompt as _setup_prompt,
-            )
-            from hermes_cli.config import save_env_value
-        except Exception as exc:
-            _print_warning(f"    Could not load setup helpers: {exc}")
-            _print_info("    Run later: hermes auth add xai-oauth   (or set XAI_API_KEY)")
-            return
-
-        idx = prompt_choice(
-            "    How do you want xAI to authenticate?",
-            choices=[
-                "Sign in with xAI Grok OAuth (SuperGrok / Premium+) — browser login",
-                "Paste an xAI API key (console.x.ai)",
-                "Skip — configure later via `hermes auth add xai-oauth`",
-            ],
-            default=0,
-        )
-        if idx == 0:
-            if _run_xai_oauth_login_from_setup():
-                _print_success(
-                    "    Logged in — xAI will use these OAuth credentials"
-                )
-            else:
-                _print_warning(
-                    "    xAI Grok OAuth login did not complete. "
-                    "Run later: hermes auth add xai-oauth"
-                )
-        elif idx == 1:
-            api_key = _setup_prompt("    xAI API key", password=True)
-            if api_key:
-                save_env_value("XAI_API_KEY", api_key)
-                _print_success("    XAI_API_KEY saved")
-            else:
-                _print_warning(
-                    "    No API key provided. Run later: hermes auth add xai-oauth"
-                )
-        else:
-            _print_info("    xAI will remain inactive until credentials are configured.")
 
 
 def valid_post_setup_keys() -> Set[str]:
@@ -1120,17 +982,6 @@ def _get_platform_tools(
             if ts_tools and ts_tools.issubset(all_tool_names):
                 enabled_toolsets.add(ts_key)
 
-        # Auto-enable ``x_search`` when xAI credentials are configured.
-        # ``x_search`` is its own one-tool toolset that the composite does
-        # NOT include, so the subset loop never picks it up. Only fires when
-        # the user has not yet saved an explicit toolset list — once they do,
-        # the saved list is authoritative.
-        x_search_auto_enabled = (
-            _toolset_allowed_for_platform("x_search", platform)
-            and _xai_credentials_present()
-        )
-        if x_search_auto_enabled:
-            enabled_toolsets.add("x_search")
 
         default_off = set(_DEFAULT_OFF_TOOLSETS)
         # Legacy safety: if the platform's own name matches a default-off
@@ -1145,11 +996,6 @@ def _get_platform_tools(
         # (e.g. cron) that run through _get_platform_tools without an
         # explicit saved toolset list. Without this, Norbert's HA cron jobs
         # regressed after #14798 made cron honor per-platform tool config.
-        # Symmetric carve-out for x_search auto-enable (see the inject
-        # block above). Without this, the default_off subtraction would
-        # strip the entry we just added.
-        if x_search_auto_enabled and "x_search" in default_off:
-            default_off.remove("x_search")
         enabled_toolsets -= default_off
 
     # Recover non-configurable platform toolsets. These are part of a
@@ -2382,48 +2228,6 @@ def _configure_imagegen_model_for_plugin(plugin_name: str, config: dict) -> None
     _print_success(f"  Model set to: {chosen}")
 
 
-def _configure_xai_imagine_storage(section_name: str, config: dict) -> None:
-    """Prompt for xAI Imagine stored public URL behavior."""
-    section = config.setdefault(section_name, {})
-    if not isinstance(section, dict):
-        section = {}
-        config[section_name] = section
-    xai_cfg = section.setdefault("xai", {})
-    if not isinstance(xai_cfg, dict):
-        xai_cfg = {}
-        section["xai"] = xai_cfg
-    storage_cfg = xai_cfg.setdefault("storage", {})
-    if not isinstance(storage_cfg, dict):
-        storage_cfg = {}
-        xai_cfg["storage"] = storage_cfg
-
-    _print_warning(
-        "  xAI Imagine can store generated media and create reusable public URLs. "
-        "xAI may bill for stored files and public URL hosting."
-    )
-    idx = _prompt_choice(
-        "  Stored public URLs:",
-        [
-            "Enable public URLs without automatic expiry (recommended)",
-            "Disable stored public URLs",
-            "Enable public URLs for 2 days",
-        ],
-        default=0,
-    )
-    if idx == 1:
-        storage_cfg["enabled"] = False
-        _print_success("  xAI stored public URLs disabled")
-    elif idx == 2:
-        storage_cfg["enabled"] = True
-        storage_cfg["public_url"] = True
-        storage_cfg["expires_after"] = 2 * 24 * 60 * 60
-        _print_success("  xAI stored public URLs enabled for 2 days")
-    else:
-        storage_cfg["enabled"] = True
-        storage_cfg["public_url"] = True
-        storage_cfg["expires_after"] = None
-        _print_success("  xAI stored public URLs enabled without automatic expiry")
-
 
 def _select_plugin_image_gen_provider(plugin_name: str, config: dict) -> None:
     """Persist a plugin-backed image generation provider selection."""
@@ -2435,8 +2239,6 @@ def _select_plugin_image_gen_provider(plugin_name: str, config: dict) -> None:
     img_cfg["use_gateway"] = False
     _print_success(f"  image_gen.provider set to: {plugin_name}")
     _configure_imagegen_model_for_plugin(plugin_name, config)
-    if plugin_name == "xai":
-        _configure_xai_imagine_storage("image_gen", config)
 
 
 # ─── Video Generation Model Pickers ───────────────────────────────────────────
@@ -2537,8 +2339,6 @@ def _select_plugin_video_gen_provider(plugin_name: str, config: dict, *, use_gat
     vid_cfg["use_gateway"] = use_gateway
     _print_success(f"  video_gen.provider set to: {plugin_name}")
     _configure_videogen_model_for_plugin(plugin_name, config)
-    if plugin_name == "xai":
-        _configure_xai_imagine_storage("video_gen", config)
 
 
 def _write_provider_config(provider: dict, config: dict, *, managed_feature) -> None:

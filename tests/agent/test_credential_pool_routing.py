@@ -2,7 +2,6 @@
 
 Covers:
 1. CLI _resolve_turn_agent_config passes credential_pool to runtime dict
-2. Gateway _resolve_turn_agent_config passes credential_pool to runtime dict
 3. Eager fallback deferred when credential pool has credentials
 4. Eager fallback fires when no credential pool exists
 5. Full 429 rotation cycle: retry-same → rotate → exhaust → fallback
@@ -35,33 +34,6 @@ class TestCliTurnRoutePool:
         from cli import HermesCLI
         bound = HermesCLI._resolve_turn_agent_config.__get__(shell)
         route = bound("test message")
-
-        assert route["runtime"]["credential_pool"] is fake_pool
-
-
-# ---------------------------------------------------------------------------
-# 2. Gateway _resolve_turn_agent_config includes credential_pool
-# ---------------------------------------------------------------------------
-
-class TestGatewayTurnRoutePool:
-    def test_resolve_turn_includes_pool(self):
-        """Gateway's _resolve_turn_agent_config must pass credential_pool."""
-        from gateway.run import GatewayRunner
-
-        fake_pool = MagicMock(name="FakePool")
-        runner = SimpleNamespace(_service_tier=None)
-        runtime_kwargs = {
-            "api_key": "***",
-            "base_url": None,
-            "provider": "openai-codex",
-            "api_mode": "codex_responses",
-            "command": None,
-            "args": [],
-            "credential_pool": fake_pool,
-        }
-
-        bound = GatewayRunner._resolve_turn_agent_config.__get__(runner)
-        route = bound("test message", "gpt-5.4", runtime_kwargs)
 
         assert route["runtime"]["credential_pool"] is fake_pool
 
