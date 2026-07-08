@@ -678,36 +678,8 @@ def _read_config_model(profile_dir: Path) -> tuple:
 
 
 def _check_gateway_running(profile_dir: Path) -> bool:
-    """Check if a gateway is running for a given profile directory.
-
-    Primary signal is the profile's ``gateway.pid`` (verified against the
-    runtime lock).  That check fails closed whenever the lock isn't held by
-    *this* reader — which is exactly the case for a dashboard process that is
-    a separate s6 service from the gateway it's reporting on (Docker), or any
-    launch-service-managed gateway that left a fresh ``gateway_state.json`` but
-    no live PID file.  In those cases fall back to validating the PID recorded
-    in the profile's own ``gateway_state.json`` against the live process table,
-    mirroring the ``/api/status`` sidebar's liveness logic so the two surfaces
-    agree.  Parameterized by ``profile_dir`` so it never mutates ``HERMES_HOME``.
-    """
-    try:
-        from gateway.status import get_running_pid
-        if (
-            get_running_pid(profile_dir / "gateway.pid", cleanup_stale=False)
-            is not None
-        ):
-            return True
-    except Exception:
-        pass
-    try:
-        from gateway.status import (
-            get_runtime_status_running_pid,
-            read_runtime_status,
-        )
-        runtime = read_runtime_status(profile_dir / "gateway_state.json")
-        return get_runtime_status_running_pid(runtime, expected_home=profile_dir) is not None
-    except Exception:
-        return False
+    """Return whether the removed messaging gateway is running for a profile."""
+    return False
 
 
 # In-process cache for skill counts. Walking ``skills_dir.rglob("SKILL.md")``
@@ -1383,7 +1355,7 @@ def _stop_profile_backends(canon: str, profile_dir: Path) -> None:
         return
 
     try:
-        from gateway.status import _pid_exists, terminate_pid as _terminate_pid
+        from process_status import _pid_exists, terminate_pid as _terminate_pid
     except Exception:
         return
 
@@ -1592,138 +1564,18 @@ def delete_profile(name: str, yes: bool = False) -> Path:
 
 
 def _maybe_register_gateway_service(profile_name: str) -> None:
-    """Register a profile's gateway with s6 inside the container.
-
-    No-op on host (systemd/launchd/windows) — those backends raise
-    ``NotImplementedError`` on ``register_profile_gateway`` and the
-    existing per-profile unit-generation paths handle lifecycle.
-
-    Best-effort: any error (no backend detected, s6 not yet ready,
-    etc.) is logged and swallowed so profile creation doesn't fail
-    because the s6 supervision tree is in a weird state. The user
-    can re-register manually later via the gateway start command,
-    which goes through the same dispatch path.
-
-    Port selection: each supervised profile gateway loads its own
-    ``HERMES_HOME`` and binds the port resolved by ``gateway/config.py``
-    from that profile's environment — ``API_SERVER_PORT`` (or
-    ``platforms.api_server.extra.port`` in the profile's
-    ``config.yaml``), defaulting to 8642. There is no ``[gateway] port``
-    key and no Python-side allocator (PR #30136 review item I5 retired
-    the SHA-256-derived range [9200, 9800) as dead code), so two
-    profiles that both leave the port at its default will both try to
-    bind 8642 — give each profile a distinct ``API_SERVER_PORT`` in its
-    ``.env``.
-
-    Host short-circuit: check ``detect_service_manager()`` first and
-    return immediately if it isn't ``"s6"``. This keeps host
-    (systemd/launchd/windows) profile creation completely silent —
-    no ``get_service_manager()`` call, no exception path, no chance
-    of the ``⚠ Could not register s6 gateway service`` warning ever
-    rendering on a non-container machine. The earlier
-    ``supports_runtime_registration()`` check still catches the case
-    where detection somehow returns ``"s6"`` but the backend isn't
-    actually the S6 one.
-    """
-    try:
-        from hermes_cli.service_manager import detect_service_manager
-        if detect_service_manager() != "s6":
-            return  # host path — silent, no registration needed
-        from hermes_cli.service_manager import get_service_manager
-        mgr = get_service_manager()
-    except RuntimeError:
-        return  # no backend on this host — nothing to do
-    except Exception:
-        # Defensive: detect_service_manager failed for some other
-        # reason. Stay silent on host rather than printing a confusing
-        # s6 warning to users who have never touched the container.
-        return
-    if not mgr.supports_runtime_registration():
-        return  # host backend; no-op
-    try:
-        mgr.register_profile_gateway(profile_name, start_now=False)
-    except ValueError:
-        # Already registered (e.g. the container-boot reconciler ran
-        # first and brought up a stale slot). That's fine.
-        pass
-    except Exception as exc:
-        # Don't fail profile create over a supervision-tree hiccup.
-        print(f"⚠ Could not register s6 gateway service: {exc}")
+    """No-op: per-profile gateway services were removed in the to-B fork."""
+    return None
 
 
 def _maybe_unregister_gateway_service(profile_name: str) -> None:
-    """Tear down a profile's s6 gateway service inside the container.
-
-    No-op on host. Idempotent: absent services are silently skipped
-    by ``unregister_profile_gateway``.
-
-    Same host short-circuit as :func:`_maybe_register_gateway_service`
-    — see that docstring.
-    """
-    try:
-        from hermes_cli.service_manager import detect_service_manager
-        if detect_service_manager() != "s6":
-            return  # host path — silent
-        from hermes_cli.service_manager import get_service_manager
-        mgr = get_service_manager()
-    except RuntimeError:
-        return
-    except Exception:
-        return
-    if not mgr.supports_runtime_registration():
-        return
-    try:
-        mgr.unregister_profile_gateway(profile_name)
-    except Exception as exc:
-        print(f"⚠ Could not unregister s6 gateway service: {exc}")
+    """No-op: per-profile gateway services were removed in the to-B fork."""
+    return None
 
 
 def _cleanup_gateway_service(name: str, profile_dir: Path) -> None:
-    """Disable and remove systemd/launchd service for a profile."""
-    import platform as _platform
-
-    # Derive service name for this profile
-    # Temporarily set HERMES_HOME so _profile_suffix resolves correctly
-    old_home = os.environ.get("HERMES_HOME")
-    try:
-        os.environ["HERMES_HOME"] = str(profile_dir)
-        from hermes_cli.gateway import get_service_name, get_launchd_plist_path
-
-        if _platform.system() == "Linux":
-            svc_name = get_service_name()
-            svc_file = Path.home() / ".config" / "systemd" / "user" / f"{svc_name}.service"
-            if svc_file.exists():
-                subprocess.run(
-                    ["systemctl", "--user", "disable", svc_name],
-                    capture_output=True, check=False, timeout=10,
-                )
-                subprocess.run(
-                    ["systemctl", "--user", "stop", svc_name],
-                    capture_output=True, check=False, timeout=10,
-                )
-                svc_file.unlink(missing_ok=True)
-                subprocess.run(
-                    ["systemctl", "--user", "daemon-reload"],
-                    capture_output=True, check=False, timeout=10,
-                )
-                print(f"✓ Service {svc_name} removed")
-
-        elif _platform.system() == "Darwin":
-            plist_path = get_launchd_plist_path()
-            if plist_path.exists():
-                subprocess.run(
-                    ["launchctl", "unload", str(plist_path)],
-                    capture_output=True, check=False, timeout=10,
-                )
-                plist_path.unlink(missing_ok=True)
-                print(f"✓ Launchd service removed")
-    except Exception as e:
-        print(f"⚠ Service cleanup: {e}")
-    finally:
-        if old_home is not None:
-            os.environ["HERMES_HOME"] = old_home
-        elif "HERMES_HOME" in os.environ:
-            del os.environ["HERMES_HOME"]
+    """No-op: messaging gateway services were removed in the to-B fork."""
+    return None
 
 
 def _stop_gateway_process(profile_dir: Path) -> None:
@@ -1743,8 +1595,8 @@ def _stop_gateway_process(profile_dir: Path) -> None:
         # _signal.SIGKILL raises AttributeError at import time on Windows,
         # and raw os.kill with SIGTERM doesn't cascade to child processes
         # the same way taskkill /T does.
-        from gateway.status import terminate_pid as _terminate_pid
-        from gateway.status import _pid_exists
+        from process_status import terminate_pid as _terminate_pid
+        from process_status import _pid_exists
         _terminate_pid(pid)  # graceful first
         # Wait up to 10s for graceful shutdown. On Windows, os.kill(pid, 0)
         # is NOT a no-op — use the handle-based existence check.

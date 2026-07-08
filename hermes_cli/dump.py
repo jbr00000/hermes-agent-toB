@@ -125,20 +125,7 @@ def _redact(value: str) -> str:
 
 def _gateway_status() -> str:
     """Return a short gateway status string."""
-    try:
-        from hermes_cli.gateway import get_gateway_runtime_snapshot
-
-        snapshot = get_gateway_runtime_snapshot()
-        if snapshot.running:
-            mode = snapshot.manager
-            if snapshot.has_process_service_mismatch:
-                mode = "manual"
-            return f"running ({mode}, pid {snapshot.gateway_pids[0]})"
-        if snapshot.service_installed and not snapshot.service_running:
-            return f"stopped ({snapshot.manager})"
-        return f"stopped ({snapshot.manager})"
-    except Exception:
-        return "unknown" if sys.platform.startswith(("linux", "darwin")) else "N/A"
+    return "removed in to-B build"
 
 
 def _count_skills(hermes_home: Path) -> int:
@@ -177,25 +164,8 @@ def _cron_summary(hermes_home: Path) -> str:
 
 
 def _configured_platforms() -> list[str]:
-    """Return list of configured messaging platform names."""
-    checks = {
-        "telegram": "TELEGRAM_BOT_TOKEN",
-        "discord": "DISCORD_BOT_TOKEN",
-        "slack": "SLACK_BOT_TOKEN",
-        "signal": "SIGNAL_HTTP_URL",
-        "email": "EMAIL_ADDRESS",
-        "sms": "TWILIO_ACCOUNT_SID",
-        "matrix": "MATRIX_HOMESERVER_URL",
-        "mattermost": "MATTERMOST_URL",
-        "homeassistant": "HASS_TOKEN",
-        "dingtalk": "DINGTALK_CLIENT_ID",
-        "feishu": "FEISHU_APP_ID",
-        "wecom": "WECOM_BOT_ID",
-        "wecom_callback": "WECOM_CALLBACK_CORP_ID",
-        "weixin": "WEIXIN_ACCOUNT_ID",
-        "qqbot": "QQ_APP_ID",
-    }
-    return [name for name, env in checks.items() if os.getenv(env)]
+    """Messaging platform adapters are removed in the to-B build."""
+    return []
 
 
 def _memory_provider(config: dict) -> str:

@@ -192,10 +192,7 @@ def _network_listener_without_auth(config: Optional[dict]) -> list[str]:
     hard fail-closed guards but surfaces the posture proactively at startup.
     """
     findings: list[str] = []
-    try:
-        from gateway.platforms.base import is_network_accessible
-    except Exception:
-        return findings
+    from network_utils import is_network_accessible
 
     cfg = config or {}
 

@@ -1088,7 +1088,7 @@ class LocalEnvironment(BaseEnvironment):
         try:
             if _IS_WINDOWS:
                 try:
-                    from gateway.status import terminate_pid
+                    from process_status import terminate_pid
 
                     terminate_pid(proc.pid, force=True)
                 except Exception:

@@ -890,45 +890,9 @@ class PluginContext:
         install_hint: str = "",
         **entry_kwargs: Any,
     ) -> None:
-        """Register a gateway platform adapter.
-
-        The adapter_factory receives a ``PlatformConfig`` and returns a
-        ``BasePlatformAdapter`` subclass instance.  The gateway calls
-        ``check_fn()`` before instantiation to verify dependencies.
-
-        Extra keyword arguments are forwarded to ``PlatformEntry`` (e.g.
-        ``setup_fn``, ``emoji``, ``allowed_users_env``, ``platform_hint``).
-        Unknown keys raise TypeError from the dataclass constructor.
-
-        Example::
-
-            ctx.register_platform(
-                name="irc",
-                label="IRC",
-                adapter_factory=lambda cfg: IRCAdapter(cfg),
-                check_fn=lambda: True,
-                emoji="💬",
-                setup_fn=irc_interactive_setup,
-            )
-        """
-        from gateway.platform_registry import platform_registry, PlatformEntry
-
-        entry_kwargs.setdefault("plugin_name", self.manifest.name)
-        entry = PlatformEntry(
-            name=name,
-            label=label,
-            adapter_factory=adapter_factory,
-            check_fn=check_fn,
-            validate_config=validate_config,
-            required_env=required_env or [],
-            install_hint=install_hint,
-            source="plugin",
-            **entry_kwargs,
-        )
-        platform_registry.register(entry)
-        self._manager._plugin_platform_names.add(name)
+        """Compatibility no-op for removed gateway platform adapters."""
         logger.debug(
-            "Plugin %s registered platform: %s",
+            "Plugin %s attempted to register removed platform adapter: %s",
             self.manifest.name,
             name,
         )
@@ -1660,45 +1624,15 @@ class PluginManager:
         return name
 
     def _register_deferred_platform(self, manifest: PluginManifest) -> None:
-        """Register a lazy loader for a bundled platform plugin.
-
-        The platform adapter module is imported only when the gateway / cron /
-        setup / send_message path first asks the ``platform_registry`` for this
-        platform. Until then we record a lightweight ``LoadedPlugin`` so
-        ``hermes plugins list`` still shows the platform as available, and we
-        hand the registry a loader that runs the normal eager-load path.
-        """
+        """Record a disabled bundled platform plugin in the to-B fork."""
         lookup_key = manifest.key or manifest.name
-        platform_name = self._platform_name_from_manifest(manifest)
-
-        # Record an enabled placeholder for introspection (`hermes plugins
-        # list`). The real module load swaps in a fully-populated LoadedPlugin
-        # (tools/hooks/commands attribution) when the loader fires.
-        loaded = LoadedPlugin(manifest=manifest, enabled=True)
-        loaded.deferred = True
+        loaded = LoadedPlugin(
+            manifest=manifest,
+            enabled=False,
+            error="Gateway platform adapters are disabled in the to-B build.",
+        )
         self._plugins[lookup_key] = loaded
-
-        def _loader(_manifest: PluginManifest = manifest) -> None:
-            self._load_plugin(_manifest)
-
-        try:
-            from gateway.platform_registry import platform_registry
-
-            platform_registry.register_deferred(platform_name, _loader)
-            logger.debug(
-                "Registered deferred platform loader: %s (plugin=%s)",
-                platform_name,
-                lookup_key,
-            )
-        except Exception:
-            # If the registry import fails for any reason, fall back to eager
-            # loading so the platform is never silently lost.
-            logger.debug(
-                "Deferred platform registration failed for '%s'; eager-loading",
-                lookup_key,
-                exc_info=True,
-            )
-            self._load_plugin(manifest)
+        logger.debug("Skipped bundled platform plugin in to-B build: %s", lookup_key)
 
     def _load_plugin(self, manifest: PluginManifest) -> None:
         """Import a plugin module and call its ``register(ctx)`` function."""

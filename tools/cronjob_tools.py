@@ -309,39 +309,14 @@ def _origin_from_env() -> Optional[Dict[str, str]]:
 
 
 def _local_delivery_notice(job: Dict[str, Any], user_deliver: Optional[str]) -> Optional[str]:
-    """Return an informational notice when a created job won't deliver anywhere.
-
-    TUI/CLI sessions cannot be captured as a cron ``origin`` (no
-    ``HERMES_SESSION_PLATFORM``/``CHAT_ID`` is set for them), so a
-    ``deliver="origin"`` request — or an omitted ``deliver`` that defaults to
-    origin-or-local — produces a job that runs and saves output to
-    ``last_output`` but is never delivered back into the session. This is by
-    design (there is no live-delivery channel for local sessions), but silently
-    dropping the user's "tell me when it runs" intent is the trap reported in
-    #51568. Surface it at create time so the agent can relay it instead of
-    promising a delivery that never happens.
-
-    Returns ``None`` when the user explicitly asked for ``local`` (no surprise),
-    or when the job resolves to a real delivery target.
-    """
+    """Return a notice that cron output is persisted, not chat-delivered."""
     # An explicit local request is exactly what the user asked for — no notice.
     if (user_deliver or "").strip().lower() == "local":
         return None
-    try:
-        from cron.scheduler import _resolve_delivery_targets
-
-        if _resolve_delivery_targets(job):
-            return None  # Will actually deliver somewhere — nothing to flag.
-    except Exception:
-        # If resolution can't be evaluated, fall back to the origin signal.
-        if job.get("origin"):
-            return None
     return (
         "This is a local-only cron job: its output is saved (view it with "
-        "cronjob(action='list')) but will NOT be delivered back into this "
-        "session — CLI/TUI sessions have no live-delivery channel. To be "
-        "notified when it runs, recreate or update the job with deliver set to "
-        "a gateway-connected platform, e.g. deliver='telegram' or deliver='all'."
+        "cronjob(action='list')) and is not delivered to a chat platform in "
+        "the to-B build."
     )
 
 
@@ -427,14 +402,9 @@ def _normalize_optional_job_value(value: Optional[Any], *, strip_trailing_slash:
 def _normalize_deliver_param(value: Any) -> Optional[str]:
     """Normalize a user-supplied ``deliver`` value to the canonical string form.
 
-    The cron schema documents ``deliver`` as a string (``"local"``, ``"origin"``,
-    ``"telegram"``, ``"telegram:chat_id[:thread_id]"``, or comma-separated combos).
-    Some callers — MCP clients passing arrays, scripts building the payload as a
-    list — supply ``["telegram"]``.  ``create_job``/``update_job`` store it as-is,
-    and the scheduler's ``str(deliver).split(",")`` then serializes the list to
-    the literal ``"['telegram']"`` which is not a known platform.  Flatten lists
-    / tuples at the API boundary so storage is always a string.  Returns ``None``
-    for ``None``/empty so callers can treat it as "not supplied".
+    The to-B build persists cron output locally. This helper keeps legacy list
+    inputs readable in stored job records and normalizes empty values to
+    ``None`` so callers can treat them as "not supplied".
     """
     if value is None:
         return None
@@ -1005,7 +975,7 @@ Important safety rule: cron-run sessions should not recursively schedule more cr
             },
             "deliver": {
                 "type": "string",
-                "description": "Omit this parameter to auto-deliver back to the current chat and topic (recommended). Auto-detection preserves thread/topic context. Only set explicitly when the user asks to deliver somewhere OTHER than the current conversation. Values: 'origin' (same as omitting), 'local' (no delivery, save only), 'all' (fan out to every connected home channel), or platform:chat_id:thread_id for a specific destination. Combine with comma: 'origin,all' delivers to the origin plus every other connected channel. Examples: 'telegram:-1001234567890:17585', 'discord:#engineering', 'sms:+15551234567', 'all'. WARNING: 'platform:chat_id' without :thread_id loses topic targeting. 'all' resolves at fire time, so a job created before a channel was wired up will pick it up automatically once connected."
+                "description": "To-B build: cron output is saved locally in last_output and returned through list/status/API surfaces. Use 'local' or omit this parameter. Legacy platform delivery values are accepted for old records but ignored."
             },
             "skills": {
                 "type": "array",
@@ -1073,7 +1043,7 @@ Important safety rule: cron-run sessions should not recursively schedule more cr
             },
             "attach_to_session": {
                 "type": "boolean",
-                "description": "When True, this job becomes CONTINUABLE: the user can reply to its delivery and the agent has the brief in context instead of asking 'what is that?'. On thread-capable platforms (Telegram topics, Discord/Slack threads) a dedicated thread is opened for the job and its replies; on DM-only platforms (WhatsApp/Signal) the brief is mirrored into the origin DM session. Use this for conversational recurring jobs the user will reply to — daily briefings, reminders that kick off follow-up work. Leave unset for fire-and-forget alerts/watchdogs. Overrides the global cron.mirror_delivery config for this one job. Only the origin chat is touched (never fan-out targets); no effect when deliver='local'."
+                "description": "Deprecated compatibility flag. Chat-session continuation is disabled in the to-B build because cron output is persisted locally instead of delivered to messaging platforms."
             },
         },
         "required": ["action"]
