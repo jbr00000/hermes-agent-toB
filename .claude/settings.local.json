@@ -43,7 +43,13 @@
       "Bash(D:/Anaconda/envs/hermes/python.exe -c \"import tools.terminal_tool; print\\('terminal_tool imports OK'\\)\")",
       "Bash(D:/Anaconda/envs/hermes/python.exe -c \"import tools.terminal_tool, tools.environments.docker, tools.environments.local, run_agent, model_tools, toolsets, hermes_cli.main; print\\('imports OK'\\)\")",
       "Bash(docker pull *)",
-      "Bash(awk '{print $5, $9}')"
+      "Bash(awk '{print $5, $9}')",
+      "Bash(python -m py_compile run_agent.py)",
+      "Bash(ruff check *)",
+      "Bash(python -m py_compile main_debug.py)",
+      "Bash(grep -v \"/\\\\.venv/\")",
+      "Bash(grep \"\\\\.py$\")",
+      "Bash(xargs wc -l)"
     ]
   }
 }

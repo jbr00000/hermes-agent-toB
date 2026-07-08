@@ -1,23 +1,77 @@
 #!/usr/bin/env python3
 """
-AI Agent Runner with Tool Calling
+═══════════════════════════════════════════════════════════════════════════════
+【中文导航】run_agent.py —— AIAgent 核心类（to-B Hermes 的对话核心）
+═══════════════════════════════════════════════════════════════════════════════
 
-This module provides a clean, standalone agent that can execute AI models
-with tool calling capabilities. It handles the conversation loop, tool execution,
-and response management.
+■ 这个文件是什么
+  定义 ``AIAgent`` 类——整个 agent 的核心对象。to-B 无头服务（``server/``）每收到
+  一个 ``/chat`` 请求，就 ``build_agent()`` 新建一个 ``AIAgent``，跑一轮对话循环后丢弃。
+  CLI / gateway 也是围绕它构建。
 
-Features:
-- Automatic tool calling loop until completion
-- Configurable model parameters
-- Error handling and recovery
-- Message history management
-- Support for multiple model providers
+■ 最重要的认知：本文件大量是「转发器（forwarder）」
+  ``AIAgent`` 体积庞大（5900+ 行），但真正干活的重逻辑已被拆到 ``agent/`` 子模块。
+  本文件里很多方法只有一行 ``from agent.xxx import yyy; return yyy(self, ...)``。
+  三个最关键的入口都是转发器，看实现要去 ``agent/``：
 
-Usage:
-    from run_agent import AIAgent
-    
-    agent = AIAgent(base_url="http://localhost:30000/v1", model="claude-opus-4-20250514")
-    response = agent.run_conversation("Tell me about the latest Python updates")
+      AIAgent.__init__         → agent/agent_init.py::init_agent
+      AIAgent.run_conversation → agent/conversation_loop.py::run_conversation   ★对话主循环
+      AIAgent.chat             → 包一层 run_conversation，只返回 final_response
+      AIAgent._build_assistant_message / handle_function_call 等 → agent/chat_completion_helpers.py
+
+  所以阅读本文件的重点不是「循环逻辑」（那在 conversation_loop.py），而是：
+  「AIAgent 对象上挂了哪些状态、哪些 helper 在维护这些状态」。
+
+■ 对话循环一句话（细节见 conversation_loop.py）
+  ``while (迭代未超 and 预算有余) or 宽限: 调模型 → 有 tool_calls 就执行工具把结果
+  塞回上下文 continue → 没有就把最终回答 append 后 break``。
+
+■ 必须遵守的硬不变量（改代码时逐条核对）
+  1. 角色严格交替：绝不连续两条同 role 消息；工具结果 role 是 ``"tool"`` 不是 ``"user"``。
+  2. prompt cache 神圣：会话生命期内 system prompt 必须 byte-stable；唯一例外是上下文压缩。
+  3. reasoning（思考内容）内部存 ``assistant_msg["reasoning"]``，发 API 时拷成
+     ``reasoning_content`` 后删掉 ``reasoning`` 字段。
+  4. 文本文件 I/O 一律带 ``encoding=``（Windows cp1252 会乱码）。
+
+■ 目录（按代码出现顺序；用搜索 ``【§X】`` 跳转到对应 banner）
+
+  模块级：
+    【§0】 模块级辅助函数 + _StreamErrorEvent 异常
+
+  AIAgent 类内（从上到下）：
+    【§A】 构造、会话状态、会话 DB 行管理（__init__/reset_session_state/switch_model）
+    【§B】 UI/状态输出（_vprint/_emit_status/notice/重试缓冲 buffer）
+    【§C】 流式诊断、错误归因、辅助运行时（stream_diag/summarize_api_error 前置）
+    【§D】 Provider/URL 识别 + 请求超时计算（openai/azure/copilot/openrouter/stale）
+    【§E】 Prompt cache / Responses API 路由 / max_tokens / think 块处理
+    【§F】 后台 review（记忆/skill）+ 记忆写入元数据 + user 消息持久化覆写
+    【§G】 会话 DB 持久化 + 消息修复 + trajectory 落盘（_flush_messages_to_session_db）
+    【§I】 API 错误处理与脱敏（entitlement/summarize_api_error/mask_api_key）
+    【§J】 Plugin Hook 系统（api_request_error / payload 脱敏 / sanitization）
+    【§K】 会话 JSON 快照日志 + 内容脱敏
+    【§L】 中断（interrupt）与插话（steer）——跨线程控制工具循环
+    【§M】 文件改动校验 + 轮次结束说明 footer（防「说了改其实没改」）
+    【§N】 活动/限流/额度捕获（rate-limit / nous-credits 头解析）
+    【§O】 记忆 provider + 上下文引擎的生命周期（shutdown/commit/sync）
+    【§P】 资源释放 release_clients / close + todo 状态恢复
+    【§Q】 系统提示核心构建 + 消息/工具调用清洗 + call_id 派生
+    【§S】 OpenAI 客户端管理（建/关/换/keepalive/请求级 client）
+    【§T】 各 provider 凭据刷新 + HTTP 头部（codex/nous/vertex/copilot/anthropic）
+    【§U】 凭据池恢复 + Anthropic 客户端
+    【§V】 流式交付 / 可中断 API 调用 / failover（_fire_stream_delta/try_activate_fallback）
+    【§W】 视觉/多模态处理（图片降级、vision_analyze 文字回退）
+    【§X】 Provider 专属消息准备 + API kwargs 构建（qwen/lmstudio/github/reasoning）
+    【§Y】 assistant 消息构建 + reasoning 回放 + tool_call 清洗
+    【§Z】 上下文压缩包装 + 工具护栏（guardrail）
+    【§AA】工具执行分发 + 对话主入口（_execute_tool_calls/run_conversation/chat）
+
+  模块尾部：
+    【§AB】main() —— 把本文件当 CLI 直接跑的入口（admin/调试用，非产品路径）
+
+■ 配套阅读
+  ``agent/conversation_loop.py``（真循环）、``agent/agent_init.py``（真构造）、
+  ``agent/chat_completion_helpers.py``（消息/客户端细节）、``model_tools.py``（工具分发）。
+═══════════════════════════════════════════════════════════════════════════════
 """
 
 # IMPORTANT: hermes_bootstrap must be the very first import — UTF-8 stdio
@@ -65,6 +119,12 @@ from types import SimpleNamespace
 from hermes_constants import get_hermes_home
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# 【§0 · 模块级辅助函数 + 异常类】
+# AIAgent 类之前的一组模块级工具：会话 source/cwd 推断、敏感 header 构造
+# （routermint / qwen portal）、凭据池限流判定、session 文件名净化，以及
+# _StreamErrorEvent（流式错误事件）。大多被 AIAgent 的方法引用。
+# ═══════════════════════════════════════════════════════════════════════
 def _launch_cwd_for_session(source: str) -> Optional[str]:
     """Working directory to stamp on a new session row, or None.
 
@@ -408,6 +468,13 @@ class AIAgent:
     for AI models that support function calling.
     """
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # 【§A · 构造、会话状态、会话 DB 行管理】
+    # __init__ 是转发器（真身在 agent/agent_init.py）。本段还管：会话 DB 行的
+    # 懒创建（_ensure_db_session）、上下文引擎在会话切换时的生命周期回调
+    # （_transition_context_engine_session）、reset_session_state（清零所有
+    # per-session token 计数器）、LM Studio 预加载、运行时换模型（switch_model）。
+    # ═══════════════════════════════════════════════════════════════════════
     _TOOL_CALL_ARGUMENTS_CORRUPTION_MARKER = (
         "[hermes-agent: tool call arguments were corrupted in this session and "
         "have been dropped to keep the conversation alive. See issue #15236.]"
@@ -800,6 +867,13 @@ class AIAgent:
         from agent.agent_runtime_helpers import switch_model
         return switch_model(self, new_model, new_provider, api_key, base_url, api_mode)
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # 【§B · UI / 状态输出 / 重试缓冲】
+    # 所有面向用户/驱动的输出咽喉：_safe_print（防 broken pipe）、_vprint（流式
+    # 期间静音）、_emit_status/_emit_warning/_emit_notice（CLI+gateway 双通道）、
+    # 以及重试/降级状态缓冲（_buffer_*）——重试噪声先攒着，成功就丢、彻底失败才回放。
+    # 全部 fail-open：输出异常绝不打断 agent 循环。
+    # ═══════════════════════════════════════════════════════════════════════
     def _safe_print(self, *args, **kwargs):
         """Print that silently handles broken pipes / closed stdout.
 
@@ -1046,6 +1120,12 @@ class AIAgent:
         self._codex_reasoning_replay_enabled = False
         return {"messages": stripped_messages, "items": stripped_items}
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # 【§C · 流式诊断、错误归因、辅助运行时】
+    # 流式断流/解析错误的诊断与日志（stream_diag 系列，实现在 agent/stream_diag.py）、
+    # 异常链展平、provider 流解析错误识别、auxiliary（辅助模型，如压缩）失败上报、
+    # 当前主运行时快照。_check_compression_model_feasibility 是压缩可行性的懒检查入口。
+    # ═══════════════════════════════════════════════════════════════════════
     # Stream-diagnostic class header preserved for backward compat —
     # actual list lives in ``agent.stream_diag.STREAM_DIAG_HEADERS``.
     from agent.stream_diag import STREAM_DIAG_HEADERS as _STREAM_DIAG_HEADERS  # noqa: E402
@@ -1151,6 +1231,12 @@ class AIAgent:
         from agent.conversation_compression import replay_compression_warning
         replay_compression_warning(self)
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # 【§D · Provider/URL 识别 + 请求超时计算】
+    # 按 base_url 判定 provider 归属（直连 OpenAI / Azure / GitHub Copilot /
+    # OpenRouter），决定调用形态；_resolved_api_call_timeout* 算每次请求的超时
+    # （含推理模型的 stale-timeout 地板，防 cloud gateway 在思考阶段被 idle-kill）。
+    # ═══════════════════════════════════════════════════════════════════════
     def _is_direct_openai_url(self, base_url: str = None) -> bool:
         """Return True when a base URL targets OpenAI's native API."""
         if base_url is not None:
@@ -1327,6 +1413,12 @@ class AIAgent:
         """Return True when the base URL targets OpenRouter."""
         return base_url_host_matches(self._base_url_lower, "openrouter.ai")
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # 【§E · Prompt cache / Responses API 路由 / max_tokens / think 块】
+    # Anthropic prompt cache 策略、哪些模型必须走 Responses API（gpt-5.x）、
+    # max_tokens vs max_completion_tokens 的 provider 选择、<think> 块剥离与
+    # 「只输出思考没正文」检测、Ollama-GLM 的 stop 误报修正、reasoning 抽取。
+    # ═══════════════════════════════════════════════════════════════════════
     def _anthropic_prompt_cache_policy(
         self,
         *,
@@ -1539,6 +1631,12 @@ class AIAgent:
         from agent.agent_runtime_helpers import extract_reasoning
         return extract_reasoning(self, assistant_message)
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # 【§F · 后台 review + 记忆写入元数据 + user 消息持久化覆写】
+    # 后台起线程评审本轮对话要不要更新记忆/skill 库（_spawn_background_review，
+    # 实现在 agent/background_review.py）；构造记忆写入的溯源元数据；以及把
+    # 「API 用的合成 user 提示」替换回干净文本再落库的覆写逻辑（防污染 transcript）。
+    # ═══════════════════════════════════════════════════════════════════════
     def _cleanup_task_resources(self, task_id: str) -> None:
         """Forwarder — see ``agent.chat_completion_helpers.cleanup_task_resources``."""
         from agent.chat_completion_helpers import cleanup_task_resources
@@ -1645,6 +1743,12 @@ class AIAgent:
                 if timestamp is not None:
                     msg["timestamp"] = timestamp
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # 【§G · 会话 DB 持久化 + 消息序列修复 + trajectory 落盘】
+    # 任何退出路径都把消息写进 state.db（_persist_session / _flush_messages_to_session_db，
+    # 用 _DB_PERSISTED_MARKER 做幂等去重）；修复角色交替违规；剥离尾部空响应脚手架；
+    # 可选地把对话存成 JSONL trajectory 样本。落库是 append-only，绝不重复写。
+    # ═══════════════════════════════════════════════════════════════════════
     def _persist_session(self, messages: List[Dict], conversation_history: List[Dict] = None):
         """Save session state to both JSON log and SQLite on any exit path.
 
@@ -1939,6 +2043,12 @@ class AIAgent:
         trajectory = self._convert_to_trajectory_format(messages, user_query, completed)
         _save_trajectory_to_file(trajectory, self.model, completed)
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # 【§I · API 错误处理与脱敏】
+    # 把 provider 返回的各种错误（entitlement 403、Cloudflare HTML 页、JSON body、
+    # 空响应）归因成一行人类可读文本；给 xAI 的权限 403 追加「X Premium+ 不含 API」
+    # 提示；API key 在日志里脱敏。所有 redact 走 redact_sensitive_text。
+    # ═══════════════════════════════════════════════════════════════════════
     @staticmethod
     def _is_entitlement_failure(
         error_context: Optional[Dict[str, Any]],
@@ -2206,6 +2316,12 @@ class AIAgent:
         from agent.agent_runtime_helpers import extract_api_error_context
         return extract_api_error_context(error)
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # 【§J · Plugin Hook 系统】
+    # 给 post_api_request / api_request_error 等 plugin hook 准备载荷：递归把
+    # 任意对象 JSON 化、深度/长度截断、敏感 key（api_key/authorization/...）脱敏。
+    # 失败一律吞掉——hook 绝不能拖垮主循环。
+    # ═══════════════════════════════════════════════════════════════════════
     def _usage_summary_for_api_request_hook(self, response: Any) -> Optional[Dict[str, Any]]:
         """Token buckets for ``post_api_request`` plugins (no raw ``response`` object)."""
         if response is None:
@@ -2481,6 +2597,12 @@ class AIAgent:
         from agent.agent_runtime_helpers import dump_api_request_debug
         return dump_api_request_debug(self, api_kwargs, reason=reason, error=error)
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # 【§K · 会话 JSON 快照日志 + 内容脱敏】
+    # 可选地把整段会话写成一个 session_{sid}.json 快照（默认关，state.db 才是权威
+    # 存储）；写之前把 reasoning scratchpad 转 <think>、对所有 content 做 secret
+    # 脱敏；并用「不得用更少的消息覆盖更全的旧快照」守卫防 resume/branch 丢数据。
+    # ═══════════════════════════════════════════════════════════════════════
     @staticmethod
     def _clean_session_content(content: str) -> str:
         """Convert REASONING_SCRATCHPAD to think tags and clean up whitespace."""
@@ -2615,6 +2737,12 @@ class AIAgent:
                 logging.warning(f"Failed to save session log: {e}")
 
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # 【§L · 中断（interrupt）与插话（steer）】
+    # 跨线程控制正在跑的工具循环：interrupt 立即停下并把手头消息纳入上下文；
+    # steer 不打断，而是把用户插话塞进下一条 tool 结果（保持角色交替不被破坏）。
+    # 中断信号按线程 scope，并向下传播到子 agent 和并发工具 worker。
+    # ═══════════════════════════════════════════════════════════════════════
     def interrupt(self, message: str = None) -> None:
         """
         Request the agent to interrupt its current tool-calling loop.
@@ -2768,6 +2896,14 @@ class AIAgent:
             self._pending_steer = None
         return text
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # 【§M · 文件改动校验 + 轮次结束说明 footer】
+    # 防止「模型嘴上说改了文件其实没改」：跟踪每个 write_file/patch 的成败，
+    # 轮次末把失败清单渲染成 footer 提醒用户 git status 复核；并把 footer 里
+    # 的裸文件路径反引号包起来，防 gateway 把 config.yaml/.env 当附件误传。
+    # _format_turn_completion_explanation：对异常结束（空响应/超预算/中断）给
+    # 用户一句可操作解释，而不是沉默。
+    # ═══════════════════════════════════════════════════════════════════════
     def _record_file_mutation_result(
         self,
         tool_name: str,
@@ -3033,6 +3169,12 @@ class AIAgent:
         from agent.agent_runtime_helpers import apply_pending_steer_to_tool_results
         return apply_pending_steer_to_tool_results(self, messages, num_tool_msgs)
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # 【§N · 活动/限流/额度捕获】
+    # 每次响应后从 HTTP 头解析 x-ratelimit-*（限流状态）、x-nous-credits-*
+    # （Nous 额度，到阈值弹提醒）、X-OpenRouter-Cache-Status（命中数）；以及
+    # _touch_activity 维护「当前在干嘛」快照，供超时排查用。全部 fail-open。
+    # ═══════════════════════════════════════════════════════════════════════
     def _touch_activity(self, desc: str) -> None:
         """Update the last-activity timestamp and description (thread-safe).
 
@@ -3269,6 +3411,13 @@ class AIAgent:
             "budget_max": self.iteration_budget.max_total,
         }
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # 【§O · 记忆 provider + 上下文引擎的生命周期】
+    # shutdown_memory_provider（真·会话边界，/reset/退出）、commit_memory_session
+    # （session_id 轮转时只刷抽取不拆 provider）、_sync_external_memory_for_turn
+    # （把完成的轮次镜像进外部记忆后端，中断的轮次跳过）。best-effort，外部后端
+    # 挂了不能挡住用户看回复。
+    # ═══════════════════════════════════════════════════════════════════════
     def shutdown_memory_provider(self, messages: list = None) -> None:
         """Shut down the memory provider and context engine — call at actual session boundaries.
 
@@ -3382,6 +3531,13 @@ class AIAgent:
         except Exception:
             pass
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # 【§P · 资源释放（release_clients / close）+ todo 状态恢复】
+    # release_clients：被 LRU 挤出缓存时只关 client、不动 session 工具状态
+    # （后台 shell/沙盒/浏览器要留着给 resume）；close：真·销毁，杀进程/清沙盒/
+    # 关浏览器/关 client/end_session。_hydrate_todo_store：新 agent 从历史里
+    # 重放最近一次 todo 工具结果，恢复任务清单。
+    # ═══════════════════════════════════════════════════════════════════════
     def release_clients(self) -> None:
         """Release LLM client resources WITHOUT tearing down session tool state.
 
@@ -3628,6 +3784,13 @@ class AIAgent:
 
 
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # 【§Q · 系统提示构建 + 消息/工具调用清洗 + call_id 派生】
+    # _build_system_prompt*（转发 agent/system_prompt.py，落库后 byte-stable 复用）；
+    # 消息清洗（sanitize_api_messages、剔除「只思考无正文」消息、合并连续 user）；
+    # tool_call 修整（限 delegate 并发上限、去重、修名）；call_id 确定性派生
+    # （保 prompt cache：随机 UUID 会让每次请求前缀唯一、击穿缓存）。
+    # ═══════════════════════════════════════════════════════════════════════
     def _build_system_prompt_parts(self, system_message: str = None) -> Dict[str, str]:
         """Forwarder — see ``agent.system_prompt.build_system_prompt_parts``."""
         from agent.system_prompt import build_system_prompt_parts
@@ -3833,6 +3996,14 @@ class AIAgent:
         """Build a valid Responses `function_call.id` (must start with `fc_`)."""
         return _codex_derive_responses_function_call_id(call_id, response_item_id)
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # 【§S · OpenAI 客户端管理】
+    # 主 client 的建/关/换/保活（_create_openai_client/_close_openai_client/
+    # _replace_primary_openai_client），含 keepalive HTTP 客户端、TCP socket 强关
+    # （防 CLOSE-WAIT 堆积）、跨线程 abort（只 shutdown 不 close，防 FD 竞争）、
+    # 每请求一次的短命 client（关掉 SDK 自带重试，让 agent 外层统一管重试）。
+    # 含 _run_codex_stream 转发器。
+    # ═══════════════════════════════════════════════════════════════════════
     def _thread_identity(self) -> str:
         thread = threading.current_thread()
         return f"{thread.name}:{thread.ident}"
@@ -4104,6 +4275,13 @@ class AIAgent:
         from agent.codex_runtime import run_codex_create_stream_fallback
         return run_codex_create_stream_fallback(self, api_kwargs, client)
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # 【§T · 各 provider 凭据刷新 + HTTP 头部】
+    # 长 session 里 OAuth/token 过期导致 401 时的按 provider 刷新（codex/nous/
+    # vertex/copilot/anthropic），换 key 后重建 client；_apply_client_headers_for_base_url
+    # 按 base_url 装正确头部（OpenRouter/NIM/Copilot/Kimi/Qwen/ChatGPT...），
+    # 用户自定义头与 extra_headers 最后合并以最高优先级生效。
+    # ═══════════════════════════════════════════════════════════════════════
     def _try_refresh_codex_client_credentials(self, *, force: bool = True) -> bool:
         if self.api_mode != "codex_responses" or self.provider not in {"openai-codex", "xai-oauth"}:
             return False
@@ -4460,6 +4638,13 @@ class AIAgent:
         self._apply_client_headers_for_base_url(self.base_url)
         self._replace_primary_openai_client(reason="credential_rotation")
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # 【§U · 凭据池恢复 + Anthropic 客户端】
+    # _recover_with_credential_pool：把 401/403/限流转给凭据池轮换（reactive
+    # recovery，区别于 §T 的 singleton 刷新）；_swap_credential 在普通与 Anthropic
+    # 模式间切换；_anthropic_messages_create/_rebuild_anthropic_client 处理
+    # Anthropic/Bedrock 的原生客户端（含 OAuth 1M-context beta 降级）。
+    # ═══════════════════════════════════════════════════════════════════════
     def _recover_with_credential_pool(
         self,
         *,
@@ -4526,6 +4711,13 @@ class AIAgent:
                 drop_context_1m_beta=_drop_1m,
             )
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # 【§V · 流式交付 / 可中断 API 调用 / failover】
+    # 把 token delta 推给 UI/TTS 的回调编排（_fire_stream_delta，含 <think> 与
+    # memory-context 跨分片的 stateful scrubber）；可中断/可超时的 API 调用包装；
+    # provider 故障转移（_try_activate_fallback/_restore_primary_runtime）。本段是
+    # 「模型 ↔ UI/重试」之间的输送带。
+    # ═══════════════════════════════════════════════════════════════════════
     def _interruptible_api_call(self, api_kwargs: dict):
         """Forwarder — see ``agent.chat_completion_helpers.interruptible_api_call``."""
         from agent.chat_completion_helpers import interruptible_api_call
@@ -4735,6 +4927,13 @@ class AIAgent:
         from agent.agent_runtime_helpers import try_recover_primary_transport
         return try_recover_primary_transport(self, api_error, retry_count=retry_count, max_retries=max_retries)
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # 【§W · 视觉 / 多模态处理】
+    # 不支持视觉的模型收到图片时降级：把图片用 vision_analyze 转成文字描述
+    # （_describe_image_for_anthropic_fallback，按 sha256 缓存）；超大 data URL
+    # 物化成临时文件；provider 拒收 list 型 tool 内容时把截图退化成文本摘要；
+    # Qwen/Anthropic 的多模态消息格式预处理。
+    # ═══════════════════════════════════════════════════════════════════════
     @staticmethod
     def _content_has_image_parts(content: Any) -> bool:
         if not isinstance(content, list):
@@ -5159,6 +5358,13 @@ class AIAgent:
 
         return changed
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # 【§X · Provider 专属消息准备 + API kwargs 构建】
+    # 各 provider 的消息格式适配：模型名带点保留与否（Alibaba/MiniMax/MiMo/Bedrock/
+    # Vertex 保留，其它改连字符）；Qwen Portal 的 content 结构化 + cache_control；
+    # _build_api_kwargs 转发构建最终请求；reasoning extra_body 的 provider 门控
+    # （OpenRouter/GitHub/LMStudio 各有能/不能收 reasoning 的规则）。
+    # ═══════════════════════════════════════════════════════════════════════
     def _anthropic_preserve_dots(self) -> bool:
         """True when using an anthropic-compatible endpoint that preserves dots in model names.
         Alibaba/DashScope keeps dots (e.g. qwen3.5-plus).
@@ -5387,6 +5593,13 @@ class AIAgent:
 
         return {"effort": requested_effort}
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # 【§Y · assistant 消息构建 + reasoning 回放 + tool_call 清洗】
+    # _build_assistant_message：把模型响应归一成内部 assistant dict（content/
+    # reasoning/tool_calls/finish_reason）。DeepSeek/Kimi/MiMo 等 thinking 模型
+    # 回放历史时必须带 reasoning_content（否则 400），由 _needs_*_tool_reasoning
+    # 检测并补；发严格 provider 前剥离 Codex 专属字段（call_id/response_item_id）。
+    # ═══════════════════════════════════════════════════════════════════════
     def _build_assistant_message(self, assistant_message, finish_reason: str) -> dict:
         """Forwarder — see ``agent.chat_completion_helpers.build_assistant_message``."""
         from agent.chat_completion_helpers import build_assistant_message
@@ -5541,6 +5754,13 @@ class AIAgent:
         """
         return self.api_mode != "codex_responses"
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # 【§Z · 上下文压缩包装 + 工具护栏】
+    # _compress_context：上下文压缩的唯一入口（转发 agent/conversation_compression.py，
+    # 真逻辑见 context_compressor.py；force=True 供 /compress 手动绕过冷却）。
+    # 工具护栏：对反复无进展的工具调用（guardrail）记录 halt 决策、给结果追加引导、
+    # 必要时合成一条 block 结果让模型改策略。
+    # ═══════════════════════════════════════════════════════════════════════
     def _compress_context(self, messages: list, system_message: str, *, approx_tokens: int = None, task_id: str = "default", focus_topic: str = None, force: bool = False) -> tuple:
         """Forwarder — see ``agent.conversation_compression.compress_context``.
 
@@ -5594,6 +5814,13 @@ class AIAgent:
         self._set_tool_guardrail_halt(decision)
         return toolguard_synthetic_result(decision)
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # 【§AA · 工具执行分发 + 对话主入口】
+    # _execute_tool_calls：按批次独立性选并发/顺序执行工具（实现在 tool_executor.py）；
+    # _dispatch_delegate_task：子 agent 委派（顶层强制后台、orchestrator 子 agent 同步）；
+    # _handle_max_iterations：迭代预算耗尽时注入「总结」提示的宽限调用；
+    # run_conversation ★对话主循环（转发 conversation_loop.py）；chat 是它的薄封装。
+    # ═══════════════════════════════════════════════════════════════════════
     def _execute_tool_calls(self, assistant_message, messages: list, effective_task_id: str, api_call_count: int = 0) -> None:
         """Execute tool calls from the assistant message and append results to messages.
 
@@ -5759,6 +5986,11 @@ class AIAgent:
         from agent.codex_runtime import run_codex_app_server_turn
         return run_codex_app_server_turn(self, user_message=user_message, original_user_message=original_user_message, messages=messages, effective_task_id=effective_task_id, should_review_memory=should_review_memory)
 
+# ═══════════════════════════════════════════════════════════════════════
+# 【§AB · main() —— 本文件当 CLI 直接跑的入口（admin/调试用，非产品路径）】
+# `python run_agent.py` 直接跑：列工具、按 toolset 装配、跑一次 query、可选存
+# trajectory 样本。产品形态是无头 server/，不走这里；保留它只为本地调试/演示。
+# ═══════════════════════════════════════════════════════════════════════
 def main(
     query: str = None,
     model: str = "",
