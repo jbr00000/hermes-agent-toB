@@ -28,10 +28,6 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from gateway.whatsapp_identity import (
-    expand_whatsapp_aliases,
-    normalize_whatsapp_identifier,
-)
 from hermes_constants import get_hermes_dir
 from utils import atomic_replace
 
@@ -62,8 +58,6 @@ PAIRING_DIR = get_hermes_dir("platforms/pairing", "pairing")
 _PLATFORM_ALLOWLIST_ENV = {
     "telegram": "TELEGRAM_ALLOWED_USERS",
     "discord": "DISCORD_ALLOWED_USERS",
-    "whatsapp": "WHATSAPP_ALLOWED_USERS",
-    "whatsapp_cloud": "WHATSAPP_CLOUD_ALLOWED_USERS",
     "slack": "SLACK_ALLOWED_USERS",
     "signal": "SIGNAL_ALLOWED_USERS",
     "email": "EMAIL_ALLOWED_USERS",
@@ -223,8 +217,6 @@ class PairingStore:
     def _normalize_user_id(self, platform: str, user_id: str) -> str:
         """Normalize platform-specific user IDs before persisting them."""
         raw_user_id = str(user_id or "").strip()
-        if platform == "whatsapp":
-            return normalize_whatsapp_identifier(raw_user_id) or raw_user_id
         return raw_user_id
 
     def _user_id_aliases(self, platform: str, user_id: str) -> set[str]:
@@ -234,8 +226,6 @@ class PairingStore:
             return set()
 
         aliases = {raw_user_id, self._normalize_user_id(platform, raw_user_id)}
-        if platform == "whatsapp":
-            aliases.update(expand_whatsapp_aliases(raw_user_id))
         aliases.discard("")
         return aliases
 

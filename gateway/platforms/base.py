@@ -1770,10 +1770,8 @@ class MessageEvent:
     internal: bool = False
 
     # Free-form per-event metadata.  Adapters may set platform-specific
-    # signals here (e.g. WhatsApp sets ``whatsapp_from_owner=True`` when
-    # the bridge is configured to forward owner-typed messages).  Plugins
-    # consume via ``event.metadata.get(...)`` and must not rely on any
-    # particular key existing.
+    # signals here. Plugins consume via ``event.metadata.get(...)`` and must
+    # not rely on any particular key existing.
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     # Timestamps

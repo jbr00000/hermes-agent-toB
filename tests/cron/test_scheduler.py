@@ -301,20 +301,16 @@ class TestResolveDeliveryTarget:
             "thread_id": None,
         }
 
-    def test_human_friendly_label_resolved_via_channel_directory(self):
-        """deliver: 'whatsapp:Alice (dm)' resolves to the real JID."""
+    def test_removed_whatsapp_label_is_not_resolved(self):
+        """deliver: 'whatsapp:Alice (dm)' is ignored in the to-B fork."""
         job = {"deliver": "whatsapp:Alice (dm)"}
         with patch(
             "gateway.channel_directory.resolve_channel_name",
             return_value="12345678901234@lid",
         ) as resolve_mock:
             result = _resolve_delivery_target(job)
-        resolve_mock.assert_called_once_with("whatsapp", "Alice (dm)")
-        assert result == {
-            "platform": "whatsapp",
-            "chat_id": "12345678901234@lid",
-            "thread_id": None,
-        }
+        resolve_mock.assert_not_called()
+        assert result is None
 
     def test_human_friendly_label_without_suffix_resolved(self):
         """deliver: 'telegram:My Group' resolves without display suffix."""
@@ -344,19 +340,16 @@ class TestResolveDeliveryTarget:
             "thread_id": "17585",
         }
 
-    def test_raw_id_not_mangled_when_directory_returns_none(self):
-        """deliver: 'whatsapp:12345@lid' passes through when directory has no match."""
+    def test_removed_whatsapp_raw_id_is_not_resolved(self):
+        """deliver: 'whatsapp:12345@lid' is ignored in the to-B fork."""
         job = {"deliver": "whatsapp:12345@lid"}
         with patch(
             "gateway.channel_directory.resolve_channel_name",
             return_value=None,
-        ):
+        ) as resolve_mock:
             result = _resolve_delivery_target(job)
-        assert result == {
-            "platform": "whatsapp",
-            "chat_id": "12345@lid",
-            "thread_id": None,
-        }
+        resolve_mock.assert_not_called()
+        assert result is None
 
     def test_bare_platform_uses_matching_origin_chat(self):
         job = {
@@ -3739,26 +3732,13 @@ class TestCronDeliveryTargets:
 
 
 class TestHomeTargetEnvVarRegistry:
-    """Regression: ``_HOME_TARGET_ENV_VARS`` must include every gateway
-    platform that supports cron-driven outbound delivery. Missing an
-    entry means ``hermes cron create --deliver=<platform>`` silently
-    fails to route through the platform's home channel."""
+    """Regression: disabled messaging platforms must not remain as cron targets."""
 
-    def test_whatsapp_cloud_registered(self):
-        """``deliver=whatsapp_cloud`` routes through
-        WHATSAPP_CLOUD_HOME_CHANNEL — added alongside the existing
-        ``whatsapp`` Baileys entry."""
+    def test_whatsapp_targets_removed_for_tob(self):
         from cron.scheduler import _HOME_TARGET_ENV_VARS
 
-        assert "whatsapp_cloud" in _HOME_TARGET_ENV_VARS
-        assert _HOME_TARGET_ENV_VARS["whatsapp_cloud"] == "WHATSAPP_CLOUD_HOME_CHANNEL"
-
-    def test_baileys_whatsapp_still_registered(self):
-        """Sanity guard: the Cloud addition didn't disturb Baileys
-        whatsapp routing."""
-        from cron.scheduler import _HOME_TARGET_ENV_VARS
-
-        assert _HOME_TARGET_ENV_VARS.get("whatsapp") == "WHATSAPP_HOME_CHANNEL"
+        assert "whatsapp" not in _HOME_TARGET_ENV_VARS
+        assert "whatsapp_cloud" not in _HOME_TARGET_ENV_VARS
 
 
 class TestCronDeliveryMirror:
