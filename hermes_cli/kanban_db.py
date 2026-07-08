@@ -5873,7 +5873,7 @@ def _pid_alive(pid: Optional[int]) -> bool:
     """
     if not pid or pid <= 0:
         return False
-    from process_status import _pid_exists
+    from hermes_core.process_status import _pid_exists
     if not _pid_exists(int(pid)):
         return False
     # Still here → process exists. Check for zombie on platforms

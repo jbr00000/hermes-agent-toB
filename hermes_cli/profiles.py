@@ -1355,7 +1355,7 @@ def _stop_profile_backends(canon: str, profile_dir: Path) -> None:
         return
 
     try:
-        from process_status import _pid_exists, terminate_pid as _terminate_pid
+        from hermes_core.process_status import _pid_exists, terminate_pid as _terminate_pid
     except Exception:
         return
 
@@ -1595,8 +1595,8 @@ def _stop_gateway_process(profile_dir: Path) -> None:
         # _signal.SIGKILL raises AttributeError at import time on Windows,
         # and raw os.kill with SIGTERM doesn't cascade to child processes
         # the same way taskkill /T does.
-        from process_status import terminate_pid as _terminate_pid
-        from process_status import _pid_exists
+        from hermes_core.process_status import terminate_pid as _terminate_pid
+        from hermes_core.process_status import _pid_exists
         _terminate_pid(pid)  # graceful first
         # Wait up to 10s for graceful shutdown. On Windows, os.kill(pid, 0)
         # is NOT a no-op — use the handle-based existence check.

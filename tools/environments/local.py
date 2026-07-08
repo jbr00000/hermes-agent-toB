@@ -1087,7 +1087,7 @@ class LocalEnvironment(BaseEnvironment):
         try:
             if _IS_WINDOWS:
                 try:
-                    from process_status import terminate_pid
+                    from hermes_core.process_status import terminate_pid
 
                     terminate_pid(proc.pid, force=True)
                 except Exception:

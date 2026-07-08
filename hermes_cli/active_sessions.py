@@ -193,7 +193,7 @@ def _pid_alive(pid: Any, process_start_time: Any = None) -> bool:
     if pid_int <= 0:
         return False
     try:
-        from process_status import _pid_exists
+        from hermes_core.process_status import _pid_exists
 
         exists = bool(_pid_exists(pid_int))
     except Exception:

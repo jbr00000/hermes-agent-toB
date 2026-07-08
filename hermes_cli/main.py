@@ -5794,7 +5794,7 @@ def _kill_stale_dashboard_processes(
             still_pending = []
             # On Windows, os.kill(pid, 0) is NOT a no-op. Route through
             # the cross-platform existence check.
-            from process_status import _pid_exists
+            from hermes_core.process_status import _pid_exists
             for pid in pending:
                 if _pid_exists(pid):
                     still_pending.append(pid)
@@ -8394,7 +8394,7 @@ def _write_update_planned_stop_marker(profile_path: Path, pid: int) -> bool:
     try:
         from datetime import timezone
 
-        from process_status import _get_process_start_time
+        from hermes_core.process_status import _get_process_start_time
         from utils import atomic_json_write
 
         record = {
@@ -8421,7 +8421,7 @@ def _wait_for_windows_update_gateway_exit(
     if not pids:
         return set()
 
-    from process_status import _pid_exists
+    from hermes_core.process_status import _pid_exists
 
     remaining = set(pids)
     deadline = _time.monotonic() + max(timeout, 0.0)

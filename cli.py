@@ -1678,7 +1678,7 @@ def _worktree_lock_is_live(repo_root: str, worktree_path: str, timeout: int = 10
             if pid == os.getpid():
                 return "live"
             try:
-                from process_status import _pid_exists
+                from hermes_core.process_status import _pid_exists
                 return "live" if _pid_exists(pid) else "dead"
             except Exception:
                 # Can't determine liveness — fail safe toward keeping it.
