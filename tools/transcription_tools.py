@@ -1,17 +1,15 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 Transcription Tools Module
 
-Provides speech-to-text transcription with six providers:
+Provides speech-to-text transcription with five providers:
 
-  - **local** (default, free) — faster-whisper running locally, no API key needed.
+  - **local** (default, free) 鈥?faster-whisper running locally, no API key needed.
     Auto-downloads the model (~150 MB for ``base``) on first use.
-  - **groq** (free tier) — Groq Whisper API, requires ``GROQ_API_KEY``.
-  - **openai** (paid) — OpenAI Whisper API, requires ``VOICE_TOOLS_OPENAI_KEY``.
-  - **mistral** — Mistral Voxtral Transcribe API, requires ``MISTRAL_API_KEY``.
-  - **xai** — xAI Grok STT API, requires ``XAI_API_KEY``. High accuracy,
-    Inverse Text Normalization, diarization, 21 languages.
-  - **elevenlabs** — ElevenLabs Scribe API, requires ``ELEVENLABS_API_KEY``.
+  - **groq** (free tier) 鈥?Groq Whisper API, requires ``GROQ_API_KEY``.
+  - **openai** (paid) 鈥?OpenAI Whisper API, requires ``VOICE_TOOLS_OPENAI_KEY``.
+  - **mistral** 鈥?Mistral Voxtral Transcribe API, requires ``MISTRAL_API_KEY``.
+  - **elevenlabs** 鈥?ElevenLabs Scribe API, requires ``ELEVENLABS_API_KEY``.
 
 Used by the messaging gateway to automatically transcribe voice messages
 sent by users on Telegram, Discord, WhatsApp, Slack, and Signal.
@@ -63,7 +61,7 @@ def get_env_value(name, default=None):
     return default if value is None else value
 
 # ---------------------------------------------------------------------------
-# Optional imports — graceful degradation
+# Optional imports 鈥?graceful degradation
 # ---------------------------------------------------------------------------
 
 import importlib.util as _ilu
@@ -97,7 +95,6 @@ COMMON_LOCAL_BIN_DIRS = ("/opt/homebrew/bin", "/usr/local/bin")
 
 GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
 OPENAI_BASE_URL = os.getenv("STT_OPENAI_BASE_URL", "https://api.openai.com/v1")
-XAI_STT_BASE_URL = os.getenv("XAI_STT_BASE_URL", "https://api.x.ai/v1")
 ELEVENLABS_STT_BASE_URL = os.getenv("ELEVENLABS_STT_BASE_URL", "https://api.elevenlabs.io/v1")
 
 SUPPORTED_FORMATS = {".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".wav", ".webm", ".ogg", ".aac", ".flac"}
@@ -108,7 +105,7 @@ MAX_FILE_SIZE = 25 * 1024 * 1024  # 25 MB
 OPENAI_MODELS = {"whisper-1", "gpt-4o-mini-transcribe", "gpt-4o-transcribe"}
 GROQ_MODELS = {"whisper-large-v3", "whisper-large-v3-turbo", "distil-whisper-large-v3-en"}
 
-# Singleton for the local model — loaded once, reused across calls
+# Singleton for the local model 鈥?loaded once, reused across calls
 _local_model: Optional[object] = None
 _local_model_name: Optional[str] = None
 
@@ -230,7 +227,7 @@ def _try_lazy_install_stt() -> bool:
 
 
 # Names of the 6 STT providers with native handlers in this module.
-# Kept in sync with ``agent.transcription_registry._BUILTIN_NAMES`` —
+# Kept in sync with ``agent.transcription_registry._BUILTIN_NAMES`` 鈥?
 # a regression test fails if they drift. The plugin hook from
 # issue #30398-style follow-up rejects plugins registering under any
 # of these names; the dispatcher in ``transcribe_audio`` short-circuits
@@ -241,7 +238,6 @@ BUILTIN_STT_PROVIDERS = frozenset({
     "groq",
     "openai",
     "mistral",
-    "xai",
 })
 
 
@@ -249,17 +245,17 @@ BUILTIN_STT_PROVIDERS = frozenset({
 # Command-provider registry (``stt.providers.<name>: type: command``)
 # ---------------------------------------------------------------------------
 #
-# Mirrors the TTS command-provider registry shipped in PR #17843 — same
+# Mirrors the TTS command-provider registry shipped in PR #17843 鈥?same
 # placeholder grammar, same shell-quote-aware rendering, same process-tree
 # termination on timeout. Lets any whisper CLI / ASR CLI / curl pipeline
 # become an STT backend with zero Python.
 #
 # Resolution order:
 #   1. Built-in (``local``, ``local_command``, ``groq``, ``openai``,
-#      ``mistral``, ``xai``)              → native handler. **Always wins.**
-#   2. ``stt.providers.<name>: type: command``  → command-provider runner.
-#   3. Plugin-registered TranscriptionProvider  → plugin dispatch.
-#   4. No match                                 → "No STT provider available".
+#      ``mistral``)                       鈫?native handler. **Always wins.**
+#   2. ``stt.providers.<name>: type: command``  鈫?command-provider runner.
+#   3. Plugin-registered TranscriptionProvider  鈫?plugin dispatch.
+#   4. No match                                 鈫?"No STT provider available".
 #
 # The single-env-var ``HERMES_LOCAL_STT_COMMAND`` escape hatch is preserved
 # untouched via the built-in ``local_command`` path. Use the command-provider
@@ -289,7 +285,7 @@ def _get_named_stt_provider_config(
     falls back to ``stt.<name>`` so users who followed the built-in layout
     still work. Returns an empty dict when the provider is not declared.
 
-    Built-in names are NOT special-cased here — the caller short-circuits
+    Built-in names are NOT special-cased here 鈥?the caller short-circuits
     them before this is consulted, AND ``_is_command_stt_provider_config``
     requires an explicit ``command:`` value, so a built-in section like
     ``stt.openai`` (which has ``model``/``language`` but no ``command``)
@@ -387,7 +383,7 @@ def _get_command_stt_output_format(config: Dict[str, Any]) -> str:
 def _shell_quote_context_stt(command_template: str, position: int) -> Optional[str]:
     """Return the shell quote character active right before *position*.
 
-    Mirrors ``tools.tts_tool._shell_quote_context`` — kept local to avoid
+    Mirrors ``tools.tts_tool._shell_quote_context`` 鈥?kept local to avoid
     cross-module import of a private helper. Returns ``"'"`` / ``'"'`` when
     inside a quoted region, ``None`` for bare context.
     """
@@ -500,7 +496,7 @@ def _terminate_command_stt_process_tree(proc: subprocess.Popen) -> None:
     try:
         import psutil  # type: ignore
     except ImportError:
-        # psutil is optional — fall back to single-process terminate/kill
+        # psutil is optional 鈥?fall back to single-process terminate/kill
         proc.terminate()
         try:
             proc.wait(timeout=2)
@@ -588,13 +584,13 @@ def _read_command_stt_output(output_path: Path, stdout: str, fmt: str) -> str:
     """Return the transcript text from a command-provider invocation.
 
     Resolution:
-      1. If ``output_path`` exists and is non-empty → read it (raw text).
-      2. Else if ``stdout`` is non-empty → use stdout (lets users write
+      1. If ``output_path`` exists and is non-empty 鈫?read it (raw text).
+      2. Else if ``stdout`` is non-empty 鈫?use stdout (lets users write
          curl-style one-liners that emit transcript to stdout instead of
          writing a file).
-      3. Else → raise RuntimeError (no usable output produced).
+      3. Else 鈫?raise RuntimeError (no usable output produced).
 
-    For JSON format, we still return the raw bytes — extracting a
+    For JSON format, we still return the raw bytes 鈥?extracting a
     ``text`` field is out of scope; users either configure ``format: txt``
     or post-process JSON downstream. (Same trade-off as TTS: the runner
     doesn't try to be clever about output shape.)
@@ -747,7 +743,7 @@ def _get_provider(stt_config: dict) -> str:
     """Determine which STT provider to use.
 
     When ``stt.provider`` is explicitly set in config, that choice is
-    honoured — no silent cloud fallback.  When no provider is configured,
+    honoured 鈥?no silent cloud fallback.  When no provider is configured,
     auto-detect tries: local > groq (free) > openai (paid).
     """
     if not is_stt_enabled(stt_config):
@@ -809,16 +805,6 @@ def _get_provider(stt_config: dict) -> str:
             )
             return "none"
 
-        if provider == "xai":
-            from tools.xai_http import resolve_xai_http_credentials
-
-            if resolve_xai_http_credentials().get("api_key"):
-                return "xai"
-            logger.warning(
-                "STT provider 'xai' configured but no xAI credentials are available"
-            )
-            return "none"
-
         if provider == "elevenlabs":
             if get_env_value("ELEVENLABS_API_KEY"):
                 return "elevenlabs"
@@ -827,9 +813,9 @@ def _get_provider(stt_config: dict) -> str:
             )
             return "none"
 
-        return provider  # Unknown — let it fail downstream
+        return provider  # Unknown 鈥?let it fail downstream
 
-    # --- Auto-detect (no explicit provider): local > groq > openai > xai > elevenlabs -
+    # --- Auto-detect (no explicit provider): local > groq > openai > mistral > elevenlabs -
     # mistral is intentionally skipped while `mistralai` is quarantined on
     # PyPI (malicious 2.4.6 release on 2026-05-12).
 
@@ -846,20 +832,12 @@ def _get_provider(stt_config: dict) -> str:
     if _HAS_OPENAI and _has_openai_audio_backend():
         logger.info("No local STT available, using OpenAI Whisper API")
         return "openai"
-    # Only auto-select Mistral if the SDK is already present — don't trigger a
+    # Only auto-select Mistral if the SDK is already present 鈥?don't trigger a
     # lazy-install during passive auto-detection. Explicit `provider: mistral`
     # (above) does lazy-install on first transcription call.
     if _HAS_MISTRAL and get_env_value("MISTRAL_API_KEY"):
         logger.info("No local STT available, using Mistral Voxtral Transcribe API")
         return "mistral"
-    try:
-        from tools.xai_http import resolve_xai_http_credentials
-
-        if resolve_xai_http_credentials().get("api_key"):
-            logger.info("No local STT available, using xAI Grok STT API")
-            return "xai"
-    except Exception:
-        pass
     if get_env_value("ELEVENLABS_API_KEY"):
         logger.info("No local STT available, using ElevenLabs Scribe STT API")
         return "elevenlabs"
@@ -867,7 +845,7 @@ def _get_provider(stt_config: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Plugin provider dispatch (issue follow-up to #30398 — STT pluggability)
+# Plugin provider dispatch (issue follow-up to #30398 鈥?STT pluggability)
 # ---------------------------------------------------------------------------
 
 
@@ -887,7 +865,7 @@ def _dispatch_to_plugin_provider(
 
     Resolution invariants enforced here:
 
-    1. Built-in provider names short-circuit — never reach the plugin
+    1. Built-in provider names short-circuit 鈥?never reach the plugin
        registry. The caller (``transcribe_audio``) handles ``local``,
        ``groq``, ``openai``, etc. via its existing elif chain; this
        function defensively rejects those names so a plugin can't be
@@ -906,12 +884,12 @@ def _dispatch_to_plugin_provider(
     4. Availability gating: when the matched plugin reports
        ``is_available() == False`` (missing API key, missing optional
        SDK, etc.) this returns an error envelope identifying the
-       plugin as unavailable — **not** ``None`` — because the user
+       plugin as unavailable 鈥?**not** ``None`` 鈥?because the user
        explicitly opted into this plugin via ``stt.provider`` and the
        generic fallthrough message would be misleading.
 
     Provider exceptions are caught and converted into the standard
-    error envelope (matches the legacy built-in error shapes — the
+    error envelope (matches the legacy built-in error shapes 鈥?the
     gateway/CLI caller already expects ``{success: False, error:
     "...", transcript: ""}`` on failure).
     """
@@ -941,7 +919,7 @@ def _dispatch_to_plugin_provider(
             # recovery pattern.
             _ensure_plugins_discovered(force=True)
             plugin_provider = get_provider(key)
-    except Exception as exc:  # noqa: BLE001 — discovery failure is non-fatal
+    except Exception as exc:  # noqa: BLE001 鈥?discovery failure is non-fatal
         logger.debug("STT plugin dispatch skipped (discovery failed): %s", exc)
         return None
     if plugin_provider is None:
@@ -951,7 +929,7 @@ def _dispatch_to_plugin_provider(
     # (missing API key, missing optional SDK, etc.) surface a clean
     # error envelope **instead of** falling through to the generic
     # "No STT provider" message. The user explicitly set
-    # ``stt.provider: <plugin>`` in config — surfacing the plugin's
+    # ``stt.provider: <plugin>`` in config 鈥?surfacing the plugin's
     # own availability failure is more actionable than the generic
     # auto-detect-failure error, and avoids routing the call into a
     # plugin that's about to crash messily.
@@ -962,7 +940,7 @@ def _dispatch_to_plugin_provider(
         available = plugin_provider.is_available()
     except Exception as exc:  # noqa: BLE001
         logger.warning(
-            "STT plugin provider '%s' is_available() raised: %s — "
+            "STT plugin provider '%s' is_available() raised: %s 鈥?"
             "treating as unavailable", key, exc, exc_info=True,
         )
         available = False
@@ -975,7 +953,7 @@ def _dispatch_to_plugin_provider(
             "success": False,
             "transcript": "",
             "error": (
-                f"STT plugin '{key}' is not available — check that its "
+                f"STT plugin '{key}' is not available 鈥?check that its "
                 "required credentials / dependencies are configured."
             ),
             "provider": key,
@@ -1056,11 +1034,11 @@ def _validate_audio_file(file_path: str) -> Optional[Dict[str, Any]]:
 # Substrings that identify a missing/unloadable CUDA runtime library.  When
 # ctranslate2 (the backend for faster-whisper) cannot dlopen one of these, the
 # "auto" device picker has already committed to CUDA and the model can no
-# longer be used — we fall back to CPU and reload.
+# longer be used 鈥?we fall back to CPU and reload.
 #
 # Deliberately narrow: we match on library-name tokens and dlopen phrasing so
 # we DO NOT accidentally catch legitimate runtime failures like "CUDA out of
-# memory" — those should surface to the user, not silently fall back to CPU
+# memory" 鈥?those should surface to the user, not silently fall back to CPU
 # (a 32GB audio clip on CPU at int8 isn't useful either).
 _CUDA_LIB_ERROR_MARKERS = (
     "libcublas",
@@ -1087,11 +1065,11 @@ def _looks_like_cuda_lib_error(exc: BaseException) -> bool:
 
 
 def _load_local_whisper_model(model_name: str):
-    """Load faster-whisper with graceful CUDA → CPU fallback.
+    """Load faster-whisper with graceful CUDA 鈫?CPU fallback.
 
     faster-whisper's ``device="auto"`` picks CUDA when the ctranslate2 wheel
     ships CUDA shared libs, even on hosts where the NVIDIA runtime
-    (``libcublas.so.12`` / ``libcudnn*``) isn't installed — common on WSL2
+    (``libcublas.so.12`` / ``libcudnn*``) isn't installed 鈥?common on WSL2
     without CUDA-on-WSL, headless servers, and CPU-only developer machines.
     On those hosts the load itself sometimes succeeds and the dlopen failure
     only surfaces at first ``transcribe()`` call.
@@ -1106,7 +1084,7 @@ def _load_local_whisper_model(model_name: str):
         if not _looks_like_cuda_lib_error(exc):
             raise
         logger.warning(
-            "faster-whisper CUDA load failed (%s) — falling back to CPU (int8). "
+            "faster-whisper CUDA load failed (%s) 鈥?falling back to CPU (int8). "
             "Install the NVIDIA CUDA runtime (libcublas/libcudnn) to use GPU.",
             exc,
         )
@@ -1150,7 +1128,7 @@ def _transcribe_local(file_path: str, model_name: str) -> Dict[str, Any]:
             if not _looks_like_cuda_lib_error(exc):
                 raise
             logger.warning(
-                "faster-whisper CUDA runtime failed mid-transcribe (%s) — "
+                "faster-whisper CUDA runtime failed mid-transcribe (%s) 鈥?"
                 "evicting cached model and retrying on CPU (int8).",
                 exc,
             )
@@ -1271,7 +1249,7 @@ def _transcribe_local_command(file_path: str, model_name: str) -> Dict[str, Any]
         return {"success": False, "transcript": "", "error": f"Local transcription failed: {e}"}
 
 # ---------------------------------------------------------------------------
-# Provider: groq (Whisper API — free tier)
+# Provider: groq (Whisper API 鈥?free tier)
 # ---------------------------------------------------------------------------
 
 
@@ -1424,113 +1402,6 @@ def _transcribe_mistral(file_path: str, model_name: str) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Provider: xAI (Grok STT API)
-# ---------------------------------------------------------------------------
-
-
-def _transcribe_xai(file_path: str, model_name: str) -> Dict[str, Any]:
-    """Transcribe using xAI Grok STT API.
-
-    Uses the ``POST /v1/stt`` REST endpoint with multipart/form-data.
-    Supports Inverse Text Normalization, diarization, and word-level timestamps.
-    Requires ``XAI_API_KEY`` environment variable.
-    """
-    from tools.xai_http import resolve_xai_http_credentials
-
-    creds = resolve_xai_http_credentials()
-    api_key = str(creds.get("api_key") or "").strip()
-    if not api_key:
-        return {
-            "success": False,
-            "transcript": "",
-            "error": "No xAI credentials found. Configure xAI OAuth in `hermes model` or set XAI_API_KEY",
-        }
-
-    stt_config = _load_stt_config()
-    xai_config = stt_config.get("xai", {})
-    base_url = str(
-        xai_config.get("base_url")
-        or get_env_value("XAI_STT_BASE_URL")
-        or creds.get("base_url")
-        or XAI_STT_BASE_URL
-    ).strip().rstrip("/")
-    language = str(
-        xai_config.get("language")
-        or os.getenv("HERMES_LOCAL_STT_LANGUAGE")
-        or DEFAULT_LOCAL_STT_LANGUAGE
-    ).strip()
-    # .get("format", True) already defaults to True when the key is absent;
-    # is_truthy_value only normalizes truthy/falsy strings from config.
-    use_format = is_truthy_value(xai_config.get("format", True))
-    use_diarize = is_truthy_value(xai_config.get("diarize", False))
-
-    try:
-        import requests
-        from tools.xai_http import hermes_xai_user_agent
-
-        data: Dict[str, str] = {}
-        if language:
-            data["language"] = language
-        if use_format:
-            data["format"] = "true"
-        if use_diarize:
-            data["diarize"] = "true"
-
-        with open(file_path, "rb") as audio_file:
-            response = requests.post(
-                f"{base_url}/stt",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "User-Agent": hermes_xai_user_agent(),
-                },
-                files={
-                    "file": (Path(file_path).name, audio_file),
-                },
-                data=data,
-                timeout=120,
-            )
-
-        if response.status_code != 200:
-            detail = ""
-            try:
-                err_body = response.json()
-                detail = err_body.get("error", {}).get("message", "") or response.text[:300]
-            except Exception:
-                detail = response.text[:300]
-            return {
-                "success": False,
-                "transcript": "",
-                "error": f"xAI STT API error (HTTP {response.status_code}): {detail}",
-            }
-
-        result = response.json()
-        transcript_text = result.get("text", "").strip()
-
-        if not transcript_text:
-            return {
-                "success": False,
-                "transcript": "",
-                "error": "xAI STT returned empty transcript",
-            }
-
-        logger.info(
-            "Transcribed %s via xAI Grok STT (lang=%s, %.1fs audio, %d chars)",
-            Path(file_path).name,
-            result.get("language", language),
-            result.get("duration", 0),
-            len(transcript_text),
-        )
-
-        return {"success": True, "transcript": transcript_text, "provider": "xai"}
-
-    except PermissionError:
-        return {"success": False, "transcript": "", "error": f"Permission denied: {file_path}"}
-    except Exception as e:
-        logger.error("xAI STT transcription failed: %s", e, exc_info=True)
-        return {"success": False, "transcript": "", "error": f"xAI STT transcription failed: {e}"}
-
-
-# ---------------------------------------------------------------------------
 # Provider: ElevenLabs (Scribe STT API)
 # ---------------------------------------------------------------------------
 
@@ -1627,7 +1498,7 @@ def transcribe_audio(file_path: str, model: Optional[str] = None) -> Dict[str, A
 
     Provider priority:
       1. User config (``stt.provider`` in config.yaml)
-      2. Auto-detect: local > Groq > OpenAI > Mistral > xAI > ElevenLabs
+      2. Auto-detect: local > Groq > OpenAI > Mistral > ElevenLabs
 
     Args:
         file_path: Absolute path to the audio file to transcribe.
@@ -1684,11 +1555,6 @@ def transcribe_audio(file_path: str, model: Optional[str] = None) -> Dict[str, A
         model_name = model or mistral_cfg.get("model", DEFAULT_MISTRAL_STT_MODEL)
         return _transcribe_mistral(file_path, model_name)
 
-    if provider == "xai":
-        # xAI Grok STT doesn't use a model parameter — pass through for logging
-        model_name = model or "grok-stt"
-        return _transcribe_xai(file_path, model_name)
-
     if provider == "elevenlabs":
         elevenlabs_cfg = stt_config.get("elevenlabs", {})
         model_name = model or elevenlabs_cfg.get("model_id", DEFAULT_ELEVENLABS_STT_MODEL)
@@ -1696,9 +1562,9 @@ def transcribe_audio(file_path: str, model: Optional[str] = None) -> Dict[str, A
 
     # User-declared command-type provider
     # (``stt.providers.<name>: type: command``). Fires after the built-in
-    # elif chain — built-in names short-circuit upstream so a user's
+    # elif chain 鈥?built-in names short-circuit upstream so a user's
     # ``stt.providers.openai.command`` can't override the real OpenAI
-    # handler — and BEFORE the plugin dispatcher, because config is more
+    # handler 鈥?and BEFORE the plugin dispatcher, because config is more
     # local than a plugin install (same precedence rule as TTS PR #17843).
     command_provider_config = _resolve_command_stt_provider_config(provider, stt_config)
     if command_provider_config is not None:
@@ -1744,7 +1610,7 @@ def transcribe_audio(file_path: str, model: Optional[str] = None) -> Dict[str, A
             "No STT provider available. Install faster-whisper for free local "
             f"transcription, configure {LOCAL_STT_COMMAND_ENV} or install a local whisper CLI, "
             "set GROQ_API_KEY for free Groq Whisper, set MISTRAL_API_KEY for Mistral "
-            "Voxtral Transcribe, configure xAI OAuth or set XAI_API_KEY for xAI Grok STT, "
+            "Voxtral Transcribe, "
             "set ELEVENLABS_API_KEY for ElevenLabs Scribe, or set VOICE_TOOLS_OPENAI_KEY "
             "or OPENAI_API_KEY for the OpenAI Whisper API."
         ),

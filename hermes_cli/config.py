@@ -1947,10 +1947,10 @@ DEFAULT_CONFIG = {
     # Text-to-speech configuration
     # Each provider supports an optional `max_text_length:` override for the
     # per-request input-character cap. Omit it to use the provider's documented
-    # limit (OpenAI 4096, xAI 15000, MiniMax 10000, ElevenLabs 5k-40k model-aware,
+    # limit (OpenAI 4096, MiniMax 10000, ElevenLabs 5k-40k model-aware,
     # Gemini 32000, Edge 5000, Mistral 4000, NeuTTS/KittenTTS 2000).
     "tts": {
-        "provider": "edge",  # "edge" (free) | "elevenlabs" (premium) | "openai" | "xai" | "minimax" | "mistral" | "gemini" | "neutts" (local) | "kittentts" (local) | "piper" (local)
+        "provider": "edge",  # "edge" (free) | "elevenlabs" (premium) | "openai" | "minimax" | "mistral" | "gemini" | "neutts" (local) | "kittentts" (local) | "piper" (local)
         "edge": {
             "voice": "en-US-AriaNeural",
             # Popular: AriaNeural, JennyNeural, AndrewNeural, BrianNeural, SoniaNeural
@@ -1976,12 +1976,6 @@ DEFAULT_CONFIG = {
             # SAMPLE CONTEXT, and either a `{transcript}` placeholder or no
             # transcript section; Hermes appends the live transcript when absent.
             "persona_prompt_file": "",
-        },
-        "xai": {
-            "voice_id": "eve",  # or custom voice ID — see https://docs.x.ai/developers/model-capabilities/audio/custom-voices
-            "language": "en",
-            "sample_rate": 24000,
-            "bit_rate": 128000,
         },
         "mistral": {
             "model": "voxtral-mini-tts-2603",
@@ -2341,7 +2335,7 @@ DEFAULT_CONFIG = {
         # When enabled, the bot installs a software mixer on the outgoing voice
         # stream so a low ambient "thinking" bed, verbal acknowledgements, and
         # TTS replies can OVERLAP (ducking the ambient under speech) instead of
-        # stop-and-swap — the Grok-voice-mode feel. discord.py ships no mixer;
+        # stop-and-swap during long-running voice interactions. discord.py ships no mixer;
         # this is implemented in plugins/platforms/discord/voice_mixer.py.
         "voice_fx": {
             "enabled": False,         # master switch for the mixer subsystem
@@ -2983,28 +2977,6 @@ DEFAULT_CONFIG = {
     },
 
 
-    # X (Twitter) Search via xAI's built-in x_search Responses tool.
-    # The tool registers when xAI credentials are available (SuperGrok
-    # OAuth or XAI_API_KEY) AND the x_search toolset is enabled in
-    # `hermes tools`. These settings tune the backing Responses API call.
-    "x_search": {
-        # xAI model used for the Responses call. grok-4.20-reasoning is
-        # the recommended default; any Grok model with x_search tool
-        # access works.
-        "model": "grok-4.20-reasoning",
-        # Request timeout in seconds (minimum 30). x_search can take
-        # 60-120s for complex queries — the default is generous.
-        "timeout_seconds": 180,
-        # Number of automatic retries on 5xx / ReadTimeout / ConnectionError.
-        # Each retry backs off (1.5x attempt seconds, capped at 5s).
-        "retries": 2,
-    },
-
-    # =========================================================================
-    # External secret sources
-    # =========================================================================
-    # Pull credentials from external secret managers at process startup
-    # rather than storing them in ~/.hermes/.env.
     "secrets": {
         "bitwarden": {
             # Master switch.  When false, BSM is never contacted and the
@@ -3173,22 +3145,6 @@ OPTIONAL_ENV_VARS = {
                        "application-default login). Set project/region under vertex: in config.yaml.",
         "prompt": "Vertex service account JSON path (leave empty to use ADC / GOOGLE_APPLICATION_CREDENTIALS)",
         "url": "https://cloud.google.com/iam/docs/keys-create-delete",
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "XAI_API_KEY": {
-        "description": "xAI API key",
-        "prompt": "xAI API key",
-        "url": "https://console.x.ai/",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "XAI_BASE_URL": {
-        "description": "xAI base URL override",
-        "prompt": "xAI base URL (leave empty for default)",
-        "url": None,
         "password": False,
         "category": "provider",
         "advanced": True,

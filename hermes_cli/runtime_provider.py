@@ -17,7 +17,6 @@ from hermes_cli.auth import (
     AuthError,
     DEFAULT_CODEX_BASE_URL,
     DEFAULT_QWEN_BASE_URL,
-    DEFAULT_XAI_OAUTH_BASE_URL,
     PROVIDER_REGISTRY,
     _agent_key_is_usable,
     _nous_inference_env_override,
@@ -25,7 +24,6 @@ from hermes_cli.auth import (
     resolve_provider,
     resolve_nous_runtime_credentials,
     resolve_codex_runtime_credentials,
-    resolve_xai_oauth_runtime_credentials,
     resolve_qwen_runtime_credentials,
     resolve_api_key_provider_credentials,
     resolve_external_process_provider_credentials,
@@ -136,7 +134,7 @@ def _detect_api_mode_for_url(base_url: str) -> Optional[str]:
 def _resolve_plain_custom_api_mode(model_cfg: Dict[str, Any], base_url: str) -> str:
     """Resolve api_mode for legacy/plain ``provider: custom`` endpoints.
 
-    Custom endpoints should stay conservative by default. Only direct OpenAI/xAI
+    Custom endpoints should stay conservative by default. Only direct OpenAI
     URLs imply Responses API automatically; named custom providers can opt in via
     their own ``api_mode`` field. This also prevents a stale persisted
     ``model.api_mode: codex_responses`` from forcing generic relays onto the
@@ -412,9 +410,6 @@ def _resolve_runtime_from_pool_entry(
     if provider == "openai-codex":
         api_mode = "codex_responses"
         base_url = base_url or DEFAULT_CODEX_BASE_URL
-    elif provider == "xai-oauth":
-        api_mode = "codex_responses"
-        base_url = base_url or DEFAULT_XAI_OAUTH_BASE_URL
     elif provider == "qwen-oauth":
         api_mode = "chat_completions"
         base_url = base_url or DEFAULT_QWEN_BASE_URL
@@ -437,8 +432,6 @@ def _resolve_runtime_from_pool_entry(
         base_url = cfg_base_url or base_url or "https://api.anthropic.com"
     elif provider == "openrouter":
         base_url = base_url or OPENROUTER_BASE_URL
-    elif provider == "xai":
-        api_mode = "codex_responses"
     elif provider == "nous":
         api_mode = "chat_completions"
         base_url = _nous_inference_base_url_override() or base_url
@@ -1478,8 +1471,6 @@ def _resolve_explicit_runtime(
         api_mode = "chat_completions"
         if provider == "copilot":
             api_mode = _copilot_runtime_api_mode(model_cfg, api_key)
-        elif provider == "xai":
-            api_mode = "codex_responses"
         else:
             configured_mode = _parse_api_mode(model_cfg.get("api_mode"))
             if configured_mode:
@@ -1780,24 +1771,6 @@ def resolve_runtime_provider(
             logger.info("Auto-detected Codex provider but credentials failed; "
                         "falling through to next provider.")
 
-    if provider == "xai-oauth":
-        try:
-            creds = resolve_xai_oauth_runtime_credentials()
-            return {
-                "provider": "xai-oauth",
-                "api_mode": "codex_responses",
-                "base_url": (creds.get("base_url") or "").rstrip("/") or DEFAULT_XAI_OAUTH_BASE_URL,
-                "api_key": creds.get("api_key", ""),
-                "source": creds.get("source", "hermes-auth-store"),
-                "last_refresh": creds.get("last_refresh"),
-                "requested_provider": requested_provider,
-            }
-        except AuthError:
-            if requested_provider != "auto":
-                raise
-            logger.info("Auto-detected xAI OAuth provider but credentials failed; "
-                        "falling through to next provider.")
-
     if provider == "qwen-oauth":
         try:
             creds = resolve_qwen_runtime_credentials()
@@ -1998,8 +1971,6 @@ def resolve_runtime_provider(
         api_mode = "chat_completions"
         if provider == "copilot":
             api_mode = _copilot_runtime_api_mode(model_cfg, creds.get("api_key", ""))
-        elif provider == "xai":
-            api_mode = "codex_responses"
         else:
             configured_provider = str(model_cfg.get("provider") or "").strip().lower()
             # Only honor persisted api_mode when it belongs to the same provider family.

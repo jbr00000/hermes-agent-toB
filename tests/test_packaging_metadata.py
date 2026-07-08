@@ -103,7 +103,6 @@ def test_headless_distribution_keeps_media_browser_and_removes_legacy_platform_s
         "tools/tts_tool.py",
         "tools/video_generation_tool.py",
         "tools/vision_tools.py",
-        "tools/xai_video_tools.py",
     ]:
         assert tool_file not in dockerignore
     for tool_file in [

@@ -53,7 +53,6 @@ _VENDOR_PREFIXES: dict[str, str] = {
     "glm": "z-ai",
     "kimi": "moonshotai",
     "minimax": "minimax",
-    "grok": "x-ai",
     "qwen": "qwen",
     "mimo": "xiaomi",
     "trinity": "arcee-ai",
@@ -103,7 +102,6 @@ _MATCHING_PREFIX_STRIP_PROVIDERS: frozenset[str] = frozenset({
     "ollama-cloud",
     "custom",
     "gemini",
-    "xai",
 })
 
 # Providers whose APIs require lowercase model IDs.  Xiaomi's

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 Standalone Web Tools Module
 
@@ -42,14 +42,14 @@ import os
 import re
 import asyncio
 from typing import List, Dict, Any, Optional, TYPE_CHECKING
-import httpx  # noqa: F401 — kept at module top so tests can patch tools.web_tools.httpx
+import httpx  # noqa: F401 鈥?kept at module top so tests can patch tools.web_tools.httpx
 # After the web-provider plugin migration (PR #25182), the Firecrawl SDK
 # proxy, client construction, and response-shape normalizers all live in
 # plugins.web.firecrawl.provider. We re-export the names that external
 # code, integration tests, and unit-test patches reach for so the public
 # surface stays stable.
 if TYPE_CHECKING:
-    from firecrawl import Firecrawl  # noqa: F401 — type hints only
+    from firecrawl import Firecrawl  # noqa: F401 鈥?type hints only
 from plugins.web.firecrawl.provider import (
     Firecrawl,  # noqa: F401  # re-exported for tests that mock.patch("tools.web_tools.Firecrawl")
     _firecrawl_backend_help_suffix,
@@ -60,7 +60,7 @@ from plugins.web.firecrawl.provider import (
 )
 # Tavily helpers re-exported for backward-compat with existing unit tests
 # (tests/tools/test_web_tools_tavily.py imports these names directly).
-from plugins.web.tavily.provider import (  # noqa: F401 — backward-compat names
+from plugins.web.tavily.provider import (  # noqa: F401 鈥?backward-compat names
     _normalize_tavily_documents,
     _normalize_tavily_search_results,
     _tavily_request,
@@ -68,7 +68,7 @@ from plugins.web.tavily.provider import (  # noqa: F401 — backward-compat name
 # Parallel + Exa clients re-exported for backward-compat with existing
 # unit tests (tests/tools/test_web_tools_config.py imports _get_parallel_client
 # / _get_async_parallel_client / _get_exa_client directly).
-from plugins.web.parallel.provider import (  # noqa: F401 — backward-compat names
+from plugins.web.parallel.provider import (  # noqa: F401 鈥?backward-compat names
     _get_async_parallel_client,
     _get_parallel_client,
 )
@@ -86,7 +86,7 @@ _exa_client: Optional[Any] = None
 from tools.debug_helpers import DebugSession
 # Imported solely so unit tests can monkeypatch these names on
 # tools.web_tools (the firecrawl plugin reads them via its own import chain).
-from tools.managed_tool_gateway import (  # noqa: F401 — backward-compat names for tests
+from tools.managed_tool_gateway import (  # noqa: F401 鈥?backward-compat names for tests
     build_vendor_gateway_url,
     peek_nous_access_token as _peek_nous_access_token,
     read_nous_access_token as _read_nous_access_token,
@@ -103,14 +103,14 @@ import sys
 logger = logging.getLogger(__name__)
 
 
-# ─── Backend Selection ────────────────────────────────────────────────────────
+# 鈹€鈹€鈹€ Backend Selection 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 def _env_value(name: str) -> str:
     """Resolve ``name`` via Hermes config-aware env, falling back to process env.
 
     Mirrors the SearXNG provider's ``_searxng_url()`` so that values set
     through Hermes' config/.env layer (``hermes config set``, ``hermes tools``)
-    are honored here too — not just raw process-env exports. Without this,
+    are honored here too 鈥?not just raw process-env exports. Without this,
     a config-only ``SEARXNG_URL`` (or any provider key) leaves the backend
     auto-detect cascade and ``check_web_api_key()`` blind to it. See #34290.
     """
@@ -144,10 +144,10 @@ def _get_backend() -> str:
     keys manually without running setup.
     """
     configured = (_load_web_config().get("backend") or "").lower().strip()
-    if configured in {"parallel", "firecrawl", "tavily", "exa", "searxng", "brave-free", "ddgs", "xai"}:
+    if configured in {"parallel", "firecrawl", "tavily", "exa", "searxng", "brave-free", "ddgs"}:
         return configured
 
-    # Fallback for manual / legacy config — pick the highest-priority
+    # Fallback for manual / legacy config 鈥?pick the highest-priority
     # available backend. Explicit user credentials (TAVILY_API_KEY etc.)
     # beat the managed-tool-gateway probe so a deliberate setup is not
     # pre-empted by a Nous OAuth token whose subscription tier may not
@@ -176,7 +176,7 @@ def _get_search_backend() -> str:
 
     Selection priority:
     1. ``web.search_backend`` (per-capability override)
-    2. ``web.backend`` (shared fallback — existing behavior)
+    2. ``web.backend`` (shared fallback 鈥?existing behavior)
     3. Auto-detect from env vars
 
     This enables using different providers for search vs extract
@@ -190,7 +190,7 @@ def _get_extract_backend() -> str:
 
     Selection priority:
     1. ``web.extract_backend`` (per-capability override)
-    2. ``web.backend`` (shared fallback — existing behavior)
+    2. ``web.backend`` (shared fallback 鈥?existing behavior)
     3. Auto-detect from env vars
     """
     return _get_capability_backend("extract")
@@ -225,16 +225,7 @@ def _is_backend_available(backend: str) -> bool:
         return _has_env("BRAVE_SEARCH_API_KEY")
     if backend == "ddgs":
         return _ddgs_package_importable()
-    if backend == "xai":
-        # Cheap probe — env var OR auth.json has OAuth tokens. Must not
-        # call resolve_xai_http_credentials() here because the OAuth path
-        # can trigger a network token refresh, and _is_backend_available
-        # runs on every web_search dispatch + every `hermes tools` repaint.
-        try:
-            from tools.xai_http import has_xai_credentials
-            return has_xai_credentials()
-        except Exception:
-            return False
+    return False
     return False
 
 
@@ -252,9 +243,9 @@ def _ddgs_package_importable() -> bool:
     except ImportError:
         return False
 
-# ─── Firecrawl Client ────────────────────────────────────────────────────────
+# 鈹€鈹€鈹€ Firecrawl Client 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
-# ─── Firecrawl Client ────────────────────────────────────────────────────────
+# 鈹€鈹€鈹€ Firecrawl Client 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 # After PR #25182, the firecrawl client, lazy SDK proxy, dual-auth config
 # resolution, response normalizers, and check_firecrawl_api_key() all live
 # in plugins.web.firecrawl.provider and are re-exported at the top of this
@@ -265,7 +256,7 @@ def _ddgs_package_importable() -> bool:
 def _web_requires_env() -> list[str]:
     """Return tool metadata env vars for the currently enabled web backends.
 
-    The gateway env vars are always reported — they're metadata strings
+    The gateway env vars are always reported 鈥?they're metadata strings
     used by the tool registry to light up the tool when the variable is
     set.  Gating them on ``managed_nous_tools_enabled()`` only saved
     string noise in the metadata list, but cost a synchronous HTTP
@@ -287,7 +278,7 @@ def _web_requires_env() -> list[str]:
     ]
 
 
-# ─── Parallel / Tavily / Firecrawl helpers — moved into plugins ──────────────
+# 鈹€鈹€鈹€ Parallel / Tavily / Firecrawl helpers 鈥?moved into plugins 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 # After PR #25182, the per-vendor client construction, request helpers, and
 # response normalizers all live in plugins.web.<vendor>.provider:
 #   - parallel: plugins/web/parallel/provider.py
@@ -303,7 +294,7 @@ def _web_requires_env() -> list[str]:
 # Default budget (characters) of clean page text sent to the model. Pages at
 # or under this size are returned whole; larger pages are head+tail truncated
 # and the full text is stored on disk (see _store_full_text). Spending context,
-# not API dollars — so this is generous relative to the old 5k summary cap.
+# not API dollars 鈥?so this is generous relative to the old 5k summary cap.
 # Override via web.extract_char_limit in config.yaml.
 DEFAULT_EXTRACT_CHAR_LIMIT = 15000
 
@@ -410,7 +401,7 @@ def _truncate_with_footer(
     head+tail window (~75% head / ~25% tail) cut on a markdown line boundary
     where possible, plus an explicit footer telling the model exactly how much
     it is seeing, where the full text is stored, and which read_file call pages
-    in the omitted middle. Deterministic — no model involvement.
+    in the omitted middle. Deterministic 鈥?no model involvement.
     """
     if len(content) <= char_limit:
         return content, False
@@ -435,7 +426,7 @@ def _truncate_with_footer(
 
     footer_lines = [
         "",
-        "─" * 8 + " [TRUNCATED] " + "─" * 8,
+        "鈹€" * 8 + " [TRUNCATED] " + "鈹€" * 8,
         f"Showing {len(head):,} chars (head) + {len(tail):,} chars (tail) "
         f"of {total:,} total clean characters.",
     ]
@@ -456,15 +447,15 @@ def _truncate_with_footer(
             "Full text could not be stored; re-run web_extract on a more "
             "specific URL or use browser_navigate for the complete page."
         )
-    footer_lines.append("─" * 29)
+    footer_lines.append("鈹€" * 29)
 
-    model_text = head + "\n\n[... middle omitted — see footer ...]\n\n" + tail
+    model_text = head + "\n\n[... middle omitted 鈥?see footer ...]\n\n" + tail
     model_text += "\n" + "\n".join(footer_lines)
     return model_text, True
 
 
 
-# ─── Exa / Parallel inline helpers — moved into plugins ──────────────────────
+# 鈹€鈹€鈹€ Exa / Parallel inline helpers 鈥?moved into plugins 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 # After PR #25182, the exa client + search/extract and parallel client +
 # search/extract helpers all live in their respective plugins:
 #   - plugins/web/exa/provider.py
@@ -479,8 +470,8 @@ def _ensure_web_plugins_loaded() -> None:
     Every bundled web provider (brave-free, ddgs, searxng, exa, parallel,
     tavily, firecrawl) registers itself via ``plugins/web/<vendor>/__init__.py``
     during plugin discovery. Tool dispatch can be reached from contexts that
-    haven't already triggered discovery — subprocess agent runs, delegate
-    children, standalone scripts, certain test paths — and without it the
+    haven't already triggered discovery 鈥?subprocess agent runs, delegate
+    children, standalone scripts, certain test paths 鈥?and without it the
     registry is empty and ``get_provider('firecrawl')`` returns ``None`` even
     when the user has ``web.extract_backend: firecrawl`` configured and
     ``FIRECRAWL_API_KEY`` set. The symptom is a misleading "No web extract
@@ -561,7 +552,7 @@ def web_search_tool(query: str, limit: int = 5) -> str:
         # Dispatch through the web search registry. All 7 providers
         # (brave-free, ddgs, searxng, exa, parallel, tavily, firecrawl)
         # now live as plugins; the dispatcher is just a registry lookup +
-        # delegation. Sync only — every provider's search() is sync.
+        # delegation. Sync only 鈥?every provider's search() is sync.
         _ensure_web_plugins_loaded()
         from agent.web_search_registry import (
             get_active_search_provider,
@@ -690,7 +681,7 @@ async def web_extract_tool(
     try:
         logger.info("Extracting content from %d URL(s)", len(normalized_urls))
 
-        # ── SSRF protection — filter out private/internal URLs before any backend ──
+        # 鈹€鈹€ SSRF protection 鈥?filter out private/internal URLs before any backend 鈹€鈹€
         safe_urls = []
         ssrf_blocked: List[Dict[str, Any]] = []
         for url in normalized_urls:
@@ -711,7 +702,7 @@ async def web_extract_tool(
             # All seven providers (brave-free, ddgs, searxng, exa, parallel,
             # tavily, firecrawl) now live as plugins. The dispatcher is a
             # registry lookup + delegation. Some providers' extract() is
-            # async (parallel, firecrawl), others sync (exa, tavily) — we
+            # async (parallel, firecrawl), others sync (exa, tavily) 鈥?we
             # detect coroutine functions and await; sync functions run
             # inline (the policy gate, SSRF re-check, etc. live inside the
             # provider itself for the firecrawl per-URL loop).
@@ -863,11 +854,11 @@ async def web_extract_tool(
 def check_web_api_key() -> bool:
     """Check whether the configured web backend is available."""
     configured = _load_web_config().get("backend", "").lower().strip()
-    if configured in {"exa", "parallel", "firecrawl", "tavily", "searxng", "brave-free", "ddgs", "xai"}:
+    if configured in {"exa", "parallel", "firecrawl", "tavily", "searxng", "brave-free", "ddgs"}:
         return _is_backend_available(configured)
     return any(
         _is_backend_available(backend)
-        for backend in ("exa", "parallel", "firecrawl", "tavily", "searxng", "brave-free", "ddgs", "xai")
+        for backend in ("exa", "parallel", "firecrawl", "tavily", "searxng", "brave-free", "ddgs")
     )
 
 
@@ -875,7 +866,7 @@ if __name__ == "__main__":
     """
     Simple test/demo when run directly
     """
-    print("🌐 Standalone Web Tools Module")
+    print("馃寪 Standalone Web Tools Module")
     print("=" * 40)
 
     # Check if API keys are available
@@ -886,7 +877,7 @@ if __name__ == "__main__":
 
     if web_available:
         backend = _get_backend()
-        print(f"✅ Web backend: {backend}")
+        print(f"鉁?Web backend: {backend}")
         if backend == "exa":
             print("   Using Exa API (https://exa.ai)")
         elif backend == "parallel":
@@ -908,7 +899,7 @@ if __name__ == "__main__":
         else:
             print("   Firecrawl backend selected but not configured")
     else:
-        print("❌ No web search backend configured")
+        print("鉂?No web search backend configured")
         print(
             "Set EXA_API_KEY, PARALLEL_API_KEY, TAVILY_API_KEY, FIRECRAWL_API_KEY, FIRECRAWL_API_URL"
             f"{_firecrawl_backend_help_suffix()}"
@@ -917,16 +908,16 @@ if __name__ == "__main__":
     if not web_available:
         sys.exit(1)
 
-    print("🛠️  Web tools ready for use!")
+    print("馃洜锔? Web tools ready for use!")
     print(f"   Extract char limit: {_get_extract_char_limit()} chars "
           "(pages over this are truncated; full text stored in cache/web)")
 
     # Show debug mode status
     if _debug.active:
-        print(f"🐛 Debug mode ENABLED - Session ID: {_debug.session_id}")
+        print(f"馃悰 Debug mode ENABLED - Session ID: {_debug.session_id}")
         print(f"   Debug logs will be saved to: {_debug.log_dir}/web_tools_debug_{_debug.session_id}.json")
     else:
-        print("🐛 Debug mode disabled (set WEB_TOOLS_DEBUG=true to enable)")
+        print("馃悰 Debug mode disabled (set WEB_TOOLS_DEBUG=true to enable)")
 
     print("\nBasic usage:")
     print("  from web_tools import web_search_tool, web_extract_tool")
@@ -935,7 +926,7 @@ if __name__ == "__main__":
     print("  # Search (synchronous)")
     print("  results = web_search_tool('Python tutorials')")
     print("")
-    print("  # Extract (asynchronous, no LLM — truncate-and-store)")
+    print("  # Extract (asynchronous, no LLM 鈥?truncate-and-store)")
     print("  async def main():")
     print("      content = await web_extract_tool(['https://example.com'])")
     print("      # bigger budget for one call:")
@@ -976,7 +967,7 @@ WEB_SEARCH_SCHEMA = {
 
 WEB_EXTRACT_SCHEMA = {
     "name": "web_extract",
-    "description": "Extract content from web page URLs. Returns clean page content in markdown/text (no LLM summarization — fast). Also works with PDF URLs (arxiv papers, documents) — pass the PDF link directly. Pages within the char budget (default 15000) return whole; larger pages return a head+tail window with a footer telling you the full text's saved file path and the read_file call to page through the omitted middle. Inline images appear as [IMAGE: alt] placeholders; real image URLs are kept as links. If a URL fails or times out, use the browser tool instead.",
+    "description": "Extract content from web page URLs. Returns clean page content in markdown/text (no LLM summarization 鈥?fast). Also works with PDF URLs (arxiv papers, documents) 鈥?pass the PDF link directly. Pages within the char budget (default 15000) return whole; larger pages return a head+tail window with a footer telling you the full text's saved file path and the read_file call to page through the omitted middle. Inline images appear as [IMAGE: alt] placeholders; real image URLs are kept as links. If a URL fails or times out, use the browser tool instead.",
     "parameters": {
         "type": "object",
         "properties": {
@@ -1003,7 +994,7 @@ registry.register(
     handler=lambda args, **kw: web_search_tool(args.get("query", ""), limit=args.get("limit", 5)),
     check_fn=check_web_api_key,
     requires_env=_web_requires_env(),
-    emoji="🔍",
+    emoji="馃攳",
     max_result_size_chars=100_000,
 )
 registry.register(
@@ -1018,6 +1009,6 @@ registry.register(
     check_fn=check_web_api_key,
     requires_env=_web_requires_env(),
     is_async=True,
-    emoji="📄",
+    emoji="馃搫",
     max_result_size_chars=100_000,
 )

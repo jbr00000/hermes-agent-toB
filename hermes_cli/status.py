@@ -143,7 +143,6 @@ def show_status(args):
         "Anthropic": ("ANTHROPIC_API_KEY", "ANTHROPIC_TOKEN"),
         "Google / Gemini": ("GOOGLE_API_KEY", "GEMINI_API_KEY"),
         "DeepSeek": "DEEPSEEK_API_KEY",
-        "xAI / Grok": "XAI_API_KEY",
         "NVIDIA NIM": "NVIDIA_API_KEY",
         "Z.AI / GLM": "GLM_API_KEY",
         "Kimi": "KIMI_API_KEY",
@@ -304,26 +303,6 @@ def show_status(args):
     if minimax_status.get("error") and not minimax_logged_in:
         print(f"    Error:      {minimax_status.get('error')}")
 
-    # xAI OAuth — separate try/except so an import failure here cannot
-    # disrupt the already-printed Nous/Codex/Qwen/MiniMax rows above.
-    try:
-        from hermes_cli.auth import get_xai_oauth_auth_status
-        xai_oauth_status = get_xai_oauth_auth_status() or {}
-    except Exception:
-        xai_oauth_status = {}
-
-    xai_oauth_logged_in = bool(xai_oauth_status.get("logged_in"))
-    print(
-        f"  {'xAI OAuth':<12}  {check_mark(xai_oauth_logged_in)} "
-        f"{'logged in' if xai_oauth_logged_in else 'not logged in (run: hermes auth add xai-oauth)'}"
-    )
-    xai_auth_file = xai_oauth_status.get("auth_store")
-    if xai_auth_file:
-        print(f"    Auth file:  {xai_auth_file}")
-    if xai_oauth_status.get("last_refresh"):
-        print(f"    Refreshed:  {_format_iso_timestamp(xai_oauth_status.get('last_refresh'))}")
-    if xai_oauth_status.get("error") and not xai_oauth_logged_in:
-        print(f"    Error:      {xai_oauth_status.get('error')}")
 
     # =========================================================================
     # Nous Subscription Features

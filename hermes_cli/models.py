@@ -47,8 +47,6 @@ OPENROUTER_MODELS: list[tuple[str, str]] = [
     ("google/gemini-3-pro-preview",            ""),
     ("google/gemini-3.1-pro-preview",          ""),
     ("google/gemini-3.5-flash",                ""),
-    # xAI
-    ("x-ai/grok-4.3",                          ""),
     # DeepSeek
     ("deepseek/deepseek-v4-pro",               ""),
     ("deepseek/deepseek-v4-flash",             ""),
@@ -102,79 +100,6 @@ def _codex_curated_models() -> list[str]:
     return _add_forward_compat_models(list(DEFAULT_CODEX_MODELS))
 
 
-# Static fallback for xAI when the models.dev disk cache is empty (fresh
-# install, offline first run, etc.). Mirrors the xAI-direct model IDs from
-# $HERMES_HOME/models_dev_cache.json as of 2026-04-28. Whenever xAI renames
-# or retires a model, the disk cache picks it up on the next refresh and the
-# fallback here only matters until that refresh lands.
-#
-# Models retired by xAI on May 15, 2026 are excluded — see
-# https://docs.x.ai/developers/migration/may-15-retirement
-# (grok-4, grok-4-0709, grok-4-fast{,-reasoning,-non-reasoning},
-#  grok-4-1-fast{,-reasoning,-non-reasoning}, grok-code-fast-1 → grok-4.3).
-_XAI_STATIC_FALLBACK: list[str] = [
-    "grok-build-0.1",
-    "grok-4.3",
-    "grok-4.20-0309-reasoning",
-    "grok-4.20-0309-non-reasoning",
-    "grok-4.20-multi-agent-0309",
-]
-
-# Callable via xAI OAuth but omitted from models.dev and /v1/models listings.
-_XAI_CURATED_EXTRAS: list[str] = [
-    "grok-composer-2.5-fast",
-]
-
-
-_XAI_TOP_MODEL = "grok-build-0.1"
-
-
-def _xai_promote_top(ids: list[str]) -> list[str]:
-    """Pin the headline xAI model to the top of the curated list."""
-    if _XAI_TOP_MODEL in ids:
-        return [_XAI_TOP_MODEL] + [m for m in ids if m != _XAI_TOP_MODEL]
-    return ids
-
-
-def _xai_merge_curated_extras(ids: list[str]) -> list[str]:
-    """Append Hermes-curated xAI models that are missing from models.dev."""
-    out = list(ids)
-    for extra in _XAI_CURATED_EXTRAS:
-        if extra in out:
-            continue
-        # Keep the headline model pinned; slot extras immediately after it.
-        insert_at = 1 if out and out[0] == _XAI_TOP_MODEL else len(out)
-        out.insert(insert_at, extra)
-    return out
-
-
-def _xai_curated_models() -> list[str]:
-    """Derive the xAI-direct curated list from models.dev disk cache.
-
-    Reads $HERMES_HOME/models_dev_cache.json directly (no network) so this
-    runs at import time without blocking. Falls back to ``_XAI_STATIC_FALLBACK``
-    when the cache is empty or unreadable. Hermes refreshes the cache from
-    https://models.dev/api.json on normal use, so this list self-heals as
-    xAI renames models.
-
-    Mirrors ``_codex_curated_models()``'s role for openai-codex.
-    """
-    try:
-        from agent.models_dev import _load_disk_cache
-        data = _load_disk_cache()
-        xai = data.get("xai") if isinstance(data, dict) else None
-        models = xai.get("models") if isinstance(xai, dict) else None
-        if isinstance(models, dict) and models:
-            ids = [mid for mid in models.keys() if isinstance(mid, str)]
-            if ids:
-                return _xai_merge_curated_extras(_xai_promote_top(sorted(ids)))
-    except Exception:
-        # Any failure (missing file, malformed JSON, import error)
-        # falls through to the static list.
-        pass
-    return _xai_merge_curated_extras(list(_XAI_STATIC_FALLBACK))
-
-
 _PROVIDER_MODELS: dict[str, list[str]] = {
     "moa": ["default"],
     "nous": [
@@ -191,8 +116,6 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "google/gemini-3-pro-preview",
         "google/gemini-3.1-pro-preview",
         "google/gemini-3.5-flash",
-        # xAI
-        "x-ai/grok-4.3",
         # DeepSeek
         "deepseek/deepseek-v4-pro",
         "deepseek/deepseek-v4-flash",
@@ -244,7 +167,6 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "gpt-4o-mini",
     ],
     "openai-codex": _codex_curated_models(),
-    "xai-oauth": _xai_curated_models(),
     "copilot-acp": [
         "copilot-acp",
     ],
@@ -282,7 +204,6 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "glm-4.5",
         "glm-4.5-flash",
     ],
-    "xai": _xai_curated_models(),
     "nvidia": [
         # NVIDIA flagship reasoning models
         "nvidia/nemotron-3-ultra-550b-a55b",
@@ -426,7 +347,6 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "qwen3.6-plus",
         "qwen3.6-plus-free",
         "qwen3.5-plus",
-        "grok-build-0.1",
         "big-pickle",
         "mimo-v2.5-free",
         "north-mini-code-free",
@@ -1027,7 +947,6 @@ CANONICAL_PROVIDERS: list[ProviderEntry] = [
     ProviderEntry("openai-codex",   "OpenAI Codex",             "OpenAI Codex (Codex CLI via ChatGPT subscription or API key)"),
     ProviderEntry("openai-api",     "OpenAI API",               "OpenAI API (api.openai.com, API key)"),
     ProviderEntry("alibaba",        "Qwen Cloud",               "Qwen Cloud / DashScope (Qwen + multi-provider)"),
-    ProviderEntry("xai-oauth",      "xAI Grok OAuth (SuperGrok / Premium+)", "xAI Grok OAuth (SuperGrok / Premium+ subscription)"),
     ProviderEntry("xiaomi",         "Xiaomi MiMo",              "Xiaomi MiMo (MiMo-V2.5 and V2 models: pro, omni, flash)"),
     ProviderEntry("tencent-tokenhub", "Tencent TokenHub",       "Tencent TokenHub (Hy3 Preview via tokenhub.tencentmaas.com)"),
     ProviderEntry("nvidia",         "NVIDIA NIM",               "NVIDIA NIM (Nemotron models via build.nvidia.com or local NIM)"),
@@ -1037,7 +956,6 @@ CANONICAL_PROVIDERS: list[ProviderEntry] = [
     ProviderEntry("gemini",         "Google AI Studio",         "Google AI Studio (Native Gemini API)"),
     ProviderEntry("vertex",         "Google Vertex AI",         "Google Vertex AI (Gemini via GCP; OAuth2 service account or ADC, GCP billing/quotas)"),
     ProviderEntry("deepseek",       "DeepSeek",                 "DeepSeek (V3, R1, coder, direct API)"),
-    ProviderEntry("xai",            "xAI",                      "xAI Grok (Direct API)"),
     ProviderEntry("zai",            "Z.AI / GLM",               "Z.AI / GLM (Zhipu direct API)"),
     ProviderEntry("kimi-coding",    "Kimi / Kimi Coding Plan",  "Kimi Coding Plan (api.kimi.com & Moonshot API)"),
     ProviderEntry("kimi-coding-cn", "Kimi / Moonshot (China)",  "Kimi / Moonshot China (Domestic direct API)"),
@@ -1105,7 +1023,6 @@ _PROVIDER_LABELS["custom"] = "Custom endpoint"  # special case: not a named prov
 PROVIDER_GROUPS: dict[str, tuple[str, str, list[str]]] = {
     "kimi":     ("Kimi / Moonshot", "Coding Plan, Moonshot global & China endpoints", ["kimi-coding", "kimi-coding-cn"]),
     "minimax":  ("MiniMax",         "Global, OAuth Coding Plan & China endpoints",     ["minimax", "minimax-oauth", "minimax-cn"]),
-    "xai":      ("xAI Grok",        "Direct API or SuperGrok / Premium+ OAuth",        ["xai", "xai-oauth"]),
     "google":   ("Google Gemini",   "Google AI Studio (API key)",                     ["gemini"]),
     "openai":   ("OpenAI",          "Codex CLI or direct OpenAI API",                  ["openai-codex", "openai-api"]),
     "opencode": ("OpenCode",        "Zen pay-as-you-go or Go subscription",            ["opencode-zen", "opencode-go"]),
@@ -1246,13 +1163,6 @@ _PROVIDER_ALIASES = {
     "aws-bedrock": "bedrock",
     "amazon-bedrock": "bedrock",
     "amazon": "bedrock",
-    "grok": "xai",
-    "grok-oauth": "xai-oauth",
-    "xai-oauth": "xai-oauth",
-    "x-ai-oauth": "xai-oauth",
-    "xai-grok-oauth": "xai-oauth",
-    "x-ai": "xai",
-    "x.ai": "xai",
     "nim": "nvidia",
     "nvidia-nim": "nvidia",
     "build-nvidia": "nvidia",
@@ -2279,8 +2189,6 @@ def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) 
         except Exception:
             access_token = None
         return get_codex_model_ids(access_token=access_token)
-    if normalized == "xai-oauth":
-        return list(_PROVIDER_MODELS.get("xai-oauth", _PROVIDER_MODELS.get("xai", [])))
     if normalized in {"copilot", "copilot-acp"}:
         try:
             live = _fetch_github_models(_resolve_copilot_catalog_api_key())
@@ -3314,7 +3222,7 @@ def copilot_model_api_mode(
 # the same endpoint worked fine.  Keep the patterns broad enough to cover
 # vendor-renamed deployments (e.g. ``gpt-5.3-codex``, ``gpt-5-codex``,
 # ``gpt-5.4``, ``o1-preview``) but tight enough to leave GPT-4 / 3.5 / Llama /
-# Mistral / Grok deployments on chat completions.
+# Some chat-completions deployments expose extra capabilities through metadata.
 _AZURE_FOUNDRY_RESPONSES_PREFIXES = (
     "codex",       # codex-*, codex-mini
     "gpt-5",       # gpt-5, gpt-5.x, gpt-5-codex, gpt-5.x-codex
@@ -3854,7 +3762,7 @@ def validate_requested_model(
         }
 
     # Providers with non-standard catalog validation — /v1/models probing is not the right path.
-    if normalized in {"openai-codex", "xai-oauth"}:
+    if normalized == "openai-codex":
         try:
             catalog_models = provider_model_ids(normalized)
         except Exception:
@@ -3881,11 +3789,11 @@ def validate_requested_model(
             suggestion_text = ""
             if suggestions:
                 suggestion_text = "\n  Similar models: " + ", ".join(f"`{s}`" for s in suggestions)
-            provider_label = "OpenAI Codex" if normalized == "openai-codex" else "xAI Grok OAuth (SuperGrok / Premium+)"
+            provider_label = "OpenAI Codex"
             # Plausibility gate (#45006): the soft-accept (#16172 / #19729) exists
             # for entitlement-gated *hidden* slugs the curated listing hasn't
             # caught up with — but those are always the provider's own family
-            # (openai-codex -> gpt-*; xai-oauth -> grok-*). Accepting an
+            # (openai-codex -> gpt-*). Accepting an
             # unrelated typed name (e.g. `qwen3.5-4b`, `llama-3.1-8b`) here turns
             # what should be an actionable "did you mean --provider <x>?" error
             # into a confusing success that 400s on the next turn. Only soft-
@@ -3893,7 +3801,6 @@ def validate_requested_model(
             # rest with guidance to pin the right provider.
             _family_prefixes = {
                 "openai-codex": ("gpt-", "codex-", "o1", "o3", "o4"),
-                "xai-oauth": ("grok-",),
             }.get(normalized, ())
             _lower = requested_for_lookup.strip().lower()
             _plausible = (not _family_prefixes) or any(

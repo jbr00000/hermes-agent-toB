@@ -149,12 +149,6 @@ def _has_healthy_oauth_fallback_for_apikey_provider(provider_label: str) -> bool
             return bool((get_minimax_oauth_auth_status() or {}).get("logged_in"))
         except Exception:
             return False
-    if normalized == "xai":
-        try:
-            from hermes_cli.auth import get_xai_oauth_auth_status
-            return bool((get_xai_oauth_auth_status() or {}).get("logged_in"))
-        except Exception:
-            return False
     return False
 
 
@@ -969,31 +963,6 @@ def run_doctor(args):
         except Exception:
             pass
 
-    _section("xAI Model Retirement (May 15, 2026)")
-
-    try:
-        from hermes_cli.config import load_config
-        from hermes_cli.xai_retirement import (
-            MIGRATION_GUIDE_URL,
-            find_retired_xai_refs,
-            format_issue,
-        )
-
-        _xai_cfg = load_config()
-        retired_refs = find_retired_xai_refs(_xai_cfg)
-        if not retired_refs:
-            check_ok("No retired xAI models in config")
-        else:
-            for ref in retired_refs:
-                check_warn(format_issue(ref))
-            check_info(f"Migration guide: {MIGRATION_GUIDE_URL}")
-            manual_issues.append(
-                f"Update {len(retired_refs)} retired xAI model reference(s) "
-                f"in config.yaml — see {MIGRATION_GUIDE_URL}"
-            )
-    except Exception as _xai_check_err:
-        check_warn("xAI retirement check skipped", f"({_xai_check_err})")
-
     _section("Auth Providers")
 
     try:
@@ -1035,20 +1004,6 @@ def run_doctor(args):
             check_warn("MiniMax OAuth", "(not logged in)")
     except Exception as e:
         check_warn("Auth provider status", f"(could not check: {e})")
-
-    # xAI OAuth — separate try/except so an import failure here cannot
-    # disrupt the already-printed Nous/Codex/Gemini/MiniMax rows above.
-    try:
-        from hermes_cli.auth import get_xai_oauth_auth_status
-        xai_oauth_status = get_xai_oauth_auth_status() or {}
-        if xai_oauth_status.get("logged_in"):
-            check_ok("xAI OAuth", "(logged in)")
-        else:
-            check_warn("xAI OAuth", "(not logged in)")
-            if xai_oauth_status.get("error"):
-                check_info(xai_oauth_status["error"])
-    except Exception:
-        pass
 
     _section("Directory Structure")
     hermes_home = HERMES_HOME

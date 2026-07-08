@@ -97,17 +97,6 @@ TOOLSETS = {
         "includes": []
     },
 
-    "x_search": {
-        "description": (
-            "Search X (Twitter) posts and threads via xAI's built-in "
-            "x_search Responses tool. Available when xAI credentials are "
-            "configured (SuperGrok OAuth or XAI_API_KEY). Off by default; "
-            "enable in `hermes tools` → X (Twitter) Search."
-        ),
-        "tools": ["x_search"],
-        "includes": []
-    },
-    
     "vision": {
         "description": "Image analysis and vision tools",
         "tools": ["vision_analyze"],
@@ -134,7 +123,7 @@ TOOLSETS = {
             "extend workflows may appear as separate tools. Configure via "
             "``hermes tools`` → Video Generation."
         ),
-        "tools": ["video_generate", "xai_video_edit", "xai_video_extend"],
+        "tools": ["video_generate"],
         "includes": []
     },
 
@@ -176,7 +165,7 @@ TOOLSETS = {
     },
     
     "tts": {
-        "description": "Text-to-speech: convert text to audio with Edge TTS (free), ElevenLabs, OpenAI, or xAI",
+        "description": "Text-to-speech: convert text to audio with Edge TTS (free), ElevenLabs, OpenAI, or local providers",
         "tools": ["text_to_speech"],
         "includes": []
     },

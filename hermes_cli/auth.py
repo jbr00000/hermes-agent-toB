@@ -168,12 +168,6 @@ PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
         api_key_env_vars=("OPENAI_API_KEY",),
         base_url_env_var="OPENAI_BASE_URL",
     ),
-    "xai-oauth": ProviderConfig(
-        id="xai-oauth",
-        name="xAI Grok OAuth (SuperGrok / Premium+)",
-        auth_type="oauth_external",
-        inference_base_url=DEFAULT_XAI_OAUTH_BASE_URL,
-    ),
     "qwen-oauth": ProviderConfig(
         id="qwen-oauth",
         name="Qwen OAuth",
@@ -319,14 +313,6 @@ PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
         inference_base_url="https://api.deepseek.com/v1",
         api_key_env_vars=("DEEPSEEK_API_KEY",),
         base_url_env_var="DEEPSEEK_BASE_URL",
-    ),
-    "xai": ProviderConfig(
-        id="xai",
-        name="xAI",
-        auth_type="api_key",
-        inference_base_url="https://api.x.ai/v1",
-        api_key_env_vars=("XAI_API_KEY",),
-        base_url_env_var="XAI_BASE_URL",
     ),
     "nvidia": ProviderConfig(
         id="nvidia",
@@ -1577,9 +1563,6 @@ def resolve_provider(
     _PROVIDER_ALIASES = {
         "glm": "zai", "z-ai": "zai", "z.ai": "zai", "zhipu": "zai",
         "google": "gemini", "google-gemini": "gemini", "google-ai-studio": "gemini",
-        "x-ai": "xai", "x.ai": "xai", "grok": "xai",
-        "xai-oauth": "xai-oauth", "x-ai-oauth": "xai-oauth",
-        "grok-oauth": "xai-oauth", "xai-grok-oauth": "xai-oauth",
         "kimi": "kimi-coding", "kimi-for-coding": "kimi-coding", "moonshot": "kimi-coding",
         "kimi-cn": "kimi-coding-cn", "moonshot-cn": "kimi-coding-cn",
         "step": "stepfun", "stepfun-coding-plan": "stepfun",
@@ -5440,8 +5423,6 @@ def get_auth_status(provider_id: Optional[str] = None) -> Dict[str, Any]:
         return get_nous_auth_status()
     if target == "openai-codex":
         return get_codex_auth_status()
-    if target == "xai-oauth":
-        return get_xai_oauth_auth_status()
     if target == "qwen-oauth":
         return get_qwen_auth_status()
     if target == "minimax-oauth":
@@ -5764,7 +5745,7 @@ def _logout_default_provider_from_config() -> Optional[str]:
     "No provider is currently logged in" and never reset model.provider.
     """
     provider = _get_config_provider()
-    if provider in {"nous", "openai-codex", "xai-oauth"}:
+    if provider in {"nous", "openai-codex"}:
         return provider
     return None
 

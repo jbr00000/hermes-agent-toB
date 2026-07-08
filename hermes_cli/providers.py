@@ -69,12 +69,6 @@ HERMES_OVERLAYS: Dict[str, HermesOverlay] = {
         base_url_override="https://api.openai.com/v1",
         base_url_env_var="OPENAI_BASE_URL",
     ),
-    "xai-oauth": HermesOverlay(
-        transport="codex_responses",
-        auth_type="oauth_external",
-        base_url_override="https://api.x.ai/v1",
-        base_url_env_var="XAI_BASE_URL",
-    ),
     "qwen-oauth": HermesOverlay(
         transport="openai_chat",
         auth_type="oauth_external",
@@ -167,11 +161,6 @@ HERMES_OVERLAYS: Dict[str, HermesOverlay] = {
         is_aggregator=True,
         base_url_env_var="NOVITA_BASE_URL",
     ),
-    "xai": HermesOverlay(
-        transport="codex_responses",
-        base_url_override="https://api.x.ai/v1",
-        base_url_env_var="XAI_BASE_URL",
-    ),
     "nvidia": HermesOverlay(
         transport="openai_chat",
         base_url_override="https://integrate.api.nvidia.com/v1",
@@ -246,15 +235,6 @@ ALIASES: Dict[str, str] = {
     "z-ai": "zai",
     "z.ai": "zai",
     "zhipu": "zai",
-
-    # xai
-    "x-ai": "xai",
-    "x.ai": "xai",
-    "grok": "xai",
-    "grok-oauth": "xai-oauth",
-    "xai-oauth": "xai-oauth",
-    "x-ai-oauth": "xai-oauth",
-    "xai-grok-oauth": "xai-oauth",
 
     # nvidia
     "nim": "nvidia",
@@ -372,7 +352,6 @@ _LABEL_OVERRIDES: Dict[str, str] = {
     "local": "Local endpoint",
     "bedrock": "AWS Bedrock",
     "ollama-cloud": "Ollama Cloud",
-    "xai-oauth": "xAI Grok OAuth (SuperGrok / Premium+)",
 }
 
 

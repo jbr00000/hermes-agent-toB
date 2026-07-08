@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 Text-to-Speech Tool Module
 
@@ -9,7 +9,6 @@ Built-in TTS providers:
 - MiniMax TTS: High-quality with voice cloning, needs MINIMAX_API_KEY
 - Mistral (Voxtral TTS): Multilingual, native Opus, needs MISTRAL_API_KEY
 - Google Gemini TTS: Controllable, 30 prebuilt voices, needs GEMINI_API_KEY
-- xAI TTS: Grok voices, uses xAI Grok OAuth credentials or XAI_API_KEY
 - NeuTTS (local, free, no API key): On-device TTS via neutts
 - KittenTTS (local, free, no API key): On-device 25MB model
 - Piper (local, free, no API key): OHF-Voice/piper1-gpl neural VITS, 44 languages
@@ -76,7 +75,6 @@ from tools.tool_backend_helpers import (
     prefers_gateway,
     resolve_openai_audio_api_key,
 )
-from tools.xai_http import hermes_xai_user_agent
 
 # ---------------------------------------------------------------------------
 # Lazy imports -- providers are imported only when actually used to avoid
@@ -108,7 +106,7 @@ def _import_elevenlabs():
         from tools.lazy_deps import FeatureUnavailable, ensure
         ensure("tts.elevenlabs", prompt=False)
     except ImportError:
-        # lazy_deps module itself missing — fall through to the raw import
+        # lazy_deps module itself missing 鈥?fall through to the raw import
         # so older code paths still get a clean ImportError.
         pass
     except Exception as e:  # FeatureUnavailable or any unexpected error
@@ -182,19 +180,6 @@ DEFAULT_MINIMAX_VOICE_ID = "English_expressive_narrator"
 DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.io/v1/t2a_v2"
 DEFAULT_MISTRAL_TTS_MODEL = "voxtral-mini-tts-2603"
 DEFAULT_MISTRAL_TTS_VOICE_ID = "c69964a6-ab8b-4f8a-9465-ec0925096ec8"  # Paul - Neutral
-DEFAULT_XAI_VOICE_ID = "eve"
-DEFAULT_XAI_LANGUAGE = "en"
-DEFAULT_XAI_SAMPLE_RATE = 24000
-DEFAULT_XAI_BIT_RATE = 128000
-DEFAULT_XAI_AUTO_SPEECH_TAGS = False
-DEFAULT_XAI_BASE_URL = "https://api.x.ai/v1"
-# xAI TTS `speed` accepts 0.7..1.5; 1.0 is the API default (omitted => default).
-DEFAULT_XAI_SPEED_MIN = 0.7
-DEFAULT_XAI_SPEED_MAX = 1.5
-DEFAULT_XAI_SPEED_DEFAULT = 1.0
-# xAI TTS `optimize_streaming_latency` accepts 0, 1, or 2; 0 (best quality) is
-# the API default (omitted => default). Values >0 trade quality for time-to-first-audio.
-DEFAULT_XAI_OPTIMIZE_STREAMING_LATENCY_DEFAULT = 0
 DEFAULT_GEMINI_TTS_MODEL = "gemini-2.5-flash-preview-tts"
 DEFAULT_GEMINI_TTS_VOICE = "Kore"
 DEFAULT_GEMINI_TTS_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
@@ -213,7 +198,7 @@ DEFAULT_OUTPUT_DIR = _get_default_output_dir()
 
 # ---------------------------------------------------------------------------
 # Per-provider input-character limits (from official provider docs).
-# A single global cap was wrong: OpenAI is 4096, xAI is 15k, MiniMax is 10k,
+# A single global cap was wrong: OpenAI is 4096, MiniMax is 10k,
 # ElevenLabs is model-dependent (5k / 10k / 30k / 40k), Gemini has a 32k-token
 # context window.  Users can override any of these via
 # ``tts.<provider>.max_text_length`` in config.yaml.
@@ -221,7 +206,6 @@ DEFAULT_OUTPUT_DIR = _get_default_output_dir()
 PROVIDER_MAX_TEXT_LENGTH: Dict[str, int] = {
     "edge": 5000,         # edge-tts practical sync limit
     "openai": 4096,       # https://platform.openai.com/docs/guides/text-to-speech
-    "xai": 15000,         # https://docs.x.ai/developers/model-capabilities/audio/text-to-speech
     "minimax": 10000,     # https://platform.minimax.io/docs/api-reference/speech-t2a-http (sync)
     "mistral": 4000,      # conservative; no published per-request cap
     "gemini": 32000,      # Gemini TTS has a 32k-token context window; char cap is conservative
@@ -386,7 +370,6 @@ BUILTIN_TTS_PROVIDERS = frozenset({
     "elevenlabs",
     "openai",
     "minimax",
-    "xai",
     "mistral",
     "gemini",
     "neutts",
@@ -478,20 +461,20 @@ def _dispatch_to_plugin_provider(
 
     Resolution invariants enforced here (matches issue #30398):
 
-    1. Built-in provider names short-circuit — never reach the plugin
+    1. Built-in provider names short-circuit 鈥?never reach the plugin
        registry. The caller is responsible for the elif chain that
        handles ``edge``/``openai``/etc.; this function explicitly
        rejects those names defensively.
     2. Command-type providers declared under
        ``tts.providers.<name>: type: command`` (PR #17843) win over a
        plugin with the same name. The caller passes us only when its
-       own command-provider check returned None — we re-verify here so
+       own command-provider check returned None 鈥?we re-verify here so
        a refactor of the caller can't silently break the invariant.
     3. Plugin dispatch fires only when ``provider`` matches a registered
        :class:`TTSProvider` whose ``name`` equals the configured value.
        Unknown names return None (caller falls through to Edge default).
 
-    Plugin exceptions are caught and re-raised — the outer
+    Plugin exceptions are caught and re-raised 鈥?the outer
     ``text_to_speech_tool`` try/except converts them to the standard
     error envelope, matching how command-provider failures surface.
     """
@@ -519,13 +502,13 @@ def _dispatch_to_plugin_provider(
             # recovery pattern.
             _ensure_plugins_discovered(force=True)
             plugin_provider = get_provider(key)
-    except Exception as exc:  # noqa: BLE001 — discovery failure is non-fatal
+    except Exception as exc:  # noqa: BLE001 鈥?discovery failure is non-fatal
         logger.debug("tts plugin dispatch skipped (discovery failed): %s", exc)
         return None
     if plugin_provider is None:
         return None
 
-    # Resolve voice / model / format from tts_config — providers should
+    # Resolve voice / model / format from tts_config 鈥?providers should
     # treat all of these as optional and fall back to their own defaults
     # when None is passed (matches the ABC contract documented on
     # ``TTSProvider.synthesize``).
@@ -550,7 +533,7 @@ def _dispatch_to_plugin_provider(
         format=str(fmt).lower() if fmt else "mp3",
     )
     # Provider contract: returns the (possibly rewritten) output path.
-    # Defensive against a provider returning None or a non-string —
+    # Defensive against a provider returning None or a non-string 鈥?
     # fall back to the caller's expected output_path.
     return written if isinstance(written, str) and written else output_path
 
@@ -1053,228 +1036,6 @@ def _generate_openai_tts(text: str, output_path: str, tts_config: Dict[str, Any]
         close = getattr(client, "close", None)
         if callable(close):
             close()
-
-
-# ===========================================================================
-# Provider: xAI TTS
-# ===========================================================================
-_XAI_INLINE_SPEECH_TAGS = (
-    "pause",
-    "long-pause",
-    "hum-tune",
-    "laugh",
-    "chuckle",
-    "giggle",
-    "cry",
-    "tsk",
-    "tongue-click",
-    "lip-smack",
-    "breath",
-    "inhale",
-    "exhale",
-    "sigh",
-)
-_XAI_WRAPPING_SPEECH_TAGS = (
-    "soft",
-    "whisper",
-    "loud",
-    "build-intensity",
-    "decrease-intensity",
-    "higher-pitch",
-    "lower-pitch",
-    "slow",
-    "fast",
-    "sing-song",
-    "singing",
-    "laugh-speak",
-    "emphasis",
-)
-_XAI_SPEECH_TAG_RE = re.compile(
-    r"(\[(?:" + "|".join(_XAI_INLINE_SPEECH_TAGS) + r")\]|</?(?:" + "|".join(_XAI_WRAPPING_SPEECH_TAGS) + r")>)",
-    flags=re.IGNORECASE,
-)
-_XAI_FIRST_SENTENCE_RE = re.compile(r"^(.{12,120}?[.!?…])\s+(?=\S)", flags=re.DOTALL)
-
-
-def _xai_bool_config(value: Any, default: bool = False) -> bool:
-    return _config_bool(value, default=default)
-
-
-def _apply_xai_auto_speech_tags(text: str) -> str:
-    """Add xAI speech tags for more natural voice-mode replies.
-
-    First applies a conservative local transform (inserts [pause] between
-    paragraphs and after the first sentence). Then, if the result contains
-    no explicit user/model speech tags, asks the configured auxiliary model
-    to rewrite the transcript with a richer set of xAI-supported tags
-    (laughs, sighs, whispers, soft/loud, slow/fast, etc.) so the voice
-    output sounds more expressive. Falls back to the local result on any
-    auxiliary-model failure.
-    """
-    clean = text.strip()
-    if not clean:
-        return text
-
-    # Local conservative pass: pauses only.
-    local = clean
-    local = re.sub(r"\n\s*\n+", " [pause] ", local)
-    local = re.sub(r"\s*\n\s*", " ", local)
-    if not _XAI_SPEECH_TAG_RE.search(local):
-        local = _XAI_FIRST_SENTENCE_RE.sub(r"\1 [pause] ", local, count=1)
-    local = re.sub(r"\s{2,}", " ", local).strip()
-
-    # If the user/model already supplied explicit speech tags, trust them
-    # and don't re-rewrite.
-    if _XAI_SPEECH_TAG_RE.search(clean):
-        return local
-
-    # Auxiliary rewrite for richer emotion tags (mirrors the Gemini path).
-    inline = ", ".join(_XAI_INLINE_SPEECH_TAGS)
-    wrapping = ", ".join(_XAI_WRAPPING_SPEECH_TAGS)
-    system_prompt = (
-        "You rewrite transcripts for the xAI /v1/tts endpoint by inserting "
-        "expressive speech tags.\n\n"
-        "Valid inline tags (use as `[tag]`): " + inline + ".\n"
-        "Valid wrapping tags (use as `[tag]...[/tag]`): " + wrapping + ".\n\n"
-        "Rules:\n"
-        "- Preserve the spoken words, order, and meaning.\n"
-        "- Do not add new spoken sentences or remove existing spoken words.\n"
-        "- Use inline `[tag]` for short modifiers (laughs, sighs, pause, etc.).\n"
-        "- Use wrapping `[tag]...[/tag]` for sustained effects (whisper, soft, slow, fast, loud, etc.).\n"
-        "- Do not use angle-bracket tags like `<tag>...</tag>` — xAI uses BBCode-style closing tags with `[/tag]`.\n"
-        "- Do not use SSML.\n"
-        "- Do not explain or comment.\n"
-        "- Return only the tagged TTS script."
-    )
-    try:
-        from agent.auxiliary_client import call_llm
-
-        response = call_llm(
-            task="tts_audio_tags",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"TRANSCRIPT TO TAG:\n{local}"},
-            ],
-            temperature=0.7,
-        )
-        tagged = _extract_auxiliary_message_content(response).strip()
-        # Strip markdown fences if the LLM wrapped the response.
-        fence = re.fullmatch(r"```(?:[A-Za-z0-9_-]+)?\s*(.*?)\s*```", tagged, flags=re.DOTALL)
-        if fence:
-            tagged = fence.group(1).strip()
-        return tagged or local
-    except Exception as exc:
-        logger.debug("xAI TTS audio tag rewrite failed; using locally-tagged text: %s", exc)
-        return local
-
-
-def _generate_xai_tts(text: str, output_path: str, tts_config: Dict[str, Any]) -> str:
-    """
-    Generate audio using xAI TTS.
-
-    xAI exposes a dedicated /v1/tts endpoint instead of the OpenAI audio.speech
-    API shape, so this is implemented as a separate backend.
-    """
-    import requests
-
-    from tools.xai_http import resolve_xai_http_credentials
-
-    creds = resolve_xai_http_credentials()
-    api_key = str(creds.get("api_key") or "").strip()
-    if not api_key:
-        raise ValueError("No xAI credentials found. Configure xAI OAuth in `hermes model` or set XAI_API_KEY.")
-
-    xai_config = tts_config.get("xai", {})
-    voice_id = str(xai_config.get("voice_id", DEFAULT_XAI_VOICE_ID)).strip() or DEFAULT_XAI_VOICE_ID
-    language = str(xai_config.get("language", DEFAULT_XAI_LANGUAGE)).strip() or DEFAULT_XAI_LANGUAGE
-    sample_rate = int(xai_config.get("sample_rate", DEFAULT_XAI_SAMPLE_RATE))
-    bit_rate = int(xai_config.get("bit_rate", DEFAULT_XAI_BIT_RATE))
-    auto_speech_tags = _xai_bool_config(
-        xai_config.get("auto_speech_tags", xai_config.get("speech_tags")),
-        DEFAULT_XAI_AUTO_SPEECH_TAGS,
-    )
-    # ``tts.xai.speed`` overrides global ``tts.speed``; the xAI TTS API
-    # accepts 0.7..1.5 (1.0 = normal). Out-of-range values are clamped so a
-    # misconfigured agent can't 400 the request — the API would reject
-    # anything outside the band.
-    speed = xai_config.get("speed", tts_config.get("speed"))
-    if speed is not None and speed != "":
-        try:
-            speed = float(speed)
-        except (TypeError, ValueError):
-            speed = None
-    if speed is not None:
-        speed = max(DEFAULT_XAI_SPEED_MIN, min(DEFAULT_XAI_SPEED_MAX, speed))
-    # ``tts.xai.optimize_streaming_latency`` is 0, 1, or 2 (xAI-specific;
-    # trades chunk-boundary quality for time-to-first-audio).
-    optimize_streaming_latency = xai_config.get(
-        "optimize_streaming_latency",
-        tts_config.get("optimize_streaming_latency"),
-    )
-    if optimize_streaming_latency is not None and optimize_streaming_latency != "":
-        try:
-            optimize_streaming_latency = int(optimize_streaming_latency)
-        except (TypeError, ValueError):
-            optimize_streaming_latency = None
-    if optimize_streaming_latency is not None:
-        optimize_streaming_latency = max(0, min(2, optimize_streaming_latency))
-    if auto_speech_tags:
-        text = _apply_xai_auto_speech_tags(text)
-    base_url = str(
-        xai_config.get("base_url")
-        or creds.get("base_url")
-        or get_env_value("XAI_BASE_URL")
-        or DEFAULT_XAI_BASE_URL
-    ).strip().rstrip("/")
-
-    # Match the documented minimal POST /v1/tts shape by default. Only send
-    # output_format when Hermes actually needs a non-default format/override.
-    codec = "wav" if output_path.endswith(".wav") else "mp3"
-    payload: Dict[str, Any] = {
-        "text": text,
-        "voice_id": voice_id,
-        "language": language,
-    }
-    if (
-        codec != "mp3"
-        or sample_rate != DEFAULT_XAI_SAMPLE_RATE
-        or (codec == "mp3" and bit_rate != DEFAULT_XAI_BIT_RATE)
-    ):
-        output_format: Dict[str, Any] = {"codec": codec}
-        if sample_rate:
-            output_format["sample_rate"] = sample_rate
-        if codec == "mp3" and bit_rate:
-            output_format["bit_rate"] = bit_rate
-        payload["output_format"] = output_format
-    # Only attach `speed` when the caller asked for something other than the
-    # API default (1.0). Keeps the existing minimal-payload contract for
-    # users who never touch the knob.
-    if speed is not None and speed != DEFAULT_XAI_SPEED_DEFAULT:
-        payload["speed"] = speed
-    # Only attach `optimize_streaming_latency` when the caller explicitly
-    # opts in to a non-default value (anything other than 0).
-    if (
-        optimize_streaming_latency is not None
-        and optimize_streaming_latency != DEFAULT_XAI_OPTIMIZE_STREAMING_LATENCY_DEFAULT
-    ):
-        payload["optimize_streaming_latency"] = optimize_streaming_latency
-
-    response = requests.post(
-        f"{base_url}/tts",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "User-Agent": hermes_xai_user_agent(),
-        },
-        json=payload,
-        timeout=60,
-    )
-    response.raise_for_status()
-
-    with open(output_path, "wb") as f:
-        f.write(response.content)
-
-    return output_path
 
 
 # ===========================================================================
@@ -1844,7 +1605,7 @@ def _generate_neutts(text: str, output_path: str, tts_config: Dict[str, Any]) ->
     model = neutts_config.get("model", "neuphonic/neutts-air-q4-gguf")
     device = neutts_config.get("device", "cpu")
 
-    # NeuTTS outputs WAV natively — use a .wav path for generation,
+    # NeuTTS outputs WAV natively 鈥?use a .wav path for generation,
     # let the caller convert to the final format afterward.
     wav_path = output_path
     if not output_path.endswith(".wav"):
@@ -1876,7 +1637,7 @@ def _generate_neutts(text: str, output_path: str, tts_config: Dict[str, Any]) ->
             subprocess.run(conv_cmd, check=True, timeout=30, stdin=subprocess.DEVNULL, creationflags=windows_hide_flags())
             os.remove(wav_path)
         else:
-            # No ffmpeg — just rename the WAV to the expected path
+            # No ffmpeg 鈥?just rename the WAV to the expected path
             os.rename(wav_path, output_path)
 
     return output_path
@@ -1959,7 +1720,7 @@ def _resolve_piper_voice_path(voice: str, download_dir: Path) -> str:
 
     if not cached.exists():
         raise RuntimeError(
-            f"Piper voice download completed but {cached} is missing — "
+            f"Piper voice download completed but {cached} is missing 鈥?"
             f"check voice name (see: https://github.com/OHF-Voice/piper1-gpl/"
             f"blob/main/docs/VOICES.md)"
         )
@@ -1985,7 +1746,7 @@ def _generate_piper_tts(text: str, output_path: str, tts_config: Dict[str, Any])
     model_path = _resolve_piper_voice_path(voice_name, download_dir)
 
     # Tolerant speaker_id parse: drop bad input (non-int strings, lists, dicts)
-    # to 0 (Piper's own default). Booleans are rejected outright — True/False
+    # to 0 (Piper's own default). Booleans are rejected outright 鈥?True/False
     # would silently coerce to 1/0 and hide a config mistake.
     _raw_speaker = piper_config.get("speaker_id", 0)
     if isinstance(_raw_speaker, bool) or not isinstance(_raw_speaker, int):
@@ -1993,7 +1754,7 @@ def _generate_piper_tts(text: str, output_path: str, tts_config: Dict[str, Any])
     else:
         speaker_id = _raw_speaker
 
-    # speaker_id is applied per-call via syn_config.speaker_id — the same
+    # speaker_id is applied per-call via syn_config.speaker_id 鈥?the same
     # PiperVoice instance serves all speakers, so it stays out of the cache
     # key. Multi-speaker workflows share one model load.
     cache_key = f"{model_path}::cuda={use_cuda}"
@@ -2004,7 +1765,7 @@ def _generate_piper_tts(text: str, output_path: str, tts_config: Dict[str, Any])
         logger.info("[Piper] Voice loaded")
     voice = _piper_voice_cache[cache_key]
 
-    # Optional synthesis knobs — only pass a SynthesisConfig when at least
+    # Optional synthesis knobs 鈥?only pass a SynthesisConfig when at least
     # one advanced knob is configured, so we don't depend on a newer Piper
     # version than the user's installed one unless we need to.
     syn_config = None
@@ -2033,7 +1794,7 @@ def _generate_piper_tts(text: str, output_path: str, tts_config: Dict[str, Any])
         except ImportError:
             logger.warning(
                 "[Piper] SynthesisConfig not available in this piper-tts "
-                "version — advanced knobs ignored"
+                "version 鈥?advanced knobs ignored"
             )
 
     # Piper outputs WAV. Caller handles downstream MP3/Opus conversion.
@@ -2058,7 +1819,7 @@ def _generate_piper_tts(text: str, output_path: str, tts_config: Dict[str, Any])
             except OSError:
                 pass
         else:
-            # No ffmpeg — keep WAV and return that path
+            # No ffmpeg 鈥?keep WAV and return that path
             os.rename(wav_path, output_path)
 
     return output_path
@@ -2121,7 +1882,7 @@ def _generate_kittentts(text: str, output_path: str, tts_config: Dict[str, Any])
             subprocess.run(conv_cmd, check=True, timeout=30, stdin=subprocess.DEVNULL, creationflags=windows_hide_flags())
             os.remove(wav_path)
         else:
-            # No ffmpeg — rename the WAV to the expected path
+            # No ffmpeg 鈥?rename the WAV to the expected path
             os.rename(wav_path, output_path)
 
     return output_path
@@ -2164,7 +1925,7 @@ def text_to_speech_tool(
     command_provider_config = _resolve_command_provider_config(provider, tts_config)
 
     # Truncate very long text with a warning. The cap is per-provider
-    # (OpenAI 4096, xAI 15k, MiniMax 10k, ElevenLabs model-aware, etc.).
+    # (OpenAI 4096, MiniMax 10k, ElevenLabs model-aware, etc.).
     max_len = _resolve_max_text_length(provider, tts_config)
     if len(text) > max_len:
         logger.warning(
@@ -2187,7 +1948,7 @@ def text_to_speech_tool(
         # explicit absolute path is fine (the agent legitimately writes
         # audio to user-specified locations), but a path that uses ``..``
         # to escape its declared base is almost always either a bug or
-        # prompt-injection-controlled — e.g.
+        # prompt-injection-controlled 鈥?e.g.
         # ``output_path="audio/../../etc/cron.d/x"``. The terminal tool
         # can still write anywhere with approval; this just keeps the
         # unattended TTS surface from materializing files via traversal.
@@ -2277,10 +2038,6 @@ def text_to_speech_tool(
         elif provider == "minimax":
             logger.info("Generating speech with MiniMax TTS...")
             _generate_minimax_tts(text, file_str, tts_config)
-
-        elif provider == "xai":
-            logger.info("Generating speech with xAI TTS...")
-            _generate_xai_tts(text, file_str, tts_config)
 
         elif provider == "mistral":
             try:
@@ -2399,7 +2156,7 @@ def text_to_speech_tool(
                 voice_compatible = file_str.endswith(".ogg")
         elif (
             want_opus
-            and provider in {"edge", "neutts", "minimax", "xai", "kittentts", "piper"}
+            and provider in {"edge", "neutts", "minimax", "kittentts", "piper"}
             and not file_str.endswith(".ogg")
         ):
             opus_path = _convert_to_opus(file_str)
@@ -2478,13 +2235,6 @@ def check_tts_requirements() -> bool:
         pass
     if get_env_value("MINIMAX_API_KEY"):
         return True
-    try:
-        from tools.xai_http import resolve_xai_http_credentials
-
-        if resolve_xai_http_credentials().get("api_key"):
-            return True
-    except Exception:
-        pass
     if get_env_value("GEMINI_API_KEY") or get_env_value("GOOGLE_API_KEY"):
         return True
     try:
@@ -2781,7 +2531,7 @@ def stream_tts_to_speaker(
 # Main -- quick diagnostics
 # ===========================================================================
 if __name__ == "__main__":
-    print("🔊 Text-to-Speech Tool Module")
+    print("馃攰 Text-to-Speech Tool Module")
     print("=" * 50)
 
     def _check(importer, label):
@@ -2802,7 +2552,7 @@ if __name__ == "__main__":
     )
     print(f"  MiniMax:    {'API key set' if get_env_value('MINIMAX_API_KEY') else 'not set (MINIMAX_API_KEY)'}")
     print(f"  Piper:      {'installed' if _check_piper_available() else 'not installed (pip install piper-tts)'}")
-    print(f"  ffmpeg:     {'✅ found' if _has_ffmpeg() else '❌ not found (needed for Telegram Opus)'}")
+    print(f"  ffmpeg:     {'鉁?found' if _has_ffmpeg() else '鉂?not found (needed for Telegram Opus)'}")
     print(f"\n  Output dir: {DEFAULT_OUTPUT_DIR}")
 
     config = _load_tts_config()
@@ -2823,7 +2573,7 @@ TTS_SCHEMA = {
         "properties": {
             "text": {
                 "type": "string",
-                "description": "The text to convert to speech. Provider-specific character caps apply and are enforced automatically (OpenAI 4096, xAI 15000, MiniMax 10000, ElevenLabs 5k-40k depending on model); over-long input is truncated."
+                "description": "The text to convert to speech. Provider-specific character caps apply and are enforced automatically (OpenAI 4096, MiniMax 10000, ElevenLabs 5k-40k depending on model); over-long input is truncated."
             },
             "output_path": {
                 "type": "string",
@@ -2842,5 +2592,5 @@ registry.register(
         text=args.get("text", ""),
         output_path=args.get("output_path")),
     check_fn=check_tts_requirements,
-    emoji="🔊",
+    emoji="馃攰",
 )
