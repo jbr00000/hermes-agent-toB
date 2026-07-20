@@ -49,7 +49,10 @@
       "Bash(python -m py_compile main_debug.py)",
       "Bash(grep -v \"/\\\\.venv/\")",
       "Bash(grep \"\\\\.py$\")",
-      "Bash(xargs wc -l)"
+      "Bash(xargs wc -l)",
+      "Bash(find .hermes-dev -maxdepth 2 -iname \"MEMORY.md\" -o -maxdepth 2 -iname \"USER.md\")",
+      "Bash(ls -la .hermes-dev/memories/)",
+      "PowerShell([Environment]::GetFolderPath\\(\"Desktop\"\\))"
     ]
   }
 }
