@@ -805,6 +805,7 @@ function TabContent({
   if (tab.type === 'chat') {
     return (
       <ChatView
+        key={tab.refId}
         sessionId={tab.refId}
         title={tab.title}
         onConversationUpdated={onConversationUpdated}
@@ -865,8 +866,9 @@ function ChatView({
   const [deleteConfirmOpen, setDeleteConfirmOpen] = React.useState(false)
   const fileInputRef = React.useRef<HTMLInputElement | null>(null)
   const messageScrollRef = React.useRef<HTMLDivElement | null>(null)
-  const didInitialScrollRef = React.useRef(false)
+  const didRestoreScrollRef = React.useRef(false)
   const shouldFollowOutputRef = React.useRef(true)
+  const wasRunningRef = React.useRef(false)
 
   React.useEffect(() => {
     if (query.data) chatRunManager.reconcileServerState(sessionId, query.data)
@@ -891,26 +893,45 @@ function ChatView({
   const streamError = actionError ?? run?.error ?? null
 
   React.useLayoutEffect(() => {
-    didInitialScrollRef.current = false
+    didRestoreScrollRef.current = false
     shouldFollowOutputRef.current = true
-  }, [sessionId])
+    wasRunningRef.current = false
+    return () => {
+      const container = messageScrollRef.current
+      if (container) chatRunManager.setScrollPosition(sessionId, container.scrollTop)
+    }
+  }, [chatRunManager, sessionId])
 
   React.useLayoutEffect(() => {
     if (query.isLoading) return
     const container = messageScrollRef.current
     if (!container) return
-    if (!didInitialScrollRef.current || shouldFollowOutputRef.current) {
+
+    const startedRunning = isRunning && !wasRunningRef.current
+    if (!didRestoreScrollRef.current) {
+      const savedPosition = chatRunManager.getScrollPosition(sessionId)
+      if (isRunning || savedPosition === null) {
+        container.scrollTop = container.scrollHeight
+      } else {
+        container.scrollTop = savedPosition
+      }
+      didRestoreScrollRef.current = true
+      const bottomGap = container.scrollHeight - container.clientHeight - container.scrollTop
+      shouldFollowOutputRef.current = bottomGap <= 96
+    } else if (isRunning && (startedRunning || shouldFollowOutputRef.current)) {
       container.scrollTop = container.scrollHeight
-      didInitialScrollRef.current = true
       shouldFollowOutputRef.current = true
     }
-  }, [displayMessages, query.isLoading, sessionId])
+    wasRunningRef.current = isRunning
+    chatRunManager.setScrollPosition(sessionId, container.scrollTop)
+  }, [chatRunManager, displayMessages, isRunning, query.isLoading, sessionId])
 
   const trackMessageScroll = React.useCallback((event: React.UIEvent<HTMLDivElement>) => {
     const container = event.currentTarget
     const bottomGap = container.scrollHeight - container.clientHeight - container.scrollTop
     shouldFollowOutputRef.current = bottomGap <= 96
-  }, [])
+    chatRunManager.setScrollPosition(sessionId, container.scrollTop)
+  }, [chatRunManager, sessionId])
 
   const updateConversation = React.useCallback(async (
     changes: { title?: string; pinned?: boolean; archived?: boolean },
@@ -958,6 +979,7 @@ function ChatView({
     try {
       await queryClient.cancelQueries({ queryKey: ['conversation', sessionId] })
       await api.deleteConversation(sessionId)
+      chatRunManager.clearScrollPosition(sessionId)
       queryClient.setQueryData<ConversationSummary[]>(['conversations'], (current = []) => (
         current.filter((conversation) => conversation.id !== sessionId)
       ))
@@ -969,7 +991,7 @@ function ChatView({
     } finally {
       setActionPending(false)
     }
-  }, [onConversationArchived, queryClient, sessionId])
+  }, [chatRunManager, onConversationArchived, queryClient, sessionId])
 
   const sendMessage = React.useCallback(() => {
     const text = draft.trim()

@@ -62,6 +62,7 @@ export class ChatRunManager {
   private readonly runs = new Map<string, InternalRun>()
   private readonly listeners = new Map<string, Set<() => void>>()
   private readonly streamControllers = new Map<string, AbortController>()
+  private readonly scrollPositions = new Map<string, number>()
 
   constructor(
     private readonly queryClient: QueryClient,
@@ -70,6 +71,18 @@ export class ChatRunManager {
 
   getSnapshot(sessionId: string): ChatRunSnapshot | null {
     return this.runs.get(sessionId)?.snapshot ?? null
+  }
+
+  getScrollPosition(sessionId: string): number | null {
+    return this.scrollPositions.get(sessionId) ?? null
+  }
+
+  setScrollPosition(sessionId: string, scrollTop: number): void {
+    this.scrollPositions.set(sessionId, Math.max(0, scrollTop))
+  }
+
+  clearScrollPosition(sessionId: string): void {
+    this.scrollPositions.delete(sessionId)
   }
 
   subscribe(sessionId: string, listener: () => void): () => void {
@@ -88,6 +101,7 @@ export class ChatRunManager {
       if (run.flushTimer !== null) window.clearTimeout(run.flushTimer)
     }
     this.runs.clear()
+    this.scrollPositions.clear()
 
     const controllers = [...this.streamControllers.values()]
     this.streamControllers.clear()
