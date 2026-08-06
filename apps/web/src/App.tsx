@@ -1383,6 +1383,11 @@ function MessageBubble({ message }: { message: ChatMessage }) {
   const completedSeconds = message.durationMs === undefined
     ? null
     : Math.max(1, Math.ceil(message.durationMs / 1000))
+
+  if (thinking && !message.content) {
+    return <ThinkingBubble message={message} />
+  }
+
   return (
     <div className={cn('flex gap-3', !assistant && !system && 'justify-end')}>
       {(assistant || system) && (
@@ -1391,12 +1396,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         </div>
       )}
       <div className={cn('max-w-[88%] rounded-md border px-3 py-3 text-sm leading-6 sm:max-w-[78%] sm:px-4', assistant || system ? 'border-line bg-panel' : 'border-ink bg-ink text-white')}>
-        {thinking && !message.content ? (
-          <div className="flex min-w-28 items-center gap-2 text-caution" role="status" aria-live="polite">
-            <LoaderCircle size={16} className="animate-spin" />
-            <span className="font-medium">Flowing...</span>
-          </div>
-        ) : assistant || system ? (
+        {assistant || system ? (
           <div className="break-words [&_a]:text-info [&_a]:underline [&_code]:rounded [&_code]:bg-field [&_code]:px-1 [&_h1]:mb-2 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:mb-2 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:mb-1 [&_h3]:font-semibold [&_li]:ml-5 [&_li]:list-disc [&_ol_li]:list-decimal [&_p+p]:mt-3 [&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-zinc-900 [&_pre]:p-3 [&_pre]:text-zinc-100 [&_pre_code]:bg-transparent [&_ul]:my-2">
             <ReactMarkdown>{message.content || '...'}</ReactMarkdown>
           </div>
@@ -1411,6 +1411,37 @@ function MessageBubble({ message }: { message: ChatMessage }) {
               {assistant && completedSeconds !== null ? `思考了 ${completedSeconds} 秒${message.createdAt ? ' · ' : ''}` : ''}
               {message.createdAt}
             </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ThinkingBubble({ message }: { message: ChatMessage }) {
+  const displayTime = message.createdAt || new Date(
+    message.thinkingStartedAt ?? Date.now(),
+  ).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+
+  return (
+    <div className="flex items-start gap-3" role="status" aria-live="polite">
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-[#237a57] text-white shadow-sm">
+        <Sparkles size={18} />
+      </div>
+      <div className="min-w-0 pt-0.5">
+        <div className="flex min-h-9 flex-wrap items-center gap-2">
+          <span className="text-sm font-medium text-zinc-500">Hermes · {displayTime}</span>
+          <span className="inline-flex h-8 items-center gap-2 rounded-full bg-[#e4f3ec] px-3 text-sm font-medium text-[#237a57]">
+            <span className="h-2 w-2 animate-pulse rounded-full bg-[#82bda5]" />
+            正在生成
+          </span>
+        </div>
+        <div className="mt-2 flex h-5 items-center gap-1.5 text-xs text-zinc-400">
+          <span className="h-2 w-2 animate-bounce rounded-full bg-[#b7d8ca]" style={{ animationDelay: '-320ms' }} />
+          <span className="h-2 w-2 animate-bounce rounded-full bg-[#5aa083]" style={{ animationDelay: '-160ms' }} />
+          <span className="h-2 w-2 animate-bounce rounded-full bg-[#237a57]" />
+          {message.thinkingStartedAt && (
+            <span className="ml-1"><ElapsedThinkingTime startedAt={message.thinkingStartedAt} /></span>
           )}
         </div>
       </div>
