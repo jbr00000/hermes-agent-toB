@@ -1,4 +1,10 @@
-import type { AuthUser, ChatMessage, ConversationSummary } from './types'
+import type {
+  ActiveModelRun,
+  AuthUser,
+  ChatMessage,
+  ConversationDetail,
+  ConversationSummary,
+} from './types'
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') ?? '/api'
 
@@ -26,8 +32,17 @@ interface BackendMessage {
   role: ChatMessage['role']
   content: string
   status?: ChatMessage['status']
+  model_run_id?: string
+  duration_ms?: number
   created_at?: number
   timestamp?: number
+}
+
+interface BackendModelRun {
+  id: string
+  status: 'running'
+  started_at: number
+  elapsed_ms: number
 }
 
 export class ApiError extends Error {
@@ -114,6 +129,18 @@ function toMessage(row: BackendMessage): ChatMessage {
     content: row.content,
     createdAt: formatTime(row.created_at ?? row.timestamp ?? Date.now() / 1000),
     status: row.status,
+    modelRunId: row.model_run_id,
+    durationMs: row.duration_ms,
+  }
+}
+
+function toActiveRun(row: BackendModelRun | null): ActiveModelRun | null {
+  if (!row) return null
+  return {
+    id: row.id,
+    status: row.status,
+    elapsedMs: row.elapsed_ms,
+    observedAt: Date.now(),
   }
 }
 
@@ -195,12 +222,22 @@ export const api = {
     return toConversation(body.session)
   },
 
-  async listMessages(sessionId: string): Promise<ChatMessage[]> {
-    if (sessionId.startsWith('draft-')) return []
+  async getConversation(sessionId: string): Promise<ConversationDetail> {
+    if (sessionId.startsWith('draft-')) {
+      return { messages: [], status: 'idle', activeRun: null }
+    }
     const response = await apiFetch(`/sessions/${encodeURIComponent(sessionId)}`)
     if (!response.ok) throw await parseError(response)
-    const body = await response.json() as { messages: BackendMessage[] }
-    return body.messages.map(toMessage)
+    const body = await response.json() as {
+      session: BackendSession
+      messages: BackendMessage[]
+      active_run: BackendModelRun | null
+    }
+    return {
+      messages: body.messages.map(toMessage),
+      status: body.session.status,
+      activeRun: toActiveRun(body.active_run),
+    }
   },
 
   async updateConversation(
@@ -214,6 +251,13 @@ export const api = {
     if (!response.ok) throw await parseError(response)
     const body = await response.json() as { session: BackendSession }
     return toConversation(body.session)
+  },
+
+  async deleteConversation(sessionId: string): Promise<void> {
+    const response = await apiFetch(`/sessions/${encodeURIComponent(sessionId)}`, {
+      method: 'DELETE',
+    })
+    if (!response.ok) throw await parseError(response)
   },
 
   async streamChat(

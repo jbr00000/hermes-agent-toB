@@ -43,7 +43,23 @@ export interface ChatMessage {
   role: 'user' | 'assistant' | 'system'
   content: string
   createdAt: string
-  status?: 'completed' | 'cancelled' | 'failed'
+  status?: 'streaming' | 'completed' | 'cancelled' | 'failed'
+  modelRunId?: string
+  durationMs?: number
+  thinkingStartedAt?: number
+}
+
+export interface ActiveModelRun {
+  id: string
+  status: 'running'
+  elapsedMs: number
+  observedAt: number
+}
+
+export interface ConversationDetail {
+  messages: ChatMessage[]
+  status: string
+  activeRun: ActiveModelRun | null
 }
 
 export interface AttachedFile {

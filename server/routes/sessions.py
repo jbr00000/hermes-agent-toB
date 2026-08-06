@@ -60,7 +60,18 @@ def get_session_detail(session_id: str, user: dict = Depends(get_current_user)):
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     messages = sess.get_owned_messages(user["id"], session_id) or []
-    return {"session": session, "messages": messages}
+    active_run = sess.get_active_run(user["id"], session_id)
+    return {"session": session, "messages": messages, "active_run": active_run}
+
+
+@router.delete("/{session_id}")
+def delete_session(session_id: str, user: dict = Depends(get_current_user)):
+    result = sess.delete_owned_session(user["id"], session_id)
+    if result == "missing":
+        raise HTTPException(status_code=404, detail="session not found")
+    if result == "running":
+        raise HTTPException(status_code=409, detail="running session cannot be deleted")
+    return {"deleted": session_id}
 
 
 @router.patch("/{session_id}")

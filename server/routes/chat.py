@@ -6,6 +6,7 @@ import json
 import logging
 import queue
 import threading
+import time
 import uuid
 from typing import Literal, Optional
 
@@ -101,6 +102,7 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
 
     repository.update_conversation(user_id, session_id, status="running")
     runtime_store.mark_request(request_id, "running")
+    run_started_at = time.monotonic()
 
     event_queue: queue.Queue[object] = queue.Queue()
     sentinel = object()
@@ -189,8 +191,14 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
             final = agent.chat(req.message, stream_callback=on_delta) or ""
             cancelled = runtime_store.is_cancelled(request_id)
             assistant_status = "cancelled" if cancelled else "completed"
+            duration_ms = max(0, int((time.monotonic() - run_started_at) * 1000))
             assistant_message = repository.append_message(
-                session_id, "assistant", final, status=assistant_status
+                session_id,
+                "assistant",
+                final,
+                status=assistant_status,
+                model_run_id=request_id,
+                duration_ms=duration_ms,
             )
             if final and not cancelled:
                 try:

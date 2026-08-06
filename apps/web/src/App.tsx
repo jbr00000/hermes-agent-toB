@@ -19,6 +19,7 @@ import {
   History,
   KeyRound,
   Layers3,
+  LoaderCircle,
   LockKeyhole,
   LogOut,
   Menu,
@@ -36,6 +37,7 @@ import {
   ShieldCheck,
   Sparkles,
   Table2,
+  Trash2,
   UserCog,
   Users,
   X,
@@ -57,6 +59,7 @@ import {
 } from './state'
 import type {
   ChatMessage,
+  ConversationDetail,
   ConversationSummary,
   AuthUser,
   KnowledgeDocument,
@@ -832,7 +835,11 @@ function ChatView({
 }) {
   const [files, setFiles] = useAtom(chatAttachedFilesAtom)
   const queryClient = useQueryClient()
-  const query = useQuery({ queryKey: ['messages', sessionId], queryFn: () => api.listMessages(sessionId) })
+  const query = useQuery({
+    queryKey: ['conversation', sessionId],
+    queryFn: () => api.getConversation(sessionId),
+    refetchInterval: (result) => result.state.data?.activeRun ? 1000 : false,
+  })
   const [localMessages, setLocalMessages] = React.useState<ChatMessage[]>([])
   const [draft, setDraft] = React.useState('')
   const [streaming, setStreaming] = React.useState(false)
@@ -841,12 +848,13 @@ function ChatView({
   const [renaming, setRenaming] = React.useState(false)
   const [renameDraft, setRenameDraft] = React.useState(title)
   const [actionPending, setActionPending] = React.useState(false)
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = React.useState(false)
   const activeRequestId = React.useRef<string | null>(null)
   const fileInputRef = React.useRef<HTMLInputElement | null>(null)
 
   React.useEffect(() => {
-    setLocalMessages(query.data ?? [])
-  }, [query.data, sessionId])
+    if (!streaming) setLocalMessages(query.data?.messages ?? [])
+  }, [query.data?.messages, sessionId, streaming])
 
   React.useEffect(() => {
     if (!renaming) setRenameDraft(title)
@@ -855,6 +863,8 @@ function ChatView({
   const currentConversation = queryClient
     .getQueryData<ConversationSummary[]>(['conversations'])
     ?.find((conversation) => conversation.id === sessionId)
+  const restoredRun = query.data?.activeRun ?? null
+  const isRunning = streaming || restoredRun !== null
 
   const updateConversation = React.useCallback(async (
     changes: { title?: string; pinned?: boolean; archived?: boolean },
@@ -896,9 +906,28 @@ function ChatView({
     if (updated) setRenaming(false)
   }, [renameDraft, title, updateConversation])
 
+  const deleteConversation = React.useCallback(async () => {
+    setActionPending(true)
+    setStreamError(null)
+    try {
+      await queryClient.cancelQueries({ queryKey: ['conversation', sessionId] })
+      await api.deleteConversation(sessionId)
+      queryClient.setQueryData<ConversationSummary[]>(['conversations'], (current = []) => (
+        current.filter((conversation) => conversation.id !== sessionId)
+      ))
+      setDeleteConfirmOpen(false)
+      onConversationArchived(sessionId)
+    } catch (error) {
+      setStreamError(error instanceof Error ? error.message : '删除问答失败')
+      setDeleteConfirmOpen(false)
+    } finally {
+      setActionPending(false)
+    }
+  }, [onConversationArchived, queryClient, sessionId])
+
   const sendMessage = React.useCallback(async () => {
     const text = draft.trim()
-    if (!text || streaming) return
+    if (!text || isRunning) return
     const now = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
     const assistantId = `chat-assistant-${Date.now()}`
     const requestId = crypto.randomUUID()
@@ -906,10 +935,23 @@ function ChatView({
     setDraft('')
     setStreamError(null)
     setStreaming(true)
+    queryClient.setQueryData<ConversationDetail>(['conversation', sessionId], (current) => ({
+      messages: current?.messages ?? [],
+      status: 'running',
+      activeRun: { id: requestId, status: 'running' as const, elapsedMs: 0, observedAt: Date.now() },
+    }))
     setLocalMessages((current) => [
       ...current,
       { id: `chat-user-${Date.now()}`, role: 'user', content: text, createdAt: now },
-      { id: assistantId, role: 'assistant', content: '', createdAt: now },
+      {
+        id: assistantId,
+        role: 'assistant',
+        content: '',
+        createdAt: now,
+        status: 'streaming',
+        modelRunId: requestId,
+        thinkingStartedAt: Date.now(),
+      },
     ])
 
     try {
@@ -926,6 +968,9 @@ function ChatView({
           )))
         },
         onFinal: (event) => {
+          queryClient.setQueryData<ConversationDetail>(['conversation', sessionId], (current) => (
+            current ? { ...current, status: 'idle', activeRun: null } : current
+          ))
           setLocalMessages((current) => current.map((message) => (
             message.id === assistantId
               ? {
@@ -933,17 +978,22 @@ function ChatView({
                   id: event.message?.id ?? message.id,
                   content: event.content ?? message.content,
                   status: event.status === 'cancelled' ? 'cancelled' : 'completed',
+                  modelRunId: event.message?.model_run_id ?? requestId,
+                  durationMs: event.message?.duration_ms,
                 }
               : message
           )))
           if (event.title) onConversationUpdated(sessionId, event.title)
         },
         onError: (event) => {
+          queryClient.setQueryData<ConversationDetail>(['conversation', sessionId], (current) => (
+            current ? { ...current, status: 'idle', activeRun: null } : current
+          ))
           setStreamError(typeof event.message === 'string' ? event.message : '回答生成失败')
         },
       })
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['messages', sessionId] }),
+        queryClient.invalidateQueries({ queryKey: ['conversation', sessionId] }),
         queryClient.invalidateQueries({ queryKey: ['conversations'] }),
       ])
     } catch (error) {
@@ -956,19 +1006,20 @@ function ChatView({
           ? { ...item, content: '回答未完成，请重试。', status: 'failed' }
           : item
       )))
+      void queryClient.invalidateQueries({ queryKey: ['conversation', sessionId] })
     } finally {
       activeRequestId.current = null
       setStreaming(false)
     }
-  }, [draft, onConversationUpdated, queryClient, sessionId, streaming])
+  }, [draft, isRunning, onConversationUpdated, query.data, queryClient, sessionId])
 
   const stopMessage = React.useCallback(() => {
-    const requestId = activeRequestId.current
+    const requestId = activeRequestId.current ?? restoredRun?.id
     if (!requestId) return
     void api.cancelChat(requestId).catch((error) => {
       setStreamError(error instanceof Error ? error.message : '停止生成失败')
     })
-  }, [])
+  }, [restoredRun?.id])
 
   const addFiles = (selected: FileList | null) => {
     if (!selected?.length) return
@@ -1011,7 +1062,7 @@ function ChatView({
           <div className="mt-0.5 flex min-w-0 items-center gap-2 text-xs text-zinc-500">
             <span className="truncate">会话 {sessionId}</span>
             <span className="h-1 w-1 rounded-full bg-zinc-300" />
-            <span className="shrink-0">{streaming ? '回答中' : '智能问答'}</span>
+            <span className="shrink-0">{isRunning ? '回答中' : '智能问答'}</span>
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
@@ -1047,12 +1098,23 @@ function ChatView({
                   {currentConversation?.pinned ? '取消置顶' : '置顶问答'}
                 </button>
                 <button
-                  disabled={actionPending || streaming}
+                  disabled={actionPending || isRunning}
                   className="flex h-9 w-full items-center gap-2 rounded px-2.5 text-left text-sm text-danger hover:bg-red-50 disabled:text-zinc-400"
                   onClick={() => void updateConversation({ archived: true })}
                 >
                   <Archive size={14} />
                   归档问答
+                </button>
+                <button
+                  disabled={actionPending || isRunning}
+                  className="flex h-9 w-full items-center gap-2 rounded px-2.5 text-left text-sm text-danger hover:bg-red-50 disabled:text-zinc-400"
+                  onClick={() => {
+                    setMenuOpen(false)
+                    setDeleteConfirmOpen(true)
+                  }}
+                >
+                  <Trash2 size={14} />
+                  永久删除
                 </button>
               </div>
             )}
@@ -1064,7 +1126,7 @@ function ChatView({
         <div className="mx-auto max-w-4xl space-y-5">
           {query.isLoading ? (
             <MessageSkeleton />
-          ) : localMessages.length === 0 ? (
+          ) : localMessages.length === 0 && !isRunning ? (
             <div className="border-y border-line py-16 text-center">
               <MessageSquareText className="mx-auto mb-3 text-zinc-300" size={40} />
               <div className="text-sm font-medium">新问答</div>
@@ -1072,11 +1134,18 @@ function ChatView({
           ) : (
             localMessages.map((message) => <MessageBubble key={message.id} message={message} />)
           )}
-          {streaming && (
-            <div className="flex items-center gap-2 text-sm text-zinc-500" aria-live="polite">
-              <span className="h-2 w-2 animate-pulse rounded-full bg-success" />
-              正在生成回答
-            </div>
+          {!streaming && restoredRun && (
+            <MessageBubble
+              message={{
+                id: `active-${restoredRun.id}`,
+                role: 'assistant',
+                content: '',
+                createdAt: '',
+                status: 'streaming',
+                modelRunId: restoredRun.id,
+                thinkingStartedAt: restoredRun.observedAt - restoredRun.elapsedMs,
+              }}
+            />
           )}
           {streamError && (
             <div className="border-y border-red-100 bg-red-50 px-3 py-2 text-sm text-danger" role="alert">
@@ -1111,17 +1180,62 @@ function ChatView({
             <button
               className={cn(
                 'flex h-8 items-center gap-2 rounded-md px-3 text-sm font-medium transition active:scale-[0.98]',
-                streaming || !draft.trim() ? 'bg-zinc-200 text-zinc-400' : 'bg-[#3d735a] text-white',
+                isRunning || !draft.trim() ? 'bg-zinc-200 text-zinc-500' : 'bg-[#3d735a] text-white',
               )}
-              disabled={!streaming && !draft.trim()}
-              onClick={() => streaming ? stopMessage() : void sendMessage()}
+              disabled={!isRunning && !draft.trim()}
+              onClick={() => isRunning ? stopMessage() : void sendMessage()}
             >
-              {streaming ? <CircleStop size={15} /> : <Send size={15} />}
-              {streaming ? '停止' : '发送'}
+              {isRunning ? <CircleStop size={15} /> : <Send size={15} />}
+              {isRunning ? '停止' : '发送'}
             </button>
           </div>
         </div>
       </div>
+      {deleteConfirmOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !actionPending) setDeleteConfirmOpen(false)
+          }}
+        >
+          <div
+            className="w-full max-w-sm rounded-md border border-line bg-panel p-5 shadow-panel"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="delete-conversation-title"
+          >
+            <div className="flex items-start gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-red-50 text-danger">
+                <Trash2 size={17} />
+              </div>
+              <div>
+                <div id="delete-conversation-title" className="text-sm font-semibold">永久删除问答</div>
+                <p className="mt-1 text-sm leading-6 text-zinc-500">
+                  对话消息和模型运行记录将被删除，企业审计记录仍会保留。
+                </p>
+              </div>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                className="h-9 rounded-md border border-line px-3 text-sm hover:bg-field disabled:text-zinc-400"
+                disabled={actionPending}
+                onClick={() => setDeleteConfirmOpen(false)}
+              >
+                取消
+              </button>
+              <button
+                className="flex h-9 items-center gap-2 rounded-md bg-danger px-3 text-sm font-medium text-white disabled:bg-zinc-300"
+                disabled={actionPending}
+                onClick={() => void deleteConversation()}
+              >
+                {actionPending ? <LoaderCircle size={15} className="animate-spin" /> : <Trash2 size={15} />}
+                删除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -1265,6 +1379,10 @@ function AgentView({ sessionId, title }: { sessionId: string; title: string }) {
 function MessageBubble({ message }: { message: ChatMessage }) {
   const assistant = message.role === 'assistant'
   const system = message.role === 'system'
+  const thinking = assistant && message.status === 'streaming'
+  const completedSeconds = message.durationMs === undefined
+    ? null
+    : Math.max(1, Math.ceil(message.durationMs / 1000))
   return (
     <div className={cn('flex gap-3', !assistant && !system && 'justify-end')}>
       {(assistant || system) && (
@@ -1273,17 +1391,44 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         </div>
       )}
       <div className={cn('max-w-[88%] rounded-md border px-3 py-3 text-sm leading-6 sm:max-w-[78%] sm:px-4', assistant || system ? 'border-line bg-panel' : 'border-ink bg-ink text-white')}>
-        {assistant || system ? (
+        {thinking && !message.content ? (
+          <div className="flex min-w-28 items-center gap-2 text-caution" role="status" aria-live="polite">
+            <LoaderCircle size={16} className="animate-spin" />
+            <span className="font-medium">Flowing...</span>
+          </div>
+        ) : assistant || system ? (
           <div className="break-words [&_a]:text-info [&_a]:underline [&_code]:rounded [&_code]:bg-field [&_code]:px-1 [&_h1]:mb-2 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:mb-2 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:mb-1 [&_h3]:font-semibold [&_li]:ml-5 [&_li]:list-disc [&_ol_li]:list-decimal [&_p+p]:mt-3 [&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-zinc-900 [&_pre]:p-3 [&_pre]:text-zinc-100 [&_pre_code]:bg-transparent [&_ul]:my-2">
             <ReactMarkdown>{message.content || '...'}</ReactMarkdown>
           </div>
         ) : (
           <div className="whitespace-pre-wrap break-words">{message.content || '...'}</div>
         )}
-        <div className={cn('mt-2 text-[11px]', assistant || system ? 'text-zinc-400' : 'text-white/60')}>{message.createdAt}</div>
+        <div className={cn('mt-2 text-[11px]', assistant || system ? 'text-zinc-400' : 'text-white/60')}>
+          {thinking && message.thinkingStartedAt ? (
+            <ElapsedThinkingTime startedAt={message.thinkingStartedAt} />
+          ) : (
+            <>
+              {assistant && completedSeconds !== null ? `思考了 ${completedSeconds} 秒${message.createdAt ? ' · ' : ''}` : ''}
+              {message.createdAt}
+            </>
+          )}
+        </div>
       </div>
     </div>
   )
+}
+
+function ElapsedThinkingTime({ startedAt }: { startedAt: number }) {
+  const [now, setNow] = React.useState(Date.now())
+
+  React.useEffect(() => {
+    setNow(Date.now())
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [startedAt])
+
+  const elapsed = Math.max(0, Math.floor((now - startedAt) / 1000))
+  return <span>已思考 {elapsed} 秒</span>
 }
 
 function MessageSkeleton() {

@@ -4,7 +4,7 @@ from typing import Any
 
 from sqlalchemy import (
     Boolean,
-    Float,
+    Double,
     Index,
     Integer,
     JSON,
@@ -29,8 +29,8 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(128), nullable=False)
     role: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
-    created_at: Mapped[float] = mapped_column(Float, nullable=False)
-    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[float] = mapped_column(Double, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Double, nullable=False)
 
 
 class AuthSession(Base):
@@ -44,9 +44,9 @@ class AuthSession(Base):
     user_id: Mapped[str] = mapped_column(String(36), nullable=False)
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     user_agent: Mapped[str | None] = mapped_column(String(255))
-    created_at: Mapped[float] = mapped_column(Float, nullable=False)
-    expires_at: Mapped[float] = mapped_column(Float, nullable=False)
-    revoked_at: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[float] = mapped_column(Double, nullable=False)
+    expires_at: Mapped[float] = mapped_column(Double, nullable=False)
+    revoked_at: Mapped[float | None] = mapped_column(Double)
 
 
 class Conversation(Base):
@@ -74,10 +74,10 @@ class Conversation(Base):
     model: Mapped[str | None] = mapped_column(String(128))
     model_config: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     plan_state: Mapped[str | None] = mapped_column(String(24))
-    approved_at: Mapped[float | None] = mapped_column(Float)
-    created_at: Mapped[float] = mapped_column(Float, nullable=False)
-    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
-    ended_at: Mapped[float | None] = mapped_column(Float)
+    approved_at: Mapped[float | None] = mapped_column(Double)
+    created_at: Mapped[float] = mapped_column(Double, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Double, nullable=False)
+    ended_at: Mapped[float | None] = mapped_column(Double)
 
 
 class Message(Base):
@@ -93,7 +93,9 @@ class Message(Base):
     role: Mapped[str] = mapped_column(String(16), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="completed")
-    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    model_run_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[float] = mapped_column(Double, nullable=False)
 
 
 class ModelRun(Base):
@@ -110,8 +112,8 @@ class ModelRun(Base):
     provider: Mapped[str | None] = mapped_column(String(64))
     model: Mapped[str | None] = mapped_column(String(128))
     error: Mapped[str | None] = mapped_column(Text)
-    started_at: Mapped[float] = mapped_column(Float, nullable=False)
-    completed_at: Mapped[float | None] = mapped_column(Float)
+    started_at: Mapped[float] = mapped_column(Double, nullable=False)
+    completed_at: Mapped[float | None] = mapped_column(Double)
 
 
 class MemoryItem(Base):
@@ -122,7 +124,7 @@ class MemoryItem(Base):
     tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
     user_id: Mapped[str] = mapped_column(String(36), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[float] = mapped_column(Double, nullable=False)
 
 
 class MemoryCandidate(Base):
@@ -144,8 +146,8 @@ class MemoryCandidate(Base):
     user_message: Mapped[str] = mapped_column(Text, nullable=False)
     assistant_message: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(24), nullable=False)
-    created_at: Mapped[float] = mapped_column(Float, nullable=False)
-    decided_at: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[float] = mapped_column(Double, nullable=False)
+    decided_at: Mapped[float | None] = mapped_column(Double)
     memory_id: Mapped[str | None] = mapped_column(String(36))
 
 
@@ -165,4 +167,4 @@ class AuditEvent(Base):
     mode: Mapped[str | None] = mapped_column(String(24))
     event_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     error: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[float] = mapped_column(Double, nullable=False)

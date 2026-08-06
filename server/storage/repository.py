@@ -330,6 +330,8 @@ class StorageRepository:
         content: Any,
         *,
         status: str = "completed",
+        model_run_id: str | None = None,
+        duration_ms: int | None = None,
         created_at: float | None = None,
     ) -> dict[str, Any]:
         now = created_at or time.time()
@@ -357,6 +359,8 @@ class StorageRepository:
                 role=role,
                 content=stored_content,
                 status=status,
+                model_run_id=model_run_id,
+                duration_ms=duration_ms,
                 created_at=now,
             )
             session.add(row)
@@ -368,6 +372,8 @@ class StorageRepository:
                 "role": role,
                 "content": content,
                 "status": status,
+                "model_run_id": model_run_id,
+                "duration_ms": duration_ms,
                 "timestamp": now,
                 "created_at": now,
                 "sequence_no": sequence,
@@ -387,6 +393,8 @@ class StorageRepository:
                     "role": row.role,
                     "content": row.content,
                     "status": row.status,
+                    "model_run_id": row.model_run_id,
+                    "duration_ms": row.duration_ms,
                     "timestamp": row.created_at,
                     "created_at": row.created_at,
                     "sequence_no": row.sequence_no,
@@ -494,7 +502,94 @@ class StorageRepository:
                 "id": row.id,
                 "conversation_id": row.conversation_id,
                 "status": row.status,
+                "started_at": row.started_at,
+                "completed_at": row.completed_at,
             }
+
+    def get_active_model_run(
+        self, user_id: str, conversation_id: str
+    ) -> dict[str, Any] | None:
+        with session_scope() as session:
+            row = session.scalar(
+                select(ModelRun)
+                .where(
+                    ModelRun.tenant_id == tenant_id(),
+                    ModelRun.user_id == user_id,
+                    ModelRun.conversation_id == conversation_id,
+                    ModelRun.status == "running",
+                )
+                .order_by(ModelRun.started_at.desc())
+                .limit(1)
+            )
+            if row is None:
+                return None
+            return {
+                "id": row.id,
+                "conversation_id": row.conversation_id,
+                "status": row.status,
+                "provider": row.provider,
+                "model": row.model,
+                "started_at": row.started_at,
+                "elapsed_ms": max(0, int((time.time() - row.started_at) * 1000)),
+            }
+
+    def delete_owned_conversation(self, user_id: str, conversation_id: str) -> str:
+        """Delete conversation-owned data while retaining independent audit events."""
+        with session_scope() as session:
+            conversation = session.scalar(
+                select(Conversation)
+                .where(
+                    Conversation.tenant_id == tenant_id(),
+                    Conversation.user_id == user_id,
+                    Conversation.id == conversation_id,
+                )
+                .with_for_update()
+            )
+            if conversation is None:
+                return "missing"
+            active_run = session.scalar(
+                select(ModelRun.id)
+                .where(
+                    ModelRun.tenant_id == tenant_id(),
+                    ModelRun.user_id == user_id,
+                    ModelRun.conversation_id == conversation_id,
+                    ModelRun.status == "running",
+                )
+                .limit(1)
+            )
+            if conversation.status == "running" or active_run is not None:
+                return "running"
+
+            session.add(
+                AuditEvent(
+                    tenant_id=tenant_id(),
+                    event_type="session_delete",
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    status="completed",
+                    mode=conversation.interaction_type,
+                    event_metadata={"retained_audit": True},
+                    error=None,
+                    created_at=time.time(),
+                )
+            )
+            session.execute(
+                delete(MemoryCandidate).where(
+                    MemoryCandidate.tenant_id == tenant_id(),
+                    MemoryCandidate.user_id == user_id,
+                    MemoryCandidate.conversation_id == conversation_id,
+                )
+            )
+            session.execute(delete(Message).where(Message.conversation_id == conversation_id))
+            session.execute(
+                delete(ModelRun).where(
+                    ModelRun.tenant_id == tenant_id(),
+                    ModelRun.user_id == user_id,
+                    ModelRun.conversation_id == conversation_id,
+                )
+            )
+            session.delete(conversation)
+            return "deleted"
 
     def save_memory(self, user_id: str, content: str) -> dict[str, Any]:
         now = time.time()

@@ -137,8 +137,18 @@ def get_owned_messages(user_id: str, session_id: str) -> Optional[List[Dict[str,
     return get_repository().get_messages(session_id)
 
 
+def get_active_run(user_id: str, session_id: str) -> dict[str, Any] | None:
+    if get_owned_session(user_id, session_id) is None:
+        return None
+    return get_repository().get_active_model_run(user_id, session_id)
+
+
 def update_owned_session(user_id: str, session_id: str, **changes: Any) -> dict[str, Any] | None:
     return get_repository().update_conversation(user_id, session_id, **changes)
+
+
+def delete_owned_session(user_id: str, session_id: str) -> str:
+    return get_repository().delete_owned_conversation(user_id, session_id)
 
 
 def assert_session_owned(user_id: str, session_id: str) -> None:
