@@ -191,9 +191,9 @@ function LoginView({ onLogin }: { onLogin: (user: AuthUser) => void }): React.Re
   }
 
   return (
-    <div className="grid min-h-[100dvh] place-items-center bg-shell px-5 text-ink">
-      <div className="w-full max-w-[380px]">
-        <div className="mb-7 flex items-center gap-3">
+    <div className="min-h-[100dvh] overflow-y-auto bg-shell px-4 py-8 text-ink sm:px-6">
+      <div className="mx-auto flex min-h-[calc(100dvh-4rem)] w-full max-w-[400px] flex-col justify-center">
+        <div className="mb-5 flex items-center gap-3 px-1">
           <div className="flex h-10 w-10 items-center justify-center rounded-md bg-ink text-white">
             <Bot size={20} />
           </div>
@@ -202,7 +202,7 @@ function LoginView({ onLogin }: { onLogin: (user: AuthUser) => void }): React.Re
             <div className="text-xs text-zinc-500">企业智能体工作台</div>
           </div>
         </div>
-        <form className="border-y border-line bg-panel py-6" onSubmit={submit}>
+        <form className="rounded-md border border-line bg-panel p-5 shadow-sm sm:p-7" onSubmit={submit}>
           <div className="mb-5">
             <div className="text-base font-semibold">登录</div>
             <div className="mt-1 text-sm text-zinc-500">使用企业账号进入工作台</div>
@@ -213,7 +213,7 @@ function LoginView({ onLogin }: { onLogin: (user: AuthUser) => void }): React.Re
               autoComplete="username"
               value={username}
               onChange={(event) => setUsername(event.target.value)}
-              className="h-10 w-full rounded-md border border-line bg-panel px-3 text-sm outline-none focus:border-zinc-500"
+              className="h-10 w-full rounded-md border border-line bg-panel px-3 text-sm outline-none transition focus:border-zinc-500 focus:ring-2 focus:ring-zinc-200"
             />
           </label>
           <label className="block">
@@ -223,14 +223,14 @@ function LoginView({ onLogin }: { onLogin: (user: AuthUser) => void }): React.Re
               autoComplete="current-password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
-              className="h-10 w-full rounded-md border border-line bg-panel px-3 text-sm outline-none focus:border-zinc-500"
+              className="h-10 w-full rounded-md border border-line bg-panel px-3 text-sm outline-none transition focus:border-zinc-500 focus:ring-2 focus:ring-zinc-200"
             />
           </label>
           {error && <div className="mt-4 bg-red-50 px-3 py-2 text-sm text-danger" role="alert">{error}</div>}
           <button
             type="submit"
             disabled={submitting || !username.trim() || !password}
-            className="mt-5 flex h-10 w-full items-center justify-center gap-2 rounded-md bg-ink text-sm font-medium text-white disabled:bg-zinc-300"
+            className="mt-5 flex h-10 w-full items-center justify-center gap-2 rounded-md bg-ink text-sm font-medium text-white transition active:scale-[0.98] disabled:bg-zinc-300 disabled:active:scale-100"
           >
             <LockKeyhole size={15} />
             {submitting ? '正在登录' : '登录'}
