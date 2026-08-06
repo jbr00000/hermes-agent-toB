@@ -9,14 +9,15 @@ from server import audit as audit_module
 from server import auth as auth_module
 from server import features as features_module
 from server import memory as memory_module
+from server.storage import database_health, get_runtime_store
 from server.routes import auth, chat, features, memory, sessions, users
 
 
 def create_app() -> FastAPI:
     os.environ.setdefault("HERMES_HEADLESS", "1")
-    auth_module.init_db()    # bootstrap users.db + admin user on startup
-    memory_module.init_db()  # ensure memory.db table exists
-    audit_module.init_db()   # ensure audit.db table exists
+    auth_module.init_db()    # initialize shared storage and bootstrap the admin user
+    memory_module.init_db()
+    audit_module.init_db()
     features_module.apply_terminal_backend()  # TERMINAL_ENV = docker (default) | local (if host_terminal opted in)
     app = FastAPI(title="Hermes Headless Server", version="0.4.0")
     app.include_router(auth.router)
@@ -28,7 +29,15 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     def health():
-        return {"status": "ok"}
+        database_ok = database_health()
+        redis_ok = get_runtime_store().health()
+        return {
+            "status": "ok" if database_ok and redis_ok is not False else "degraded",
+            "components": {
+                "database": "ok" if database_ok else "error",
+                "redis": "disabled" if redis_ok is None else ("ok" if redis_ok else "error"),
+            },
+        }
 
     return app
 

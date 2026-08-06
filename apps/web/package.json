@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 0.0.0.0",
-    "build": "tsc --noEmit && vite build",
-    "preview": "vite preview --host 0.0.0.0"
+    "dev": "vite --config vite.config.ts --host 0.0.0.0",
+    "build": "tsc --noEmit && vite build --config vite.config.ts",
+    "preview": "vite preview --config vite.config.ts --host 0.0.0.0"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.81.5",
@@ -14,7 +14,8 @@
     "jotai": "^2.12.5",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "react-markdown": "10.1.0"
   },
   "devDependencies": {
     "@types/react": "^18.3.18",

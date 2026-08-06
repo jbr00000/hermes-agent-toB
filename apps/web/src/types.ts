@@ -1,4 +1,6 @@
-export type TabType = 'agent' | 'knowledgeBase' | 'document' | 'memory' | 'users' | 'security' | 'audit'
+export type TabType = 'agent' | 'chat' | 'knowledgeBase' | 'document' | 'memory' | 'users' | 'security' | 'audit'
+
+export type WorkspaceMode = 'agent' | 'chat'
 
 export interface WorkTab {
   id: string
@@ -12,6 +14,12 @@ export interface WorkTab {
 
 export type PermissionMode = 'read' | 'controlled' | 'full'
 
+export interface AuthUser {
+  id: string
+  username: string
+  role: 'admin' | 'user'
+}
+
 export interface SessionSummary {
   id: string
   title: string
@@ -21,11 +29,28 @@ export interface SessionSummary {
   risk: 'low' | 'medium' | 'high'
 }
 
+export interface ConversationSummary {
+  id: string
+  title: string
+  space: string
+  updatedAt: string
+  period: 'today' | 'yesterday' | 'earlier'
+  pinned?: boolean
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant' | 'system'
   content: string
   createdAt: string
+  status?: 'completed' | 'cancelled' | 'failed'
+}
+
+export interface AttachedFile {
+  id: string
+  name: string
+  size: number
+  status: 'ready' | 'parsing'
 }
 
 export interface KnowledgeSpace {
@@ -61,4 +86,3 @@ export interface UserRow {
   role: 'admin' | 'user'
   spaces: string[]
 }
-

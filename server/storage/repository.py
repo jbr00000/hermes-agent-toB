@@ -1,0 +1,687 @@
+from __future__ import annotations
+
+import json
+import os
+import time
+import uuid
+from typing import Any
+
+from sqlalchemy import delete, func, select
+
+from .database import session_scope
+from .models import (
+    AuditEvent,
+    AuthSession,
+    Conversation,
+    MemoryCandidate,
+    MemoryItem,
+    Message,
+    ModelRun,
+    User,
+)
+
+
+def tenant_id() -> str:
+    return (
+        os.environ.get("HERMES_TENANT_ID")
+        or os.environ.get("HERMES_CUSTOMER_ID")
+        or "default"
+    ).strip()
+
+
+def _user_dict(row: User) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "username": row.username,
+        "role": row.role,
+        "status": row.status,
+        "created_at": row.created_at,
+    }
+
+
+def _conversation_dict(row: Conversation) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "user_id": row.user_id,
+        "source": row.source,
+        "interaction_type": row.interaction_type,
+        "title": row.title or ("新问答" if row.interaction_type == "chat" else "新智能体任务"),
+        "status": row.status,
+        "pinned": bool(row.pinned),
+        "archived": bool(row.archived),
+        "model": row.model,
+        "model_config": row.model_config or {},
+        "plan_state": row.plan_state,
+        "approved_at": row.approved_at,
+        "created_at": row.created_at,
+        "started_at": row.created_at,
+        "updated_at": row.updated_at,
+        "ended_at": row.ended_at,
+    }
+
+
+class StorageRepository:
+    def create_user(self, username: str, password_hash: str, role: str) -> dict[str, Any]:
+        now = time.time()
+        row = User(
+            id=str(uuid.uuid4()),
+            tenant_id=tenant_id(),
+            username=username,
+            password_hash=password_hash,
+            role=role,
+            status="active",
+            created_at=now,
+            updated_at=now,
+        )
+        with session_scope() as session:
+            session.add(row)
+            session.flush()
+            return _user_dict(row)
+
+    def count_users(self) -> int:
+        with session_scope() as session:
+            return int(
+                session.scalar(select(func.count()).select_from(User).where(User.tenant_id == tenant_id()))
+                or 0
+            )
+
+    def get_user_by_username(self, username: str, *, include_password: bool = False) -> dict[str, Any] | None:
+        with session_scope() as session:
+            row = session.scalar(
+                select(User).where(User.tenant_id == tenant_id(), User.username == username)
+            )
+            if row is None:
+                return None
+            result = _user_dict(row)
+            if include_password:
+                result["password_hash"] = row.password_hash
+            return result
+
+    def get_user(self, user_id: str) -> dict[str, Any] | None:
+        with session_scope() as session:
+            row = session.scalar(
+                select(User).where(User.tenant_id == tenant_id(), User.id == user_id)
+            )
+            return _user_dict(row) if row is not None else None
+
+    def list_users(self) -> list[dict[str, Any]]:
+        with session_scope() as session:
+            rows = session.scalars(
+                select(User).where(User.tenant_id == tenant_id()).order_by(User.created_at)
+            ).all()
+            return [_user_dict(row) for row in rows]
+
+    def delete_user(self, user_id: str) -> bool:
+        with session_scope() as session:
+            result = session.execute(
+                delete(User).where(User.tenant_id == tenant_id(), User.id == user_id)
+            )
+            return bool(result.rowcount)
+
+    def set_user_role(self, user_id: str, role: str) -> bool:
+        with session_scope() as session:
+            row = session.scalar(
+                select(User).where(User.tenant_id == tenant_id(), User.id == user_id)
+            )
+            if row is None:
+                return False
+            row.role = role
+            row.updated_at = time.time()
+            return True
+
+    def create_auth_session(
+        self,
+        user_id: str,
+        token_hash: str,
+        expires_at: float,
+        user_agent: str | None,
+    ) -> str:
+        row = AuthSession(
+            id=str(uuid.uuid4()),
+            tenant_id=tenant_id(),
+            user_id=user_id,
+            token_hash=token_hash,
+            user_agent=(user_agent or "")[:255] or None,
+            created_at=time.time(),
+            expires_at=expires_at,
+            revoked_at=None,
+        )
+        with session_scope() as session:
+            session.add(row)
+        return row.id
+
+    def get_auth_session(self, token_hash: str) -> dict[str, Any] | None:
+        with session_scope() as session:
+            row = session.scalar(
+                select(AuthSession).where(
+                    AuthSession.tenant_id == tenant_id(),
+                    AuthSession.token_hash == token_hash,
+                    AuthSession.revoked_at.is_(None),
+                    AuthSession.expires_at > time.time(),
+                )
+            )
+            if row is None:
+                return None
+            return {"id": row.id, "user_id": row.user_id, "expires_at": row.expires_at}
+
+    def revoke_auth_session(self, token_hash: str) -> bool:
+        with session_scope() as session:
+            row = session.scalar(
+                select(AuthSession).where(
+                    AuthSession.tenant_id == tenant_id(), AuthSession.token_hash == token_hash
+                )
+            )
+            if row is None:
+                return False
+            row.revoked_at = time.time()
+            return True
+
+    def create_conversation(
+        self,
+        user_id: str,
+        *,
+        interaction_type: str = "chat",
+        conversation_id: str | None = None,
+        title: str | None = None,
+        source: str = "headless",
+        model: str | None = None,
+        model_config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        now = time.time()
+        row = Conversation(
+            id=conversation_id or str(uuid.uuid4()),
+            tenant_id=tenant_id(),
+            user_id=user_id,
+            source=source,
+            interaction_type=interaction_type,
+            title=title,
+            status="idle",
+            pinned=False,
+            archived=False,
+            model=model,
+            model_config=model_config or {},
+            plan_state=None,
+            created_at=now,
+            updated_at=now,
+        )
+        with session_scope() as session:
+            session.add(row)
+            session.flush()
+            return _conversation_dict(row)
+
+    def ensure_conversation(self, conversation_id: str, user_id: str, **values: Any) -> dict[str, Any]:
+        with session_scope() as session:
+            row = session.get(Conversation, conversation_id)
+            if row is None:
+                now = time.time()
+                interaction_type = values.get("interaction_type") or "agent"
+                row = Conversation(
+                    id=conversation_id,
+                    tenant_id=tenant_id(),
+                    user_id=user_id,
+                    source=values.get("source") or "headless",
+                    interaction_type=interaction_type,
+                    title=values.get("title"),
+                    status=values.get("status") or "idle",
+                    pinned=False,
+                    archived=False,
+                    model=values.get("model"),
+                    model_config=values.get("model_config") or {},
+                    plan_state=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+                session.add(row)
+                session.flush()
+            elif row.tenant_id == tenant_id() and row.user_id == user_id:
+                if values.get("model") is not None:
+                    row.model = values["model"]
+                if values.get("model_config") is not None:
+                    row.model_config = values["model_config"]
+                row.updated_at = time.time()
+            return _conversation_dict(row)
+
+    def get_conversation(self, conversation_id: str) -> dict[str, Any] | None:
+        with session_scope() as session:
+            row = session.scalar(
+                select(Conversation).where(
+                    Conversation.tenant_id == tenant_id(), Conversation.id == conversation_id
+                )
+            )
+            return _conversation_dict(row) if row is not None else None
+
+    def get_owned_conversation(self, user_id: str, conversation_id: str) -> dict[str, Any] | None:
+        with session_scope() as session:
+            row = session.scalar(
+                select(Conversation).where(
+                    Conversation.tenant_id == tenant_id(),
+                    Conversation.id == conversation_id,
+                    Conversation.user_id == user_id,
+                )
+            )
+            return _conversation_dict(row) if row is not None else None
+
+    def list_conversations(
+        self,
+        user_id: str,
+        *,
+        interaction_type: str | None = None,
+        include_archived: bool = False,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        query = select(Conversation).where(
+            Conversation.tenant_id == tenant_id(), Conversation.user_id == user_id
+        )
+        if interaction_type:
+            query = query.where(Conversation.interaction_type == interaction_type)
+        if not include_archived:
+            query = query.where(Conversation.archived.is_(False))
+        query = query.order_by(Conversation.pinned.desc(), Conversation.updated_at.desc()).limit(limit)
+        with session_scope() as session:
+            return [_conversation_dict(row) for row in session.scalars(query).all()]
+
+    def update_conversation(self, user_id: str, conversation_id: str, **changes: Any) -> dict[str, Any] | None:
+        allowed = {"title", "pinned", "archived", "status", "model", "model_config", "ended_at"}
+        with session_scope() as session:
+            row = session.scalar(
+                select(Conversation).where(
+                    Conversation.tenant_id == tenant_id(),
+                    Conversation.id == conversation_id,
+                    Conversation.user_id == user_id,
+                )
+            )
+            if row is None:
+                return None
+            for key, value in changes.items():
+                if key not in allowed:
+                    continue
+                if key == "title" and value is not None:
+                    value = " ".join(str(value).split()).strip()[:100] or None
+                setattr(row, key, value)
+            row.updated_at = time.time()
+            session.flush()
+            return _conversation_dict(row)
+
+    def update_conversation_model(
+        self,
+        conversation_id: str,
+        *,
+        model: str | None,
+        model_config: dict[str, Any],
+    ) -> None:
+        with session_scope() as session:
+            row = session.get(Conversation, conversation_id)
+            if row is not None and row.tenant_id == tenant_id():
+                row.model = model or row.model
+                row.model_config = model_config
+                row.updated_at = time.time()
+
+    def set_conversation_title(self, conversation_id: str, title: str) -> None:
+        with session_scope() as session:
+            row = session.get(Conversation, conversation_id)
+            if row is not None and row.tenant_id == tenant_id():
+                row.title = " ".join(title.split()).strip()[:100] or row.title
+                row.updated_at = time.time()
+
+    def append_message(
+        self,
+        conversation_id: str,
+        role: str,
+        content: Any,
+        *,
+        status: str = "completed",
+        created_at: float | None = None,
+    ) -> dict[str, Any]:
+        now = created_at or time.time()
+        stored_content = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+        with session_scope() as session:
+            conversation = session.scalar(
+                select(Conversation).where(
+                    Conversation.tenant_id == tenant_id(), Conversation.id == conversation_id
+                ).with_for_update()
+            )
+            if conversation is None:
+                raise KeyError(f"conversation not found: {conversation_id}")
+            sequence = int(
+                session.scalar(
+                    select(func.max(Message.sequence_no)).where(
+                        Message.conversation_id == conversation_id
+                    )
+                )
+                or 0
+            ) + 1
+            row = Message(
+                id=str(uuid.uuid4()),
+                conversation_id=conversation_id,
+                sequence_no=sequence,
+                role=role,
+                content=stored_content,
+                status=status,
+                created_at=now,
+            )
+            session.add(row)
+            conversation.updated_at = now
+            session.flush()
+            return {
+                "id": row.id,
+                "session_id": conversation_id,
+                "role": role,
+                "content": content,
+                "status": status,
+                "timestamp": now,
+                "created_at": now,
+                "sequence_no": sequence,
+            }
+
+    def get_messages(self, conversation_id: str) -> list[dict[str, Any]]:
+        with session_scope() as session:
+            rows = session.scalars(
+                select(Message)
+                .where(Message.conversation_id == conversation_id)
+                .order_by(Message.sequence_no)
+            ).all()
+            return [
+                {
+                    "id": row.id,
+                    "session_id": row.conversation_id,
+                    "role": row.role,
+                    "content": row.content,
+                    "status": row.status,
+                    "timestamp": row.created_at,
+                    "created_at": row.created_at,
+                    "sequence_no": row.sequence_no,
+                }
+                for row in rows
+            ]
+
+    def get_message_count(self, conversation_id: str) -> int:
+        with session_scope() as session:
+            return int(
+                session.scalar(
+                    select(func.count()).select_from(Message).where(
+                        Message.conversation_id == conversation_id
+                    )
+                )
+                or 0
+            )
+
+    def get_plan_state(self, conversation_id: str) -> dict[str, Any] | None:
+        conversation = self.get_conversation(conversation_id)
+        if conversation is None or conversation.get("plan_state") is None:
+            return None
+        return {
+            "session_id": conversation_id,
+            "user_id": conversation["user_id"],
+            "state": conversation["plan_state"],
+            "approved_at": conversation["approved_at"],
+            "updated_at": conversation["updated_at"],
+        }
+
+    def set_plan_state(
+        self,
+        user_id: str,
+        conversation_id: str,
+        state: str,
+        approved_at: float | None,
+    ) -> dict[str, Any]:
+        now = time.time()
+        with session_scope() as session:
+            row = session.scalar(
+                select(Conversation).where(
+                    Conversation.tenant_id == tenant_id(),
+                    Conversation.id == conversation_id,
+                    Conversation.user_id == user_id,
+                )
+            )
+            if row is None:
+                raise KeyError(conversation_id)
+            row.plan_state = state
+            row.approved_at = approved_at
+            row.updated_at = now
+        return {
+            "session_id": conversation_id,
+            "user_id": user_id,
+            "state": state,
+            "approved_at": approved_at,
+            "updated_at": now,
+        }
+
+    def create_model_run(
+        self, request_id: str, user_id: str, conversation_id: str
+    ) -> None:
+        with session_scope() as session:
+            session.add(
+                ModelRun(
+                    id=request_id,
+                    tenant_id=tenant_id(),
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    status="running",
+                    started_at=time.time(),
+                )
+            )
+
+    def finish_model_run(
+        self,
+        request_id: str,
+        *,
+        status: str,
+        provider: str | None = None,
+        model: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        with session_scope() as session:
+            row = session.get(ModelRun, request_id)
+            if row is not None:
+                row.status = status
+                row.provider = provider or row.provider
+                row.model = model or row.model
+                row.error = error
+                row.completed_at = time.time()
+
+    def get_owned_model_run(self, user_id: str, request_id: str) -> dict[str, Any] | None:
+        with session_scope() as session:
+            row = session.scalar(
+                select(ModelRun).where(
+                    ModelRun.tenant_id == tenant_id(),
+                    ModelRun.id == request_id,
+                    ModelRun.user_id == user_id,
+                )
+            )
+            if row is None:
+                return None
+            return {
+                "id": row.id,
+                "conversation_id": row.conversation_id,
+                "status": row.status,
+            }
+
+    def save_memory(self, user_id: str, content: str) -> dict[str, Any]:
+        now = time.time()
+        row = MemoryItem(
+            id=str(uuid.uuid4()),
+            tenant_id=tenant_id(),
+            user_id=user_id,
+            content=content,
+            created_at=now,
+        )
+        with session_scope() as session:
+            session.add(row)
+        return {"id": row.id, "user_id": user_id, "content": content, "created_at": now}
+
+    def list_memories(self, user_id: str) -> list[dict[str, Any]]:
+        with session_scope() as session:
+            rows = session.scalars(
+                select(MemoryItem)
+                .where(MemoryItem.tenant_id == tenant_id(), MemoryItem.user_id == user_id)
+                .order_by(MemoryItem.created_at.desc())
+            ).all()
+            return [
+                {"id": row.id, "content": row.content, "created_at": row.created_at}
+                for row in rows
+            ]
+
+    def delete_memory(self, user_id: str, memory_id: str) -> bool:
+        with session_scope() as session:
+            result = session.execute(
+                delete(MemoryItem).where(
+                    MemoryItem.tenant_id == tenant_id(),
+                    MemoryItem.user_id == user_id,
+                    MemoryItem.id == memory_id,
+                )
+            )
+            return bool(result.rowcount)
+
+    def save_memory_candidate(
+        self,
+        user_id: str,
+        conversation_id: str,
+        user_message: str,
+        assistant_message: str,
+    ) -> dict[str, Any]:
+        now = time.time()
+        row = MemoryCandidate(
+            id=str(uuid.uuid4()),
+            tenant_id=tenant_id(),
+            user_id=user_id,
+            conversation_id=conversation_id,
+            user_message=user_message or "",
+            assistant_message=assistant_message or "",
+            status="pending",
+            created_at=now,
+        )
+        with session_scope() as session:
+            session.add(row)
+        return {
+            "id": row.id,
+            "user_id": user_id,
+            "session_id": conversation_id,
+            "status": "pending",
+            "created_at": now,
+        }
+
+    def list_memory_candidates(
+        self, user_id: str, status: str | None = "pending"
+    ) -> list[dict[str, Any]]:
+        query = select(MemoryCandidate).where(
+            MemoryCandidate.tenant_id == tenant_id(), MemoryCandidate.user_id == user_id
+        )
+        if status:
+            query = query.where(MemoryCandidate.status == status)
+        query = query.order_by(MemoryCandidate.created_at.desc())
+        with session_scope() as session:
+            rows = session.scalars(query).all()
+            return [
+                {
+                    "id": row.id,
+                    "session_id": row.conversation_id,
+                    "user_message": row.user_message,
+                    "assistant_message": row.assistant_message,
+                    "status": row.status,
+                    "created_at": row.created_at,
+                    "decided_at": row.decided_at,
+                    "memory_id": row.memory_id,
+                }
+                for row in rows
+            ]
+
+    def delete_memory_candidate(self, user_id: str, candidate_id: str) -> bool:
+        with session_scope() as session:
+            result = session.execute(
+                delete(MemoryCandidate).where(
+                    MemoryCandidate.tenant_id == tenant_id(),
+                    MemoryCandidate.user_id == user_id,
+                    MemoryCandidate.id == candidate_id,
+                )
+            )
+            return bool(result.rowcount)
+
+    def approve_memory_candidate(
+        self, user_id: str, candidate_id: str, content: str | None
+    ) -> dict[str, Any] | None:
+        with session_scope() as session:
+            row = session.scalar(
+                select(MemoryCandidate).where(
+                    MemoryCandidate.tenant_id == tenant_id(),
+                    MemoryCandidate.user_id == user_id,
+                    MemoryCandidate.id == candidate_id,
+                    MemoryCandidate.status == "pending",
+                )
+            )
+            if row is None:
+                return None
+            memory_content = (content or row.assistant_message or row.user_message).strip()
+            if not memory_content:
+                return None
+            now = time.time()
+            memory = MemoryItem(
+                id=str(uuid.uuid4()),
+                tenant_id=tenant_id(),
+                user_id=user_id,
+                content=memory_content,
+                created_at=now,
+            )
+            session.add(memory)
+            row.status = "approved"
+            row.decided_at = now
+            row.memory_id = memory.id
+            return {
+                "id": memory.id,
+                "user_id": user_id,
+                "content": memory_content,
+                "created_at": now,
+                "candidate_id": candidate_id,
+            }
+
+    def record_audit_event(
+        self,
+        *,
+        event_type: str,
+        conversation_id: str | None,
+        user_id: str | None,
+        status: str,
+        mode: str | None,
+        metadata: dict[str, Any],
+        error: str | None,
+    ) -> int:
+        row = AuditEvent(
+            tenant_id=tenant_id(),
+            event_type=event_type,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            status=status,
+            mode=mode,
+            event_metadata=metadata,
+            error=error,
+            created_at=time.time(),
+        )
+        with session_scope() as session:
+            session.add(row)
+            session.flush()
+            return int(row.id)
+
+    def list_audit_events(
+        self, *, conversation_id: str | None = None, user_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        query = select(AuditEvent).where(AuditEvent.tenant_id == tenant_id())
+        if conversation_id is not None:
+            query = query.where(AuditEvent.conversation_id == conversation_id)
+        if user_id is not None:
+            query = query.where(AuditEvent.user_id == user_id)
+        query = query.order_by(AuditEvent.created_at, AuditEvent.id)
+        with session_scope() as session:
+            rows = session.scalars(query).all()
+            return [
+                {
+                    "id": row.id,
+                    "event_type": row.event_type,
+                    "session_id": row.conversation_id,
+                    "user_id": row.user_id,
+                    "status": row.status,
+                    "mode": row.mode,
+                    "metadata": row.event_metadata or {},
+                    "error": row.error,
+                    "created_at": row.created_at,
+                }
+                for row in rows
+            ]

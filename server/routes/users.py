@@ -6,11 +6,11 @@ open only during Inc 2 testing).
 """
 from __future__ import annotations
 
-import sqlite3
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
 
 from server import auth
 from server.deps import require_admin
@@ -37,8 +37,8 @@ def list_users():
 def create_user(req: CreateUserRequest):
     try:
         user = auth.create_user(req.username, req.password, role=req.role)
-    except sqlite3.IntegrityError:
-        raise HTTPException(status_code=409, detail="username already exists")
+    except IntegrityError as exc:
+        raise HTTPException(status_code=409, detail="username already exists") from exc
     return {"user": user}
 
 

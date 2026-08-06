@@ -1,6 +1,7 @@
 import * as React from 'react'
 import { useAtom } from 'jotai'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import ReactMarkdown from 'react-markdown'
 import {
   AlertTriangle,
   Archive,
@@ -19,11 +20,15 @@ import {
   KeyRound,
   Layers3,
   LockKeyhole,
+  LogOut,
+  Menu,
   MessageSquareText,
   Mic,
   MoreHorizontal,
   PanelRight,
   Paperclip,
+  Pencil,
+  Pin,
   Play,
   Plus,
   Search,
@@ -37,18 +42,23 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { db } from './db'
+import { api, ApiError } from './api'
 import { mockApi } from './mockApi'
 import { documents, sessions as fallbackSessions } from './mockData'
 import {
   activeTabIdAtom,
   attachedFilesAtom,
+  chatAttachedFilesAtom,
   createTab,
   permissionModeAtom,
   selectedSpaceAtom,
   tabsAtom,
+  workspaceModeAtom,
 } from './state'
 import type {
   ChatMessage,
+  ConversationSummary,
+  AuthUser,
   KnowledgeDocument,
   KnowledgeSpace,
   MemoryCandidate,
@@ -56,6 +66,7 @@ import type {
   SessionSummary,
   TabType,
   UserRow,
+  WorkspaceMode,
   WorkTab,
 } from './types'
 
@@ -75,6 +86,8 @@ function typeIcon(type: TabType): LucideIcon {
   switch (type) {
     case 'agent':
       return Bot
+    case 'chat':
+      return MessageSquareText
     case 'knowledgeBase':
       return Database
     case 'document':
@@ -131,12 +144,114 @@ function docStatusTone(status: KnowledgeDocument['status']): string {
 }
 
 export default function App(): React.ReactElement {
+  const [user, setUser] = React.useState<AuthUser | null>(null)
+  const [restoring, setRestoring] = React.useState(true)
+
+  React.useEffect(() => {
+    api.restoreSession()
+      .then(setUser)
+      .catch(() => setUser(null))
+      .finally(() => setRestoring(false))
+  }, [])
+
+  if (restoring) return <AppLoading />
+  if (!user) return <LoginView onLogin={setUser} />
+  return <WorkspaceApp user={user} onLogout={() => setUser(null)} />
+}
+
+function AppLoading(): React.ReactElement {
+  return (
+    <div className="flex min-h-[100dvh] items-center justify-center bg-shell text-ink">
+      <div className="flex items-center gap-3 text-sm text-zinc-500">
+        <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-success" />
+        正在连接企业工作台
+      </div>
+    </div>
+  )
+}
+
+function LoginView({ onLogin }: { onLogin: (user: AuthUser) => void }): React.ReactElement {
+  const [username, setUsername] = React.useState('admin')
+  const [password, setPassword] = React.useState('')
+  const [submitting, setSubmitting] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!username.trim() || !password) return
+    setSubmitting(true)
+    setError(null)
+    try {
+      onLogin(await api.login(username.trim(), password))
+    } catch (loginError) {
+      setError(loginError instanceof Error ? loginError.message : '登录失败')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="grid min-h-[100dvh] place-items-center bg-shell px-5 text-ink">
+      <div className="w-full max-w-[380px]">
+        <div className="mb-7 flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-md bg-ink text-white">
+            <Bot size={20} />
+          </div>
+          <div>
+            <div className="text-lg font-semibold">Hermes Agent</div>
+            <div className="text-xs text-zinc-500">企业智能体工作台</div>
+          </div>
+        </div>
+        <form className="border-y border-line bg-panel py-6" onSubmit={submit}>
+          <div className="mb-5">
+            <div className="text-base font-semibold">登录</div>
+            <div className="mt-1 text-sm text-zinc-500">使用企业账号进入工作台</div>
+          </div>
+          <label className="mb-4 block">
+            <span className="mb-1.5 block text-xs font-medium text-zinc-600">用户名</span>
+            <input
+              autoComplete="username"
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              className="h-10 w-full rounded-md border border-line bg-panel px-3 text-sm outline-none focus:border-zinc-500"
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1.5 block text-xs font-medium text-zinc-600">密码</span>
+            <input
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              className="h-10 w-full rounded-md border border-line bg-panel px-3 text-sm outline-none focus:border-zinc-500"
+            />
+          </label>
+          {error && <div className="mt-4 bg-red-50 px-3 py-2 text-sm text-danger" role="alert">{error}</div>}
+          <button
+            type="submit"
+            disabled={submitting || !username.trim() || !password}
+            className="mt-5 flex h-10 w-full items-center justify-center gap-2 rounded-md bg-ink text-sm font-medium text-white disabled:bg-zinc-300"
+          >
+            <LockKeyhole size={15} />
+            {submitting ? '正在登录' : '登录'}
+          </button>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void }): React.ReactElement {
   const [tabs, setTabs] = useAtom(tabsAtom)
   const [activeTabId, setActiveTabId] = useAtom(activeTabIdAtom)
+  const [workspaceMode, setWorkspaceMode] = useAtom(workspaceModeAtom)
   const [hydrated, setHydrated] = React.useState(false)
   const [notice, setNotice] = React.useState<string | null>(null)
+  const [mobileSidebarOpen, setMobileSidebarOpen] = React.useState(false)
   const restoredRef = React.useRef(false)
+  const queryClient = useQueryClient()
   const sessionsQuery = useQuery({ queryKey: ['sessions'], queryFn: mockApi.listSessions })
+  const conversationsQuery = useQuery({ queryKey: ['conversations'], queryFn: api.listConversations })
   const spacesQuery = useQuery({ queryKey: ['spaces'], queryFn: mockApi.listSpaces })
 
   React.useEffect(() => {
@@ -145,21 +260,28 @@ export default function App(): React.ReactElement {
     db.tabs.orderBy('order').toArray()
       .then((stored) => {
         if (stored.length > 0) {
+          const preferred = stored
+            .filter((tab) => tab.type === workspaceMode)
+            .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? stored[0]
           setTabs(stored)
-          setActiveTabId(stored[0]?.id ?? null)
+          setActiveTabId(preferred?.id ?? null)
+          if (preferred?.type === 'agent' || preferred?.type === 'chat') setWorkspaceMode(preferred.type)
         }
       })
       .finally(() => setHydrated(true))
-  }, [setActiveTabId, setTabs])
+  }, [setActiveTabId, setTabs, setWorkspaceMode, workspaceMode])
 
   React.useEffect(() => {
     if (!hydrated || tabs.length > 0) return
-    const first = sessionsQuery.data?.[0] ?? fallbackSessions[0]
-    if (!first) return
-    const tab = createTab('agent', first.id, first.title, 0)
+    const first = workspaceMode === 'chat'
+      ? conversationsQuery.data?.[0]
+      : sessionsQuery.data?.[0] ?? fallbackSessions[0]
+    const tab = first
+      ? createTab(workspaceMode, first.id, first.title, 0)
+      : createTab(workspaceMode, `draft-${Date.now()}`, workspaceMode === 'chat' ? '新问答' : '新智能体任务', 0)
     setTabs([tab])
     setActiveTabId(tab.id)
-  }, [hydrated, sessionsQuery.data, setActiveTabId, setTabs, tabs.length])
+  }, [conversationsQuery.data, hydrated, sessionsQuery.data, setActiveTabId, setTabs, tabs.length, workspaceMode])
 
   React.useEffect(() => {
     if (!hydrated) return
@@ -174,6 +296,7 @@ export default function App(): React.ReactElement {
 
   const openTab = React.useCallback((type: TabType, refId: string, title: string) => {
     const id = `${type}:${refId}`
+    if (type === 'agent' || type === 'chat') setWorkspaceMode(type)
     setTabs((current) => {
       const existing = current.find((tab) => tab.id === id)
       if (existing) {
@@ -188,37 +311,92 @@ export default function App(): React.ReactElement {
       setActiveTabId(next.id)
       return [...current, next]
     })
-  }, [setActiveTabId, setTabs])
+  }, [setActiveTabId, setTabs, setWorkspaceMode])
 
   const closeTab = React.useCallback((tabId: string) => {
     setTabs((current) => {
       const index = current.findIndex((tab) => tab.id === tabId)
       const next = current.filter((tab) => tab.id !== tabId).map((tab, order) => ({ ...tab, order }))
       if (activeTabId === tabId) {
-        setActiveTabId(next[Math.max(0, index - 1)]?.id ?? next[0]?.id ?? null)
+        const nextActive = next[Math.max(0, index - 1)] ?? next[0] ?? null
+        setActiveTabId(nextActive?.id ?? null)
+        if (nextActive?.type === 'agent' || nextActive?.type === 'chat') setWorkspaceMode(nextActive.type)
       }
       return next
     })
-  }, [activeTabId, setActiveTabId, setTabs])
+  }, [activeTabId, setActiveTabId, setTabs, setWorkspaceMode])
+
+  const activateTab = React.useCallback((tabId: string) => {
+    const tab = tabs.find((item) => item.id === tabId)
+    setActiveTabId(tabId)
+    if (tab?.type === 'agent' || tab?.type === 'chat') setWorkspaceMode(tab.type)
+  }, [setActiveTabId, setWorkspaceMode, tabs])
+
+  const changeWorkspaceMode = React.useCallback((mode: WorkspaceMode) => {
+    setWorkspaceMode(mode)
+    const existing = tabs
+      .filter((tab) => tab.type === mode)
+      .sort((left, right) => right.updatedAt - left.updatedAt)[0]
+    if (existing) {
+      setActiveTabId(existing.id)
+      return
+    }
+
+    const first = mode === 'chat'
+      ? conversationsQuery.data?.[0]
+      : sessionsQuery.data?.[0] ?? fallbackSessions[0]
+    openTab(mode, first?.id ?? `draft-${Date.now()}`, first?.title ?? (mode === 'chat' ? '新问答' : '新智能体任务'))
+  }, [conversationsQuery.data, openTab, sessionsQuery.data, setActiveTabId, setWorkspaceMode, tabs])
+
+  const createConversation = React.useCallback(() => {
+    api.createConversation()
+      .then((conversation) => {
+        queryClient.setQueryData<ConversationSummary[]>(['conversations'], (current = []) => [conversation, ...current])
+        openTab('chat', conversation.id, conversation.title)
+      })
+      .catch((error) => setNotice(error instanceof Error ? error.message : '新建问答失败'))
+  }, [openTab, queryClient])
+
+  const updateConversationTab = React.useCallback((sessionId: string, title: string) => {
+    setTabs((current) => current.map((tab) => (
+      tab.type === 'chat' && tab.refId === sessionId ? { ...tab, title, updatedAt: Date.now() } : tab
+    )))
+  }, [setTabs])
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null
 
   return (
-    <div className="min-h-[100dvh] bg-shell text-ink">
-      <div className="grid min-h-[100dvh] grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)]">
+    <div className="h-[100dvh] overflow-hidden bg-shell text-ink">
+      <div className="grid h-full grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)]">
         <Sidebar
           sessions={sessionsQuery.data ?? []}
+          conversations={conversationsQuery.data ?? []}
           spaces={spacesQuery.data ?? []}
+          mode={workspaceMode}
           activeTab={activeTab}
           onOpenTab={openTab}
+          onModeChange={changeWorkspaceMode}
+          onNewConversation={createConversation}
+          mobileOpen={mobileSidebarOpen}
+          onClose={() => setMobileSidebarOpen(false)}
         />
-        <div className="flex min-w-0 flex-col">
-          <TopBar spaces={spacesQuery.data ?? []} />
-          <TabBar tabs={tabs} activeTabId={activeTabId} onActivate={setActiveTabId} onClose={closeTab} />
-          <div className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
+          <TopBar
+            spaces={spacesQuery.data ?? []}
+            user={user}
+            onOpenNavigation={() => setMobileSidebarOpen(true)}
+            onLogout={() => void api.logout().finally(onLogout)}
+          />
+          <TabBar tabs={tabs} activeTabId={activeTabId} onActivate={activateTab} onClose={closeTab} />
+          <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden xl:grid-cols-[minmax(0,1fr)_340px]">
             <main className="min-w-0 overflow-hidden border-r border-line bg-panel">
               {activeTab ? (
-                <TabContent tab={activeTab} onOpenTab={openTab} />
+                <TabContent
+                  tab={activeTab}
+                  onOpenTab={openTab}
+                  onConversationUpdated={updateConversationTab}
+                  onConversationArchived={(sessionId) => closeTab(`chat:${sessionId}`)}
+                />
               ) : (
                 <EmptyWorkspace onNewTask={() => {
                   const first = sessionsQuery.data?.[0] ?? fallbackSessions[0]
@@ -244,47 +422,178 @@ export default function App(): React.ReactElement {
 
 function Sidebar({
   sessions,
+  conversations,
   spaces,
+  mode,
   activeTab,
   onOpenTab,
+  onModeChange,
+  onNewConversation,
+  mobileOpen,
+  onClose,
 }: {
   sessions: SessionSummary[]
+  conversations: ConversationSummary[]
   spaces: KnowledgeSpace[]
+  mode: WorkspaceMode
   activeTab: WorkTab | null
   onOpenTab: (type: TabType, refId: string, title: string) => void
+  onModeChange: (mode: WorkspaceMode) => void
+  onNewConversation: () => void
+  mobileOpen: boolean
+  onClose: () => void
 }) {
+  const [searchQuery, setSearchQuery] = React.useState('')
+  const normalizedSearch = searchQuery.trim().toLocaleLowerCase('zh-CN')
+  const visibleSessions = normalizedSearch
+    ? sessions.filter((session) => session.title.toLocaleLowerCase('zh-CN').includes(normalizedSearch))
+    : sessions
+  const visibleConversations = normalizedSearch
+    ? conversations.filter((conversation) => conversation.title.toLocaleLowerCase('zh-CN').includes(normalizedSearch))
+    : conversations
+  const pinnedConversations = visibleConversations.filter((conversation) => conversation.pinned)
+  const conversationGroups: Array<{ title: string; items: ConversationSummary[] }> = [
+    { title: '今天', items: visibleConversations.filter((conversation) => !conversation.pinned && conversation.period === 'today') },
+    { title: '昨天', items: visibleConversations.filter((conversation) => !conversation.pinned && conversation.period === 'yesterday') },
+    { title: '更早', items: visibleConversations.filter((conversation) => !conversation.pinned && conversation.period === 'earlier') },
+  ]
+
+  const openTab = (type: TabType, refId: string, title: string) => {
+    onOpenTab(type, refId, title)
+    onClose()
+  }
+
+  const changeMode = (nextMode: WorkspaceMode) => {
+    onModeChange(nextMode)
+    onClose()
+  }
+
+  const createConversation = () => {
+    onNewConversation()
+    onClose()
+  }
+
   return (
-    <aside className="hidden min-h-0 flex-col border-r border-line bg-[#fbfbfc] lg:flex">
-      <div className="border-b border-line px-4 py-4">
+    <>
+      {mobileOpen && (
+        <button
+          aria-label="关闭导航"
+          className="fixed inset-y-0 left-[280px] right-0 z-30 bg-black/20 lg:hidden"
+          onClick={onClose}
+        />
+      )}
+      <aside className={cn(
+        'fixed inset-y-0 left-0 z-40 flex w-[280px] min-h-0 flex-col border-r border-line bg-[#fbfbfc] transition-transform duration-200 lg:static lg:z-auto lg:translate-x-0',
+        mobileOpen ? 'translate-x-0' : '-translate-x-full',
+      )}>
+      <div className="border-b border-line px-3 py-3">
         <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-md bg-ink text-white">
-            <Bot size={19} />
+          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-ink text-white">
+            <Bot size={17} />
           </div>
           <div className="min-w-0">
             <div className="truncate text-[15px] font-semibold">Hermes Agent</div>
             <div className="text-xs text-zinc-500">企业智能体工作台</div>
           </div>
+          <button
+            title="关闭导航"
+            className="ml-auto flex h-8 w-8 items-center justify-center rounded-md text-zinc-500 hover:bg-field hover:text-ink lg:hidden"
+            onClick={onClose}
+          >
+            <X size={16} />
+          </button>
         </div>
+
+        <div className="mt-3 grid grid-cols-2 gap-1 rounded-md bg-[#edf1ee] p-1" aria-label="工作模式">
+          {([
+            { value: 'agent' as const, label: 'Agent', icon: Bot, title: '任务执行' },
+            { value: 'chat' as const, label: 'Chat', icon: MessageSquareText, title: '智能问答' },
+          ]).map((item) => {
+            const Icon = item.icon
+            const active = mode === item.value
+            return (
+              <button
+                key={item.value}
+                title={item.title}
+                aria-pressed={active}
+                className={cn(
+                  'flex h-8 items-center justify-center gap-2 rounded text-sm font-medium transition active:scale-[0.98]',
+                  active ? 'bg-[#3d735a] text-white shadow-sm' : 'text-zinc-500 hover:bg-white/70 hover:text-ink',
+                )}
+                onClick={() => changeMode(item.value)}
+              >
+                <Icon size={15} />
+                {item.label}
+              </button>
+            )
+          })}
+        </div>
+
         <button
           className="mt-4 flex h-9 w-full items-center justify-center gap-2 rounded-md bg-ink px-3 text-sm font-medium text-white transition active:scale-[0.98]"
-          onClick={() => onOpenTab('agent', `draft-${Date.now()}`, '新智能体任务')}
+          onClick={() => mode === 'chat'
+            ? createConversation()
+            : openTab('agent', `draft-${Date.now()}`, '新智能体任务')}
         >
           <Plus size={16} />
-          新建任务
+          {mode === 'agent' ? '新建任务' : '新建问答'}
         </button>
         <label className="mt-3 flex h-9 items-center gap-2 rounded-md border border-line bg-panel px-3">
           <Search size={15} className="text-zinc-400" />
-          <input className="min-w-0 flex-1 bg-transparent text-sm outline-none" placeholder="搜索会话、文档、用户" />
+          <input
+            className="min-w-0 flex-1 bg-transparent text-sm outline-none"
+            placeholder={mode === 'agent' ? '搜索任务' : '搜索问答'}
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+          />
         </label>
       </div>
 
       <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto px-3 py-3">
-        <NavGroup title="工作区">
-          <NavButton active={activeTab?.type === 'knowledgeBase'} icon={Database} label="知识库" onClick={() => onOpenTab('knowledgeBase', 'main', '知识库')} />
-          <NavButton active={activeTab?.type === 'memory'} icon={Brain} label="记忆中心" onClick={() => onOpenTab('memory', 'main', '记忆中心')} />
-          <NavButton active={activeTab?.type === 'users'} icon={Users} label="用户与权限" onClick={() => onOpenTab('users', 'main', '用户与权限')} />
-          <NavButton active={activeTab?.type === 'security'} icon={ShieldCheck} label="能力与安全" onClick={() => onOpenTab('security', 'main', '能力与安全')} />
-          <NavButton active={activeTab?.type === 'audit'} icon={ClipboardList} label="审计中心" onClick={() => onOpenTab('audit', 'main', '审计中心')} />
+        {mode === 'agent' ? (
+          <NavGroup title="最近任务">
+            <div className="space-y-1">
+              {visibleSessions.map((session) => (
+                <button
+                  key={session.id}
+                  className={cn(
+                    'w-full rounded-md px-2.5 py-2 text-left transition hover:bg-field',
+                    activeTab?.type === 'agent' && activeTab.refId === session.id && 'bg-field',
+                  )}
+                  onClick={() => openTab('agent', session.id, session.title)}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className={cn('h-2 w-2 shrink-0 rounded-full status-dot', session.status === 'running' ? 'bg-success text-success' : session.status === 'plan_pending' ? 'bg-caution text-caution' : 'bg-zinc-400 text-zinc-400')} />
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium">{session.title}</span>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between pl-4 text-[11px] text-zinc-500">
+                    <span>{session.space}</span>
+                    <span>{statusText(session.status)} · {session.updatedAt}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </NavGroup>
+        ) : (
+          <>
+            {pinnedConversations.length > 0 && (
+              <ConversationGroup title="置顶问答" items={pinnedConversations} activeTab={activeTab} onOpenTab={openTab} />
+            )}
+            {conversationGroups.map((group) => group.items.length > 0 && (
+              <ConversationGroup key={group.title} title={group.title} items={group.items} activeTab={activeTab} onOpenTab={openTab} />
+            ))}
+          </>
+        )}
+
+        <NavGroup title="业务资源">
+          <NavButton active={activeTab?.type === 'knowledgeBase'} icon={Database} label="知识库" onClick={() => openTab('knowledgeBase', 'main', '知识库')} />
+          <NavButton active={activeTab?.type === 'memory'} icon={Brain} label="记忆中心" onClick={() => openTab('memory', 'main', '记忆中心')} />
+        </NavGroup>
+
+        <NavGroup title="系统管理">
+          <NavButton active={activeTab?.type === 'users'} icon={Users} label="用户与权限" onClick={() => openTab('users', 'main', '用户与权限')} />
+          <NavButton active={activeTab?.type === 'security'} icon={ShieldCheck} label="能力与安全" onClick={() => openTab('security', 'main', '能力与安全')} />
+          <NavButton active={activeTab?.type === 'audit'} icon={ClipboardList} label="审计中心" onClick={() => openTab('audit', 'main', '审计中心')} />
         </NavGroup>
 
         <NavGroup title="业务空间">
@@ -292,7 +601,7 @@ function Sidebar({
             <button
               key={space.id}
               className="flex w-full items-center justify-between rounded-md px-2.5 py-2 text-left text-sm text-zinc-700 transition hover:bg-field"
-              onClick={() => onOpenTab('knowledgeBase', space.id, space.name)}
+              onClick={() => openTab('knowledgeBase', space.id, space.name)}
             >
               <span className="truncate">{space.name}</span>
               <span className="ml-2 rounded bg-zinc-100 px-1.5 py-0.5 text-[11px] text-zinc-500">{space.documents}</span>
@@ -300,31 +609,45 @@ function Sidebar({
           ))}
         </NavGroup>
 
-        <NavGroup title="最近会话">
-          <div className="space-y-1">
-            {sessions.map((session) => (
-              <button
-                key={session.id}
-                className={cn(
-                  'w-full rounded-md px-2.5 py-2 text-left transition hover:bg-field',
-                  activeTab?.type === 'agent' && activeTab.refId === session.id && 'bg-field',
-                )}
-                onClick={() => onOpenTab('agent', session.id, session.title)}
-              >
-                <div className="flex items-center gap-2">
-                  <span className={cn('h-2 w-2 rounded-full status-dot', session.status === 'running' ? 'bg-success text-success' : session.status === 'plan_pending' ? 'bg-caution text-caution' : 'bg-zinc-400 text-zinc-400')} />
-                  <span className="min-w-0 flex-1 truncate text-sm font-medium">{session.title}</span>
-                </div>
-                <div className="mt-1 flex items-center justify-between pl-4 text-[11px] text-zinc-500">
-                  <span>{session.space}</span>
-                  <span>{session.updatedAt}</span>
-                </div>
-              </button>
-            ))}
-          </div>
-        </NavGroup>
       </div>
-    </aside>
+      </aside>
+    </>
+  )
+}
+
+function ConversationGroup({
+  title,
+  items,
+  activeTab,
+  onOpenTab,
+}: {
+  title: string
+  items: ConversationSummary[]
+  activeTab: WorkTab | null
+  onOpenTab: (type: TabType, refId: string, title: string) => void
+}) {
+  return (
+    <NavGroup title={title}>
+      <div className="space-y-1 border-l border-[#dce7df] pl-1.5">
+        {items.map((conversation) => {
+          const active = activeTab?.type === 'chat' && activeTab.refId === conversation.id
+          return (
+            <button
+              key={conversation.id}
+              className={cn(
+                'group flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition active:scale-[0.98]',
+                active ? 'bg-[#e0ece4] font-medium text-[#28513d]' : 'text-zinc-700 hover:bg-field',
+              )}
+              onClick={() => onOpenTab('chat', conversation.id, conversation.title)}
+            >
+              <MessageSquareText size={14} className={cn('shrink-0', active ? 'text-[#3d735a]' : 'text-zinc-400')} />
+              <span className="min-w-0 flex-1 truncate">{conversation.title}</span>
+              <span className="hidden shrink-0 text-[10px] text-zinc-400 group-hover:inline">{conversation.updatedAt}</span>
+            </button>
+          )
+        })}
+      </div>
+    </NavGroup>
   )
 }
 
@@ -352,24 +675,41 @@ function NavButton({ icon: Icon, label, active, onClick }: { icon: LucideIcon; l
   )
 }
 
-function TopBar({ spaces }: { spaces: KnowledgeSpace[] }) {
+function TopBar({
+  spaces,
+  user,
+  onOpenNavigation,
+  onLogout,
+}: {
+  spaces: KnowledgeSpace[]
+  user: AuthUser
+  onOpenNavigation: () => void
+  onLogout: () => void
+}) {
   const [selectedSpace, setSelectedSpace] = useAtom(selectedSpaceAtom)
   const activeSpace = spaces.find((space) => space.id === selectedSpace) ?? spaces[0]
 
   return (
-    <header className="flex h-14 items-center justify-between border-b border-line bg-panel px-4">
-      <div className="flex items-center gap-3">
-        <button className="flex h-9 items-center gap-2 rounded-md border border-line bg-panel px-3 text-sm hover:bg-field">
+    <header className="flex h-14 items-center justify-between border-b border-line bg-panel px-3 sm:px-4">
+      <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+        <button
+          title="打开导航"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-line text-zinc-600 hover:bg-field lg:hidden"
+          onClick={onOpenNavigation}
+        >
+          <Menu size={17} />
+        </button>
+        <button className="flex h-9 min-w-0 items-center gap-2 rounded-md border border-line bg-panel px-2.5 text-sm hover:bg-field sm:px-3">
           <Archive size={15} />
-          <span>{activeSpace?.name ?? '业务空间'}</span>
+          <span className="truncate">{activeSpace?.name ?? '业务空间'}</span>
           <ChevronDown size={14} className="text-zinc-400" />
         </button>
         <div className="hidden items-center gap-1.5 text-xs text-zinc-500 lg:flex">
           <span className="h-2 w-2 rounded-full bg-success" />
-          <span>Mock 前端模式</span>
+          <span>Chat 服务已连接</span>
         </div>
       </div>
-      <div className="flex items-center gap-2">
+      <div className="ml-2 flex shrink-0 items-center gap-2">
         {spaces.slice(0, 3).map((space) => (
           <button
             key={space.id}
@@ -382,10 +722,17 @@ function TopBar({ spaces }: { spaces: KnowledgeSpace[] }) {
             {space.name}
           </button>
         ))}
-          <div className="ml-2 hidden h-8 items-center gap-2 rounded-md border border-line px-2.5 text-xs sm:flex">
+        <div className="ml-2 hidden h-8 items-center gap-2 rounded-md border border-line px-2.5 text-xs sm:flex">
           <UserCog size={14} />
-          admin
+          {user.username}
         </div>
+        <button
+          title="退出登录"
+          className="flex h-8 w-8 items-center justify-center rounded-md border border-line text-zinc-500 hover:bg-field hover:text-ink"
+          onClick={onLogout}
+        >
+          <LogOut size={14} />
+        </button>
       </div>
     </header>
   )
@@ -426,8 +773,29 @@ function TabBar({ tabs, activeTabId, onActivate, onClose }: { tabs: WorkTab[]; a
   )
 }
 
-function TabContent({ tab, onOpenTab }: { tab: WorkTab; onOpenTab: (type: TabType, refId: string, title: string) => void }) {
+function TabContent({
+  tab,
+  onOpenTab,
+  onConversationUpdated,
+  onConversationArchived,
+}: {
+  tab: WorkTab
+  onOpenTab: (type: TabType, refId: string, title: string) => void
+  onConversationUpdated: (sessionId: string, title: string) => void
+  onConversationArchived: (sessionId: string) => void
+}) {
   if (tab.type === 'agent') return <AgentView sessionId={tab.refId} title={tab.title} />
+  if (tab.type === 'chat') {
+    return (
+      <ChatView
+        sessionId={tab.refId}
+        title={tab.title}
+        onConversationUpdated={onConversationUpdated}
+        onConversationArchived={onConversationArchived}
+        onPromote={() => onOpenTab('agent', `from-${tab.refId}-${Date.now()}`, `${tab.title} · 执行`)}
+      />
+    )
+  }
   if (tab.type === 'knowledgeBase') return <KnowledgeBaseView selectedRef={tab.refId} onOpenTab={onOpenTab} />
   if (tab.type === 'document') return <DocumentView documentId={tab.refId} />
   if (tab.type === 'memory') return <MemoryView />
@@ -444,6 +812,315 @@ function EmptyWorkspace({ onNewTask }: { onNewTask: () => void }) {
         <Bot className="mx-auto mb-3 text-zinc-300" size={42} />
         <div className="text-base font-medium">没有打开的标签</div>
         <button className="mt-4 rounded-md bg-ink px-4 py-2 text-sm text-white" onClick={onNewTask}>新建任务</button>
+      </div>
+    </div>
+  )
+}
+
+function ChatView({
+  sessionId,
+  title,
+  onPromote,
+  onConversationUpdated,
+  onConversationArchived,
+}: {
+  sessionId: string
+  title: string
+  onPromote: () => void
+  onConversationUpdated: (sessionId: string, title: string) => void
+  onConversationArchived: (sessionId: string) => void
+}) {
+  const [files, setFiles] = useAtom(chatAttachedFilesAtom)
+  const queryClient = useQueryClient()
+  const query = useQuery({ queryKey: ['messages', sessionId], queryFn: () => api.listMessages(sessionId) })
+  const [localMessages, setLocalMessages] = React.useState<ChatMessage[]>([])
+  const [draft, setDraft] = React.useState('')
+  const [streaming, setStreaming] = React.useState(false)
+  const [streamError, setStreamError] = React.useState<string | null>(null)
+  const [menuOpen, setMenuOpen] = React.useState(false)
+  const [renaming, setRenaming] = React.useState(false)
+  const [renameDraft, setRenameDraft] = React.useState(title)
+  const [actionPending, setActionPending] = React.useState(false)
+  const activeRequestId = React.useRef<string | null>(null)
+  const fileInputRef = React.useRef<HTMLInputElement | null>(null)
+
+  React.useEffect(() => {
+    setLocalMessages(query.data ?? [])
+  }, [query.data, sessionId])
+
+  React.useEffect(() => {
+    if (!renaming) setRenameDraft(title)
+  }, [renaming, title])
+
+  const currentConversation = queryClient
+    .getQueryData<ConversationSummary[]>(['conversations'])
+    ?.find((conversation) => conversation.id === sessionId)
+
+  const updateConversation = React.useCallback(async (
+    changes: { title?: string; pinned?: boolean; archived?: boolean },
+  ) => {
+    setActionPending(true)
+    setStreamError(null)
+    try {
+      const updated = await api.updateConversation(sessionId, changes)
+      if (changes.archived) {
+        queryClient.setQueryData<ConversationSummary[]>(['conversations'], (current = []) => (
+          current.filter((conversation) => conversation.id !== sessionId)
+        ))
+        onConversationArchived(sessionId)
+      } else {
+        queryClient.setQueryData<ConversationSummary[]>(['conversations'], (current = []) => (
+          current.map((conversation) => conversation.id === sessionId ? updated : conversation)
+        ))
+        if (changes.title) onConversationUpdated(sessionId, updated.title)
+        await queryClient.invalidateQueries({ queryKey: ['conversations'] })
+      }
+      setMenuOpen(false)
+      return updated
+    } catch (error) {
+      setStreamError(error instanceof Error ? error.message : '更新问答失败')
+      return null
+    } finally {
+      setActionPending(false)
+    }
+  }, [onConversationArchived, onConversationUpdated, queryClient, sessionId])
+
+  const commitRename = React.useCallback(async () => {
+    const nextTitle = renameDraft.trim()
+    if (!nextTitle || nextTitle === title) {
+      setRenaming(false)
+      setRenameDraft(title)
+      return
+    }
+    const updated = await updateConversation({ title: nextTitle })
+    if (updated) setRenaming(false)
+  }, [renameDraft, title, updateConversation])
+
+  const sendMessage = React.useCallback(async () => {
+    const text = draft.trim()
+    if (!text || streaming) return
+    const now = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+    const assistantId = `chat-assistant-${Date.now()}`
+    const requestId = crypto.randomUUID()
+    activeRequestId.current = requestId
+    setDraft('')
+    setStreamError(null)
+    setStreaming(true)
+    setLocalMessages((current) => [
+      ...current,
+      { id: `chat-user-${Date.now()}`, role: 'user', content: text, createdAt: now },
+      { id: assistantId, role: 'assistant', content: '', createdAt: now },
+    ])
+
+    try {
+      await api.streamChat(sessionId, requestId, text, {
+        onSession: (event) => {
+          if (event.title) onConversationUpdated(sessionId, event.title)
+        },
+        onDelta: (event) => {
+          if (!event.content) return
+          setLocalMessages((current) => current.map((message) => (
+            message.id === assistantId
+              ? { ...message, content: `${message.content}${event.content}` }
+              : message
+          )))
+        },
+        onFinal: (event) => {
+          setLocalMessages((current) => current.map((message) => (
+            message.id === assistantId
+              ? {
+                  ...message,
+                  id: event.message?.id ?? message.id,
+                  content: event.content ?? message.content,
+                  status: event.status === 'cancelled' ? 'cancelled' : 'completed',
+                }
+              : message
+          )))
+          if (event.title) onConversationUpdated(sessionId, event.title)
+        },
+        onError: (event) => {
+          setStreamError(typeof event.message === 'string' ? event.message : '回答生成失败')
+        },
+      })
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['messages', sessionId] }),
+        queryClient.invalidateQueries({ queryKey: ['conversations'] }),
+      ])
+    } catch (error) {
+      const message = error instanceof ApiError || error instanceof Error
+        ? error.message
+        : '无法连接 Chat 服务'
+      setStreamError(message)
+      setLocalMessages((current) => current.map((item) => (
+        item.id === assistantId && !item.content
+          ? { ...item, content: '回答未完成，请重试。', status: 'failed' }
+          : item
+      )))
+    } finally {
+      activeRequestId.current = null
+      setStreaming(false)
+    }
+  }, [draft, onConversationUpdated, queryClient, sessionId, streaming])
+
+  const stopMessage = React.useCallback(() => {
+    const requestId = activeRequestId.current
+    if (!requestId) return
+    void api.cancelChat(requestId).catch((error) => {
+      setStreamError(error instanceof Error ? error.message : '停止生成失败')
+    })
+  }, [])
+
+  const addFiles = (selected: FileList | null) => {
+    if (!selected?.length) return
+    const next = Array.from(selected).map((file) => ({
+      id: `chat-file-${Date.now()}-${file.name}`,
+      name: file.name,
+      size: file.size,
+      status: 'parsing' as const,
+    }))
+    setFiles((current) => [...current, ...next])
+    window.setTimeout(() => {
+      setFiles((current) => current.map((file) => next.some((item) => item.id === file.id) ? { ...file, status: 'ready' } : file))
+    }, 1100)
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex min-h-14 items-center justify-between gap-2 border-b border-line px-3 py-2 sm:px-5">
+        <div className="min-w-0 flex-1">
+          {renaming ? (
+            <div className="flex max-w-lg items-center gap-1.5">
+              <input
+                autoFocus
+                aria-label="问答标题"
+                className="h-8 min-w-0 flex-1 rounded-md border border-line px-2 text-sm font-medium outline-none focus:border-zinc-500"
+                value={renameDraft}
+                maxLength={100}
+                onChange={(event) => setRenameDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') void commitRename()
+                  if (event.key === 'Escape') setRenaming(false)
+                }}
+              />
+              <IconButton label="保存标题" icon={Check} onClick={() => void commitRename()} />
+              <IconButton label="取消重命名" icon={X} onClick={() => setRenaming(false)} />
+            </div>
+          ) : (
+            <div className="truncate text-sm font-semibold">{title}</div>
+          )}
+          <div className="mt-0.5 flex min-w-0 items-center gap-2 text-xs text-zinc-500">
+            <span className="truncate">会话 {sessionId}</span>
+            <span className="h-1 w-1 rounded-full bg-zinc-300" />
+            <span className="shrink-0">{streaming ? '回答中' : '智能问答'}</span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+          <Badge className="bg-emerald-50 text-success">
+            <LockKeyhole size={12} className="sm:mr-1.5" />
+            <span className="hidden sm:inline">只读</span>
+          </Badge>
+          <button title="转为任务" className="flex h-8 items-center gap-1.5 rounded-md border border-line px-2.5 text-xs hover:bg-field sm:px-3" onClick={onPromote}>
+            <Play size={14} />
+            <span className="hidden sm:inline">转为任务</span>
+          </button>
+          <div className="relative">
+            <IconButton label="更多" icon={MoreHorizontal} onClick={() => setMenuOpen((open) => !open)} />
+            {menuOpen && (
+              <div className="absolute right-0 top-10 z-20 w-40 rounded-md border border-line bg-panel p-1 shadow-panel">
+                <button
+                  className="flex h-9 w-full items-center gap-2 rounded px-2.5 text-left text-sm hover:bg-field"
+                  onClick={() => {
+                    setRenameDraft(title)
+                    setRenaming(true)
+                    setMenuOpen(false)
+                  }}
+                >
+                  <Pencil size={14} />
+                  重命名
+                </button>
+                <button
+                  disabled={actionPending}
+                  className="flex h-9 w-full items-center gap-2 rounded px-2.5 text-left text-sm hover:bg-field disabled:text-zinc-400"
+                  onClick={() => void updateConversation({ pinned: !currentConversation?.pinned })}
+                >
+                  <Pin size={14} />
+                  {currentConversation?.pinned ? '取消置顶' : '置顶问答'}
+                </button>
+                <button
+                  disabled={actionPending || streaming}
+                  className="flex h-9 w-full items-center gap-2 rounded px-2.5 text-left text-sm text-danger hover:bg-red-50 disabled:text-zinc-400"
+                  onClick={() => void updateConversation({ archived: true })}
+                >
+                  <Archive size={14} />
+                  归档问答
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto px-3 py-5 sm:px-8 sm:py-6">
+        <div className="mx-auto max-w-4xl space-y-5">
+          {query.isLoading ? (
+            <MessageSkeleton />
+          ) : localMessages.length === 0 ? (
+            <div className="border-y border-line py-16 text-center">
+              <MessageSquareText className="mx-auto mb-3 text-zinc-300" size={40} />
+              <div className="text-sm font-medium">新问答</div>
+            </div>
+          ) : (
+            localMessages.map((message) => <MessageBubble key={message.id} message={message} />)
+          )}
+          {streaming && (
+            <div className="flex items-center gap-2 text-sm text-zinc-500" aria-live="polite">
+              <span className="h-2 w-2 animate-pulse rounded-full bg-success" />
+              正在生成回答
+            </div>
+          )}
+          {streamError && (
+            <div className="border-y border-red-100 bg-red-50 px-3 py-2 text-sm text-danger" role="alert">
+              {streamError}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="border-t border-line bg-[#fbfbfc] px-3 py-3 sm:px-6 sm:py-4">
+        <div className="mx-auto max-w-4xl rounded-md border border-line bg-panel shadow-sm">
+          <textarea
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                event.preventDefault()
+                void sendMessage()
+              }
+            }}
+            className="block min-h-[82px] w-full resize-none bg-transparent px-4 py-3 text-sm outline-none"
+            placeholder="输入问题，Chat 模式只会读取授权数据"
+          />
+          <div className="flex items-center justify-between gap-2 border-t border-line px-2 py-2 sm:px-3">
+            <div className="flex min-w-0 items-center gap-1">
+              <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(event) => addFiles(event.target.files)} />
+              <IconButton label="添加只读附件" icon={Paperclip} onClick={() => fileInputRef.current?.click()} />
+              <IconButton label="语音输入" icon={Mic} />
+              <IconButton label="选择知识库" icon={Database} />
+              <span className="ml-1 hidden truncate text-xs text-zinc-500 sm:inline">{files.length} 个问答文件</span>
+            </div>
+            <button
+              className={cn(
+                'flex h-8 items-center gap-2 rounded-md px-3 text-sm font-medium transition active:scale-[0.98]',
+                streaming || !draft.trim() ? 'bg-zinc-200 text-zinc-400' : 'bg-[#3d735a] text-white',
+              )}
+              disabled={!streaming && !draft.trim()}
+              onClick={() => streaming ? stopMessage() : void sendMessage()}
+            >
+              {streaming ? <CircleStop size={15} /> : <Send size={15} />}
+              {streaming ? '停止' : '发送'}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   )
@@ -595,8 +1272,14 @@ function MessageBubble({ message }: { message: ChatMessage }) {
           {system ? <ShieldCheck size={16} /> : <Bot size={16} />}
         </div>
       )}
-      <div className={cn('max-w-[78%] whitespace-pre-wrap rounded-md border px-4 py-3 text-sm leading-6', assistant || system ? 'border-line bg-panel' : 'border-ink bg-ink text-white')}>
-        <div>{message.content || '...'}</div>
+      <div className={cn('max-w-[88%] rounded-md border px-3 py-3 text-sm leading-6 sm:max-w-[78%] sm:px-4', assistant || system ? 'border-line bg-panel' : 'border-ink bg-ink text-white')}>
+        {assistant || system ? (
+          <div className="break-words [&_a]:text-info [&_a]:underline [&_code]:rounded [&_code]:bg-field [&_code]:px-1 [&_h1]:mb-2 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:mb-2 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:mb-1 [&_h3]:font-semibold [&_li]:ml-5 [&_li]:list-disc [&_ol_li]:list-decimal [&_p+p]:mt-3 [&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-zinc-900 [&_pre]:p-3 [&_pre]:text-zinc-100 [&_pre_code]:bg-transparent [&_ul]:my-2">
+            <ReactMarkdown>{message.content || '...'}</ReactMarkdown>
+          </div>
+        ) : (
+          <div className="whitespace-pre-wrap break-words">{message.content || '...'}</div>
+        )}
         <div className={cn('mt-2 text-[11px]', assistant || system ? 'text-zinc-400' : 'text-white/60')}>{message.createdAt}</div>
       </div>
     </div>
@@ -912,7 +1595,7 @@ function UsersView() {
 }
 
 function SecurityView() {
-  const query = useQuery({ queryKey: ['features'], queryFn: mockApi.getFeatures })
+  const query = useQuery({ queryKey: ['features'], queryFn: api.getFeatures })
   const features = query.data
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -977,6 +1660,10 @@ function RightPanel({ activeTab }: { activeTab: WorkTab | null }) {
   const docsQuery = useQuery({ queryKey: ['documents'], queryFn: mockApi.listDocuments })
   const referencedDocs = (docsQuery.data ?? []).slice(0, 3)
 
+  if (activeTab?.type === 'chat') {
+    return <ChatRightPanel referencedDocs={referencedDocs} />
+  }
+
   return (
     <aside className="hidden min-h-0 flex-col bg-[#fbfbfc] xl:flex">
       <div className="flex h-14 items-center justify-between border-b border-line px-4">
@@ -1033,6 +1720,75 @@ function RightPanel({ activeTab }: { activeTab: WorkTab | null }) {
             <StepLine done label="生成执行计划" />
             <StepLine label="用户审批" />
             <StepLine label="执行与结果回传" />
+          </div>
+        </PanelSection>
+      </div>
+    </aside>
+  )
+}
+
+function ChatRightPanel({ referencedDocs }: { referencedDocs: KnowledgeDocument[] }) {
+  const [files] = useAtom(chatAttachedFilesAtom)
+  const [selectedSpace] = useAtom(selectedSpaceAtom)
+  const spacesQuery = useQuery({ queryKey: ['spaces'], queryFn: mockApi.listSpaces })
+  const activeSpace = (spacesQuery.data ?? []).find((space) => space.id === selectedSpace)
+
+  return (
+    <aside className="hidden min-h-0 flex-col bg-[#fbfbfc] xl:flex">
+      <div className="flex h-14 items-center justify-between border-b border-line px-4">
+        <div className="flex items-center gap-2 text-sm font-semibold">
+          <PanelRight size={16} />
+          问答上下文
+        </div>
+        <Badge className="bg-[#e0ece4] text-[#28513d]">Chat</Badge>
+      </div>
+      <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto p-4">
+        <PanelSection title="安全模式" icon={LockKeyhole}>
+          <div className="flex items-center justify-between border-y border-line py-2.5 text-sm">
+            <span className="text-zinc-500">当前权限</span>
+            <Badge className="bg-emerald-50 text-success">只读检索</Badge>
+          </div>
+        </PanelSection>
+
+        <PanelSection title="当前范围" icon={Archive}>
+          <div className="space-y-3">
+            <InfoRow label="业务空间" value={activeSpace?.name ?? '轨道公司'} />
+            <InfoRow label="回答方式" value="知识库增强" />
+          </div>
+        </PanelSection>
+
+        <PanelSection title="问答附件" icon={FileArchive}>
+          {files.length === 0 ? (
+            <div className="border-y border-line py-3 text-xs text-zinc-500">暂无附件</div>
+          ) : (
+            <div className="divide-y divide-line border-y border-line">
+              {files.map((file) => (
+                <div key={file.id} className="py-2.5 text-sm">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <FileText size={15} className="shrink-0 text-zinc-400" />
+                    <span className="truncate">{file.name}</span>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between pl-6 text-xs text-zinc-500">
+                    <span>{formatBytes(file.size)}</span>
+                    <span>{file.status === 'ready' ? '可检索' : '解析中'}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </PanelSection>
+
+        <PanelSection title="知识来源" icon={Database}>
+          <div className="divide-y divide-line border-y border-line">
+            {referencedDocs.map((doc) => (
+              <div key={doc.id} className="py-2.5 text-sm">
+                <div className="truncate font-medium">{doc.title}</div>
+                <div className="mt-1 flex items-center justify-between text-xs text-zinc-500">
+                  <span>{doc.library}</span>
+                  <span>{doc.chunks} 个片段</span>
+                </div>
+              </div>
+            ))}
           </div>
         </PanelSection>
       </div>

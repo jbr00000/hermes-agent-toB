@@ -1,4 +1,4 @@
-import { documents, memoryCandidates, messages, sessions, spaces, users } from './mockData'
+import { conversations, documents, memoryCandidates, messages, sessions, spaces, users } from './mockData'
 
 const wait = (ms = 180) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -6,6 +6,10 @@ export const mockApi = {
   async listSessions() {
     await wait()
     return sessions
+  },
+  async listConversations() {
+    await wait()
+    return conversations
   },
   async listSpaces() {
     await wait()

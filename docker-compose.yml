@@ -1,32 +1,81 @@
-# Hermes headless server (to-B fork) local/dev compose.
-#
-# The server never mounts the host Docker socket. Tool/code execution uses a
-# dedicated Docker-in-Docker sidecar over the internal compose network, so the
-# sandbox daemon can be replaced/isolated per customer deployment.
+name: hermes_tob
+
+# The default Compose stack contains only the shared Chat infrastructure.
+# Application and Agent sandbox containers are opt-in profiles so that
+# `docker compose up -d` cannot accidentally enable execution capabilities.
 services:
-  sandbox-docker:
-    image: docker:27-dind
-    container_name: hermes-sandbox-docker
-    privileged: true
+  mysql:
+    image: mysql:8.4.11
+    container_name: hermes_tob_mysql
     environment:
-      DOCKER_TLS_CERTDIR: ""
+      MYSQL_DATABASE: ${HERMES_MYSQL_DATABASE:-hermes_tob}
+      MYSQL_USER: ${HERMES_MYSQL_USER:-hermes_app}
+      MYSQL_PASSWORD: ${HERMES_MYSQL_PASSWORD:?Set HERMES_MYSQL_PASSWORD in compose.env}
+      MYSQL_ROOT_PASSWORD: ${HERMES_MYSQL_ROOT_PASSWORD:?Set HERMES_MYSQL_ROOT_PASSWORD in compose.env}
+      TZ: UTC
     command:
-      - --host=tcp://0.0.0.0:2375
-      - --tls=false
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --default-time-zone=+00:00
+    ports:
+      - "127.0.0.1:${HERMES_MYSQL_PORT:-13306}:3306"
     volumes:
-      - sandbox-docker-data:/var/lib/docker
+      - hermes-mysql-data:/var/lib/mysql
     networks:
-      - hermes-internal
+      - hermes-data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - mysqladmin ping -h 127.0.0.1 -u root -p"$$MYSQL_ROOT_PASSWORD" --silent
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.2.15-alpine
+    container_name: hermes_tob_redis
+    environment:
+      HERMES_REDIS_PASSWORD: ${HERMES_REDIS_PASSWORD:?Set HERMES_REDIS_PASSWORD in compose.env}
+      TZ: UTC
+    command:
+      - sh
+      - -c
+      - >-
+        exec redis-server
+        --appendonly yes
+        --appendfsync everysec
+        --requirepass "$$HERMES_REDIS_PASSWORD"
+    ports:
+      - "127.0.0.1:${HERMES_REDIS_PORT:-16379}:6379"
+    volumes:
+      - hermes-redis-data:/data
+    networks:
+      - hermes-data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - redis-cli --no-auth-warning -a "$$HERMES_REDIS_PASSWORD" ping | grep -q PONG
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
     restart: unless-stopped
 
   hermes-server:
+    profiles: ["app"]
     build: .
     image: hermes-agent-tob:dev
-    container_name: hermes-server
+    container_name: hermes_tob_server
+    command: ["sh", "-c", "alembic upgrade head && python -m server"]
     depends_on:
-      - sandbox-docker
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./.hermes-dev:/data
     environment:
@@ -35,15 +84,48 @@ services:
       TERMINAL_ENV: docker
       TERMINAL_DOCKER_NETWORK: "false"
       DOCKER_HOST: tcp://sandbox-docker:2375
-      # HERMES_ADMIN_PASSWORD, HERMES_DB_URL, DEEPSEEK_API_KEY, etc. come
-      # from /data/.env (loaded by the server).
+      # Hermes application storage; customer read-only data sources use the
+      # separate HERMES_DB_URL configuration from /data/.env.
+      HERMES_DATABASE_URL: mysql+pymysql://${HERMES_MYSQL_USER:-hermes_app}:${HERMES_MYSQL_PASSWORD}@mysql:3306/${HERMES_MYSQL_DATABASE:-hermes_tob}?charset=utf8mb4
+      HERMES_REDIS_URL: redis://:${HERMES_REDIS_PASSWORD}@redis:6379/0
     networks:
-      - hermes-internal
+      - hermes-data
+      - hermes-egress
+      - hermes-sandbox-control
+    restart: unless-stopped
+
+  sandbox-docker:
+    profiles: ["agent"]
+    image: docker:27-dind
+    container_name: hermes_tob_sandbox_daemon
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    command:
+      - --host=tcp://0.0.0.0:2375
+      - --tls=false
+    volumes:
+      - hermes-sandbox-docker-data:/var/lib/docker
+    networks:
+      - hermes-sandbox-control
     restart: unless-stopped
 
 networks:
-  hermes-internal:
+  hermes-data:
+    name: hermes_tob_data
     driver: bridge
+  hermes-egress:
+    name: hermes_tob_egress
+    driver: bridge
+  hermes-sandbox-control:
+    name: hermes_tob_sandbox_control
+    driver: bridge
+    internal: true
 
 volumes:
-  sandbox-docker-data:
+  hermes-mysql-data:
+    name: hermes_tob_mysql_data
+  hermes-redis-data:
+    name: hermes_tob_redis_data
+  hermes-sandbox-docker-data:
+    name: hermes_tob_sandbox_docker_data

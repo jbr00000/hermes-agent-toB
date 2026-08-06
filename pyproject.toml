@@ -105,6 +105,12 @@ dependencies = [
   # Headless server auth and streaming response support.
   "bcrypt==5.0.0",
   "sse-starlette==3.4.5",
+  # To-B Chat persistence and coordination. MySQL is the durable source of
+  # truth; Redis only stores short-lived locks, cancellation, and SSE state.
+  "SQLAlchemy==2.0.51",
+  "PyMySQL==1.2.0",
+  "redis==8.1.0",
+  "alembic==1.19.0",
   # Streaming multipart uploads for the dashboard file manager (NS-501).
   # FastAPI's UploadFile/Form depend on python-multipart; it is NOT pulled in
   # by fastapi itself, so the dashboard's multipart upload endpoint would 500

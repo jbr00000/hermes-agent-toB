@@ -30,7 +30,7 @@ def build_agent(
         session_id: unique session id.
         user_id: authenticated user id.
         prefill_messages: prior turns (OpenAI format) for session resume.
-        mode: "plan" | "execute" | None.
+        mode: "chat" | "plan" | "execute" | None.
     """
     os.environ.setdefault("HERMES_HEADLESS", "1")
 
@@ -42,9 +42,12 @@ def build_agent(
     from server.tool_policy import resolve_toolsets
 
     is_plan = mode == "plan"
+    is_chat = mode == "chat"
     features = get_features()
     runtime_config = load_runtime_config()
-    mcp_toolsets = enabled_mcp_toolsets()
+    # Deployment MCP servers do not yet carry a trustworthy read/write risk
+    # declaration. Keep them out of Chat until that metadata is enforced.
+    mcp_toolsets = [] if is_chat else enabled_mcp_toolsets()
     if mcp_toolsets:
         register_deployment_mcp_servers()
     toolsets = resolve_toolsets(mode=mode, features=features) + mcp_toolsets
@@ -64,6 +67,13 @@ def build_agent(
             "structured plan for the user to approve. Do NOT execute any changes — no writes, "
             "no mutations, no long-running actions. End with a concrete step list the user can "
             "approve to switch to EXECUTE mode."
+        )
+    if is_chat:
+        parts.append(
+            "You are in CHAT mode. Answer questions and investigate only with the supplied "
+            "read-only tools. Never modify files, databases, external systems, or shared "
+            "resources. If the request requires a side effect, explain that it must be "
+            "continued as an Agent task."
         )
     ephemeral = "\n\n".join(parts) if parts else None
 

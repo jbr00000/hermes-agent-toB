@@ -6,7 +6,10 @@ ownership and returns the session so the client can confirm it's resumable.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Literal
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from server import sessions as sess
 from server.deps import get_current_user
@@ -14,9 +17,41 @@ from server.deps import get_current_user
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 
+class CreateSessionRequest(BaseModel):
+    interaction_type: Literal["chat", "agent"] = "chat"
+    title: str | None = Field(default=None, max_length=100)
+
+
+class UpdateSessionRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=100)
+    pinned: bool | None = None
+    archived: bool | None = None
+
+
+@router.post("", status_code=201)
+def create_session(req: CreateSessionRequest, user: dict = Depends(get_current_user)):
+    return {
+        "session": sess.create_user_session(
+            user["id"], interaction_type=req.interaction_type, title=req.title
+        )
+    }
+
+
 @router.get("")
-def list_sessions(user: dict = Depends(get_current_user)):
-    return {"sessions": sess.list_user_sessions(user["id"])}
+def list_sessions(
+    interaction_type: Literal["chat", "agent"] | None = None,
+    include_archived: bool = False,
+    limit: int = Query(default=50, ge=1, le=100),
+    user: dict = Depends(get_current_user),
+):
+    return {
+        "sessions": sess.list_user_sessions(
+            user["id"],
+            limit,
+            interaction_type=interaction_type,
+            include_archived=include_archived,
+        )
+    }
 
 
 @router.get("/{session_id}")
@@ -26,6 +61,23 @@ def get_session_detail(session_id: str, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="session not found")
     messages = sess.get_owned_messages(user["id"], session_id) or []
     return {"session": session, "messages": messages}
+
+
+@router.patch("/{session_id}")
+def update_session(
+    session_id: str,
+    req: UpdateSessionRequest,
+    user: dict = Depends(get_current_user),
+):
+    changes = {
+        field: getattr(req, field)
+        for field in req.model_fields_set
+        if field in {"title", "pinned", "archived"}
+    }
+    session = sess.update_owned_session(user["id"], session_id, **changes)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    return {"session": session}
 
 
 @router.post("/{session_id}/resume")

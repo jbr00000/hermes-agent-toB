@@ -11,6 +11,10 @@ def resolve_toolsets(*, mode: str | None, features: Mapping[str, object] | None)
     through read-only DB tooling, but it cannot use terminal or desktop tools.
     """
     normalized_mode = (mode or "execute").strip().lower()
+    if normalized_mode == "chat":
+        # session_search still reads the legacy local SessionDB. Do not expose
+        # it to to-B Chat until it is backed by the tenant-scoped repository.
+        return ["db"]
     if normalized_mode == "plan":
         return ["db", "session_search"]
 

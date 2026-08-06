@@ -3,6 +3,10 @@ from __future__ import annotations
 from server.tool_policy import resolve_toolsets
 
 
+def test_chat_mode_is_read_only() -> None:
+    assert resolve_toolsets(mode="chat", features={}) == ["db"]
+
+
 def test_execute_mode_allows_sandbox_terminal_by_default() -> None:
     assert resolve_toolsets(mode="execute", features={}) == ["db", "session_search", "terminal"]
 
