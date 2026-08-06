@@ -102,30 +102,68 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
 
     repository.update_conversation(user_id, session_id, status="running")
     runtime_store.mark_request(request_id, "running")
+    snapshot_started_at = time.time()
     run_started_at = time.monotonic()
+    runtime_store.save_chat_snapshot(
+        request_id,
+        session_id,
+        "",
+        0,
+        started_at=snapshot_started_at,
+    )
 
     event_queue: queue.Queue[object] = queue.Queue()
     sentinel = object()
     event_sequence = 0
     event_lock = threading.Lock()
+    snapshot_lock = threading.Lock()
+    snapshot_chunks: list[str] = []
+    snapshot_last_saved_at = run_started_at
+    stream_attached = threading.Event()
+    stream_attached.set()
     agent_holder: dict[str, object] = {}
 
-    def emit(event: str, data: dict) -> None:
+    def emit(event: str, data: dict) -> int:
         nonlocal event_sequence
         with event_lock:
             event_sequence += 1
             event_id = event_sequence
-        runtime_store.append_event(request_id, event_id, event, data)
-        event_queue.put({"id": str(event_id), "event": event, "data": json.dumps(data, ensure_ascii=False)})
+        if event != "delta":
+            runtime_store.append_event(request_id, event_id, event, data)
+        if stream_attached.is_set():
+            event_queue.put(
+                {
+                    "id": str(event_id),
+                    "event": event,
+                    "data": json.dumps(data, ensure_ascii=False),
+                }
+            )
+        return event_id
 
     def on_delta(chunk: str) -> None:
+        nonlocal snapshot_last_saved_at
         if runtime_store.is_cancelled(request_id):
             interrupt = getattr(agent_holder.get("agent"), "interrupt", None)
             if callable(interrupt):
                 interrupt("cancelled by user")
             return
         if chunk:
-            emit("delta", {"content": chunk, "request_id": request_id})
+            event_id = emit("delta", {"content": chunk, "request_id": request_id})
+            snapshot_content: str | None = None
+            with snapshot_lock:
+                snapshot_chunks.append(chunk)
+                now = time.monotonic()
+                if now - snapshot_last_saved_at >= 0.2:
+                    snapshot_content = "".join(snapshot_chunks)
+                    snapshot_last_saved_at = now
+            if snapshot_content is not None:
+                runtime_store.save_chat_snapshot(
+                    request_id,
+                    session_id,
+                    snapshot_content,
+                    event_id,
+                    started_at=snapshot_started_at,
+                )
 
     def run_agent() -> None:
         runtime_metadata: dict = {"mode": effective_mode}
@@ -226,7 +264,7 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
                 model=runtime_metadata.get("model"),
             )
             repository.update_conversation(user_id, session_id, status="idle")
-            emit(
+            final_event_id = emit(
                 "final",
                 {
                     "content": final,
@@ -236,6 +274,15 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
                     "title": title,
                     "status": final_status,
                 },
+            )
+            runtime_store.save_chat_snapshot(
+                request_id,
+                session_id,
+                final,
+                final_event_id,
+                status=final_status,
+                started_at=snapshot_started_at,
+                ttl_seconds=300,
             )
         except Exception as exc:
             logger.exception("Chat request %s failed", request_id)
@@ -256,7 +303,7 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
                 repository.update_conversation(user_id, session_id, status="idle")
             except Exception:
                 logger.exception("Failed to persist Chat failure state")
-            emit(
+            error_event_id = emit(
                 "error",
                 {
                     "message": "回答生成失败，请稍后重试",
@@ -264,12 +311,24 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
                     "request_id": request_id,
                 },
             )
+            with snapshot_lock:
+                partial_content = "".join(snapshot_chunks)
+            runtime_store.save_chat_snapshot(
+                request_id,
+                session_id,
+                partial_content,
+                error_event_id,
+                status="failed",
+                started_at=snapshot_started_at,
+                ttl_seconds=300,
+            )
         finally:
             with _active_agents_lock:
                 _active_agents.pop(request_id, None)
             runtime_store.mark_request(request_id, "done")
             runtime_store.release_conversation(session_id, lock_token)
-            event_queue.put(sentinel)
+            if stream_attached.is_set():
+                event_queue.put(sentinel)
 
     threading.Thread(target=run_agent, daemon=True, name=f"chat-{request_id[:8]}").start()
 
@@ -277,8 +336,7 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
         try:
             while True:
                 if await request.is_disconnected():
-                    runtime_store.cancel_request(request_id)
-                    _interrupt_local_agent(request_id, user_id)
+                    stream_attached.clear()
                     break
                 try:
                     item = await asyncio.to_thread(event_queue.get, True, 0.25)
@@ -298,13 +356,10 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
                     break
                 yield item
                 if await request.is_disconnected():
-                    runtime_store.cancel_request(request_id)
-                    _interrupt_local_agent(request_id, user_id)
+                    stream_attached.clear()
                     break
         finally:
-            if await request.is_disconnected():
-                runtime_store.cancel_request(request_id)
-                _interrupt_local_agent(request_id, user_id)
+            stream_attached.clear()
 
     return EventSourceResponse(event_gen())
 

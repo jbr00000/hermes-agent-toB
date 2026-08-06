@@ -52,8 +52,12 @@ export interface ChatMessage {
 export interface ActiveModelRun {
   id: string
   status: 'running'
+  startedAt: number
   elapsedMs: number
   observedAt: number
+  partialContent: string
+  sequence: number
+  snapshotUpdatedAt: number | null
 }
 
 export interface ConversationDetail {

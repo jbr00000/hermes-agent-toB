@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from server import sessions as sess
 from server.deps import get_current_user
+from server.storage import get_runtime_store
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -61,6 +62,15 @@ def get_session_detail(session_id: str, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="session not found")
     messages = sess.get_owned_messages(user["id"], session_id) or []
     active_run = sess.get_active_run(user["id"], session_id)
+    if active_run is not None:
+        snapshot = get_runtime_store().get_chat_snapshot(active_run["id"])
+        if snapshot and snapshot.get("conversation_id") == session_id:
+            active_run = {
+                **active_run,
+                "partial_content": snapshot.get("content") or "",
+                "sequence": int(snapshot.get("sequence") or 0),
+                "snapshot_updated_at": snapshot.get("updated_at"),
+            }
     return {"session": session, "messages": messages, "active_run": active_run}
 
 

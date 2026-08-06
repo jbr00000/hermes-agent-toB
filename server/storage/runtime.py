@@ -23,6 +23,7 @@ class RuntimeStore:
         self._local_guard = threading.Lock()
         self._local_locks: dict[str, str] = {}
         self._local_cancelled: set[str] = set()
+        self._local_chat_snapshots: dict[str, tuple[float, dict[str, Any]]] = {}
 
     def _key(self, *parts: str) -> str:
         return ":".join(("hermes", tenant_id(), *parts))
@@ -121,6 +122,62 @@ class RuntimeStore:
             pipe.execute()
         except RedisError as exc:
             logger.warning("Redis SSE buffer write failed: %s", exc)
+
+    def save_chat_snapshot(
+        self,
+        request_id: str,
+        conversation_id: str,
+        content: str,
+        sequence: int,
+        *,
+        status: str = "running",
+        started_at: float | None = None,
+        ttl_seconds: int = 3600,
+    ) -> dict[str, Any]:
+        now = time.time()
+        snapshot = {
+            "request_id": request_id,
+            "conversation_id": conversation_id,
+            "content": content,
+            "sequence": sequence,
+            "status": status,
+            "started_at": started_at,
+            "updated_at": now,
+        }
+        key = self._key("stream", request_id, "snapshot")
+        if self._redis is not None:
+            try:
+                self._redis.set(
+                    key,
+                    json.dumps(snapshot, ensure_ascii=False),
+                    ex=ttl_seconds,
+                )
+                return snapshot
+            except RedisError as exc:
+                logger.warning("Redis Chat snapshot write failed: %s", exc)
+        with self._local_guard:
+            self._local_chat_snapshots[key] = (now + ttl_seconds, snapshot)
+        return snapshot
+
+    def get_chat_snapshot(self, request_id: str) -> dict[str, Any] | None:
+        key = self._key("stream", request_id, "snapshot")
+        if self._redis is not None:
+            try:
+                payload = self._redis.get(key)
+                if payload:
+                    snapshot = json.loads(payload)
+                    return snapshot if isinstance(snapshot, dict) else None
+            except (RedisError, json.JSONDecodeError) as exc:
+                logger.warning("Redis Chat snapshot read failed: %s", exc)
+        with self._local_guard:
+            cached = self._local_chat_snapshots.get(key)
+            if cached is None:
+                return None
+            expires_at, snapshot = cached
+            if expires_at <= time.time():
+                self._local_chat_snapshots.pop(key, None)
+                return None
+            return dict(snapshot)
 
 
 _runtime_store: RuntimeStore | None = None

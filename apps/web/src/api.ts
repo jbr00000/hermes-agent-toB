@@ -43,6 +43,9 @@ interface BackendModelRun {
   status: 'running'
   started_at: number
   elapsed_ms: number
+  partial_content?: string
+  sequence?: number
+  snapshot_updated_at?: number | null
 }
 
 export class ApiError extends Error {
@@ -139,8 +142,12 @@ function toActiveRun(row: BackendModelRun | null): ActiveModelRun | null {
   return {
     id: row.id,
     status: row.status,
+    startedAt: row.started_at * 1000,
     elapsedMs: row.elapsed_ms,
     observedAt: Date.now(),
+    partialContent: row.partial_content ?? '',
+    sequence: row.sequence ?? 0,
+    snapshotUpdatedAt: row.snapshot_updated_at ? row.snapshot_updated_at * 1000 : null,
   }
 }
 
@@ -150,9 +157,13 @@ export interface ChatStreamEvent {
   title?: string
   content?: string
   status?: string
-  message?: BackendMessage
+  message?: ChatMessage | string
   code?: string
   [key: string]: unknown
+}
+
+interface BackendChatStreamEvent extends Omit<ChatStreamEvent, 'message'> {
+  message?: BackendMessage | string
 }
 
 export interface ChatStreamHandlers {
@@ -170,7 +181,11 @@ function dispatchSseBlock(block: string, handlers: ChatStreamHandlers): void {
     if (line.startsWith('data:')) data.push(line.slice(5).trimStart())
   }
   if (data.length === 0) return
-  const payload = JSON.parse(data.join('\n')) as ChatStreamEvent
+  const raw = JSON.parse(data.join('\n')) as BackendChatStreamEvent
+  const payload: ChatStreamEvent = {
+    ...raw,
+    message: raw.message && typeof raw.message !== 'string' ? toMessage(raw.message) : raw.message,
+  }
   if (event === 'session') handlers.onSession?.(payload)
   if (event === 'delta') handlers.onDelta?.(payload)
   if (event === 'final') handlers.onFinal?.(payload)

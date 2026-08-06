@@ -44,7 +44,13 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { db } from './db'
-import { api, ApiError } from './api'
+import { api } from './api'
+import {
+  isChatRunActive,
+  mergeChatMessages,
+  useChatRun,
+  useChatRunManager,
+} from './chatRunManager'
 import { mockApi } from './mockApi'
 import { documents, sessions as fallbackSessions } from './mockData'
 import {
@@ -59,7 +65,6 @@ import {
 } from './state'
 import type {
   ChatMessage,
-  ConversationDetail,
   ConversationSummary,
   AuthUser,
   KnowledgeDocument,
@@ -149,6 +154,7 @@ function docStatusTone(status: KnowledgeDocument['status']): string {
 export default function App(): React.ReactElement {
   const [user, setUser] = React.useState<AuthUser | null>(null)
   const [restoring, setRestoring] = React.useState(true)
+  const chatRunManager = useChatRunManager()
 
   React.useEffect(() => {
     api.restoreSession()
@@ -159,7 +165,15 @@ export default function App(): React.ReactElement {
 
   if (restoring) return <AppLoading />
   if (!user) return <LoginView onLogin={setUser} />
-  return <WorkspaceApp user={user} onLogout={() => setUser(null)} />
+  return (
+    <WorkspaceApp
+      user={user}
+      onLogout={() => {
+        chatRunManager.clearAll()
+        setUser(null)
+      }}
+    />
+  )
 }
 
 function AppLoading(): React.ReactElement {
@@ -835,26 +849,29 @@ function ChatView({
 }) {
   const [files, setFiles] = useAtom(chatAttachedFilesAtom)
   const queryClient = useQueryClient()
+  const chatRunManager = useChatRunManager()
+  const run = useChatRun(sessionId)
   const query = useQuery({
     queryKey: ['conversation', sessionId],
     queryFn: () => api.getConversation(sessionId),
     refetchInterval: (result) => result.state.data?.activeRun ? 1000 : false,
   })
-  const [localMessages, setLocalMessages] = React.useState<ChatMessage[]>([])
   const [draft, setDraft] = React.useState('')
-  const [streaming, setStreaming] = React.useState(false)
-  const [streamError, setStreamError] = React.useState<string | null>(null)
+  const [actionError, setActionError] = React.useState<string | null>(null)
   const [menuOpen, setMenuOpen] = React.useState(false)
   const [renaming, setRenaming] = React.useState(false)
   const [renameDraft, setRenameDraft] = React.useState(title)
   const [actionPending, setActionPending] = React.useState(false)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = React.useState(false)
-  const activeRequestId = React.useRef<string | null>(null)
   const fileInputRef = React.useRef<HTMLInputElement | null>(null)
 
   React.useEffect(() => {
-    if (!streaming) setLocalMessages(query.data?.messages ?? [])
-  }, [query.data?.messages, sessionId, streaming])
+    if (query.data) chatRunManager.reconcileServerState(sessionId, query.data)
+  }, [chatRunManager, query.data, sessionId])
+
+  React.useEffect(() => {
+    if (run?.title) onConversationUpdated(sessionId, run.title)
+  }, [onConversationUpdated, run?.title, sessionId])
 
   React.useEffect(() => {
     if (!renaming) setRenameDraft(title)
@@ -863,14 +880,18 @@ function ChatView({
   const currentConversation = queryClient
     .getQueryData<ConversationSummary[]>(['conversations'])
     ?.find((conversation) => conversation.id === sessionId)
-  const restoredRun = query.data?.activeRun ?? null
-  const isRunning = streaming || restoredRun !== null
+  const isRunning = isChatRunActive(run) || Boolean(query.data?.activeRun)
+  const displayMessages = React.useMemo(
+    () => mergeChatMessages(query.data?.messages ?? [], run),
+    [query.data?.messages, run],
+  )
+  const streamError = actionError ?? run?.error ?? null
 
   const updateConversation = React.useCallback(async (
     changes: { title?: string; pinned?: boolean; archived?: boolean },
   ) => {
     setActionPending(true)
-    setStreamError(null)
+    setActionError(null)
     try {
       const updated = await api.updateConversation(sessionId, changes)
       if (changes.archived) {
@@ -888,7 +909,7 @@ function ChatView({
       setMenuOpen(false)
       return updated
     } catch (error) {
-      setStreamError(error instanceof Error ? error.message : '更新问答失败')
+      setActionError(error instanceof Error ? error.message : '更新问答失败')
       return null
     } finally {
       setActionPending(false)
@@ -908,7 +929,7 @@ function ChatView({
 
   const deleteConversation = React.useCallback(async () => {
     setActionPending(true)
-    setStreamError(null)
+    setActionError(null)
     try {
       await queryClient.cancelQueries({ queryKey: ['conversation', sessionId] })
       await api.deleteConversation(sessionId)
@@ -918,108 +939,35 @@ function ChatView({
       setDeleteConfirmOpen(false)
       onConversationArchived(sessionId)
     } catch (error) {
-      setStreamError(error instanceof Error ? error.message : '删除问答失败')
+      setActionError(error instanceof Error ? error.message : '删除问答失败')
       setDeleteConfirmOpen(false)
     } finally {
       setActionPending(false)
     }
   }, [onConversationArchived, queryClient, sessionId])
 
-  const sendMessage = React.useCallback(async () => {
+  const sendMessage = React.useCallback(() => {
     const text = draft.trim()
     if (!text || isRunning) return
-    const now = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-    const assistantId = `chat-assistant-${Date.now()}`
-    const requestId = crypto.randomUUID()
-    activeRequestId.current = requestId
-    setDraft('')
-    setStreamError(null)
-    setStreaming(true)
-    queryClient.setQueryData<ConversationDetail>(['conversation', sessionId], (current) => ({
-      messages: current?.messages ?? [],
-      status: 'running',
-      activeRun: { id: requestId, status: 'running' as const, elapsedMs: 0, observedAt: Date.now() },
-    }))
-    setLocalMessages((current) => [
-      ...current,
-      { id: `chat-user-${Date.now()}`, role: 'user', content: text, createdAt: now },
-      {
-        id: assistantId,
-        role: 'assistant',
-        content: '',
-        createdAt: now,
-        status: 'streaming',
-        modelRunId: requestId,
-        thinkingStartedAt: Date.now(),
-      },
-    ])
-
     try {
-      await api.streamChat(sessionId, requestId, text, {
-        onSession: (event) => {
-          if (event.title) onConversationUpdated(sessionId, event.title)
-        },
-        onDelta: (event) => {
-          if (!event.content) return
-          setLocalMessages((current) => current.map((message) => (
-            message.id === assistantId
-              ? { ...message, content: `${message.content}${event.content}` }
-              : message
-          )))
-        },
-        onFinal: (event) => {
-          queryClient.setQueryData<ConversationDetail>(['conversation', sessionId], (current) => (
-            current ? { ...current, status: 'idle', activeRun: null } : current
-          ))
-          setLocalMessages((current) => current.map((message) => (
-            message.id === assistantId
-              ? {
-                  ...message,
-                  id: event.message?.id ?? message.id,
-                  content: event.content ?? message.content,
-                  status: event.status === 'cancelled' ? 'cancelled' : 'completed',
-                  modelRunId: event.message?.model_run_id ?? requestId,
-                  durationMs: event.message?.duration_ms,
-                }
-              : message
-          )))
-          if (event.title) onConversationUpdated(sessionId, event.title)
-        },
-        onError: (event) => {
-          queryClient.setQueryData<ConversationDetail>(['conversation', sessionId], (current) => (
-            current ? { ...current, status: 'idle', activeRun: null } : current
-          ))
-          setStreamError(typeof event.message === 'string' ? event.message : '回答生成失败')
-        },
-      })
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['conversation', sessionId] }),
-        queryClient.invalidateQueries({ queryKey: ['conversations'] }),
-      ])
+      chatRunManager.start(sessionId, text)
+      setDraft('')
+      setActionError(null)
     } catch (error) {
-      const message = error instanceof ApiError || error instanceof Error
-        ? error.message
-        : '无法连接 Chat 服务'
-      setStreamError(message)
-      setLocalMessages((current) => current.map((item) => (
-        item.id === assistantId && !item.content
-          ? { ...item, content: '回答未完成，请重试。', status: 'failed' }
-          : item
-      )))
-      void queryClient.invalidateQueries({ queryKey: ['conversation', sessionId] })
-    } finally {
-      activeRequestId.current = null
-      setStreaming(false)
+      setActionError(error instanceof Error ? error.message : '无法启动 Chat 服务')
     }
-  }, [draft, isRunning, onConversationUpdated, query.data, queryClient, sessionId])
+  }, [chatRunManager, draft, isRunning, sessionId])
 
   const stopMessage = React.useCallback(() => {
-    const requestId = activeRequestId.current ?? restoredRun?.id
+    const requestId = run?.requestId ?? query.data?.activeRun?.id
     if (!requestId) return
-    void api.cancelChat(requestId).catch((error) => {
-      setStreamError(error instanceof Error ? error.message : '停止生成失败')
+    const cancellation = run
+      ? chatRunManager.cancel(sessionId)
+      : api.cancelChat(requestId)
+    void cancellation.catch((error) => {
+      setActionError(error instanceof Error ? error.message : '停止生成失败')
     })
-  }, [restoredRun?.id])
+  }, [chatRunManager, query.data?.activeRun?.id, run, sessionId])
 
   const addFiles = (selected: FileList | null) => {
     if (!selected?.length) return
@@ -1126,26 +1074,13 @@ function ChatView({
         <div className="mx-auto max-w-4xl space-y-5">
           {query.isLoading ? (
             <MessageSkeleton />
-          ) : localMessages.length === 0 && !isRunning ? (
+          ) : displayMessages.length === 0 && !isRunning ? (
             <div className="border-y border-line py-16 text-center">
               <MessageSquareText className="mx-auto mb-3 text-zinc-300" size={40} />
               <div className="text-sm font-medium">新问答</div>
             </div>
           ) : (
-            localMessages.map((message) => <MessageBubble key={message.id} message={message} />)
-          )}
-          {!streaming && restoredRun && (
-            <MessageBubble
-              message={{
-                id: `active-${restoredRun.id}`,
-                role: 'assistant',
-                content: '',
-                createdAt: '',
-                status: 'streaming',
-                modelRunId: restoredRun.id,
-                thinkingStartedAt: restoredRun.observedAt - restoredRun.elapsedMs,
-              }}
-            />
+            displayMessages.map((message) => <MessageBubble key={message.id} message={message} />)
           )}
           {streamError && (
             <div className="border-y border-red-100 bg-red-50 px-3 py-2 text-sm text-danger" role="alert">

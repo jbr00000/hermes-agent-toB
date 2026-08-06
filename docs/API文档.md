@@ -90,6 +90,8 @@
 {
   "message": "统计客户表里有多少行",
   "session_id": "可选，续会话时传上次的 session_id",
+  "request_id": "可选，客户端生成的幂等请求 ID",
+  "interaction_type": "chat | agent，Web Chat 固定传 chat",
   "mode": "可选：\"plan\" | \"execute\"（默认 execute）"
 }
 ```
@@ -114,14 +116,17 @@ data: {"session_id": "abc-123", "user_id": "uuid-..."}
 
 | 事件 | data 内容 | 说明 |
 |---|---|---|
+| `session` | `{"session_id":"...","request_id":"...","title":"...","message":{...}}` | 用户消息已落库，会话已进入运行状态 |
 | `delta` | `{"content": "<文本片段>"}` | 流式 token（可能多次） |
-| `final` | `{"content": "<完整回答>"}` | 完整回答（一次，结束信号） |
-| `error` | `{"content": "<错误信息>"}` | agent 执行出错（如沙盒失败） |
+| `final` | `{"content":"<完整回答>","message":{...},"status":"completed|cancelled"}` | 完整回答已写入 MySQL |
+| `error` | `{"message":"<错误信息>","code":"..."}` | agent 执行出错（如沙盒失败） |
 | `done` | `{"session_id": "...", "user_id": "..."}` | 流结束，带本次会话 id |
 
 **前端实现要点：**
 - 用 `EventSource` 或 `fetch` + `ReadableStream` 消费 SSE。
 - 收到 `done` 关闭连接。
+- SSE 连接断开不会取消后端任务；需要停止时调用 `POST /chat/{request_id}/cancel`。
+- 运行中回答由 Redis 保存聚合快照；切换页签由前端全局运行管理器恢复，刷新页面后由会话详情恢复。
 - `session_id` 存下来，下次想续上下文就带在请求里。
 - `mode="plan"` 时 agent 只调研出方案不执行（前端可加「批准执行」按钮，批准后用 `mode="execute"` 再发一次）。
 - 401（无 token）/403（session 不属于你）。
@@ -152,9 +157,20 @@ curl -N -X POST http://127.0.0.1:8000/chat \
 ```json
 // 响应 200
 { "session": { "id": "...", "source": "headless", "user_id": "...", "started_at": ..., ... },
-  "messages": [ {"role":"user","content":"..."}, {"role":"assistant","content":"..."}, ... ] }
+  "messages": [ {"role":"user","content":"..."}, {"role":"assistant","content":"..."}, ... ],
+  "active_run": {
+    "id": "request-id",
+    "status": "running",
+    "started_at": 1783.0,
+    "elapsed_ms": 3200,
+    "partial_content": "当前已经生成的完整正文快照",
+    "sequence": 42,
+    "snapshot_updated_at": 1783.2
+  } }
 // 404 不存在或不属于你
 ```
+
+任务不在运行时 `active_run` 为 `null`。`partial_content` 是短期运行态，不替代 MySQL 中的最终消息。
 
 #### `POST /sessions/{session_id}/resume`
 校验会话可恢复（确认归属）。真正续上下文是 `/chat` 带 `session_id`。

@@ -97,13 +97,20 @@ def test_chat_run_state_duration_and_permanent_delete(monkeypatch, tmp_path) -> 
         json={"interaction_type": "chat"},
     ).json()["session"]
 
-    from server.storage import get_repository
+    from server.storage import get_repository, get_runtime_store
 
     repository = get_repository()
     user = repository.get_user_by_username("admin")
     assert user is not None
     repository.create_model_run("active-request", user["id"], conversation["id"])
     repository.update_conversation(user["id"], conversation["id"], status="running")
+    get_runtime_store().save_chat_snapshot(
+        "active-request",
+        conversation["id"],
+        "正在生成的回答",
+        12,
+        started_at=1_786_000_000.0,
+    )
 
     running_detail = client.get(
         f"/sessions/{conversation['id']}", headers=admin_headers
@@ -112,6 +119,9 @@ def test_chat_run_state_duration_and_permanent_delete(monkeypatch, tmp_path) -> 
     assert running_detail["active_run"]["status"] == "running"
     assert isinstance(running_detail["active_run"]["started_at"], float)
     assert running_detail["active_run"]["elapsed_ms"] >= 0
+    assert running_detail["active_run"]["partial_content"] == "正在生成的回答"
+    assert running_detail["active_run"]["sequence"] == 12
+    assert isinstance(running_detail["active_run"]["snapshot_updated_at"], float)
 
     blocked_delete = client.delete(
         f"/sessions/{conversation['id']}", headers=admin_headers
@@ -216,6 +226,14 @@ def test_chat_stream_is_read_only_and_persists_messages(monkeypatch, tmp_path) -
     assert detail["active_run"] is None
     assert detail["messages"][-1]["model_run_id"] == "request-1"
     assert detail["messages"][-1]["duration_ms"] >= 0
+
+    from server.storage import get_runtime_store
+
+    snapshot = get_runtime_store().get_chat_snapshot("request-1")
+    assert snapshot is not None
+    assert snapshot["conversation_id"] == conversation["id"]
+    assert snapshot["content"] == "测试完成"
+    assert snapshot["status"] == "completed"
 
     done_events = [
         json.loads(line.removeprefix("data: "))
