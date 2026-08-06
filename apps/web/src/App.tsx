@@ -864,6 +864,9 @@ function ChatView({
   const [actionPending, setActionPending] = React.useState(false)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = React.useState(false)
   const fileInputRef = React.useRef<HTMLInputElement | null>(null)
+  const messageScrollRef = React.useRef<HTMLDivElement | null>(null)
+  const didInitialScrollRef = React.useRef(false)
+  const shouldFollowOutputRef = React.useRef(true)
 
   React.useEffect(() => {
     if (query.data) chatRunManager.reconcileServerState(sessionId, query.data)
@@ -886,6 +889,28 @@ function ChatView({
     [query.data?.messages, run],
   )
   const streamError = actionError ?? run?.error ?? null
+
+  React.useLayoutEffect(() => {
+    didInitialScrollRef.current = false
+    shouldFollowOutputRef.current = true
+  }, [sessionId])
+
+  React.useLayoutEffect(() => {
+    if (query.isLoading) return
+    const container = messageScrollRef.current
+    if (!container) return
+    if (!didInitialScrollRef.current || shouldFollowOutputRef.current) {
+      container.scrollTop = container.scrollHeight
+      didInitialScrollRef.current = true
+      shouldFollowOutputRef.current = true
+    }
+  }, [displayMessages, query.isLoading, sessionId])
+
+  const trackMessageScroll = React.useCallback((event: React.UIEvent<HTMLDivElement>) => {
+    const container = event.currentTarget
+    const bottomGap = container.scrollHeight - container.clientHeight - container.scrollTop
+    shouldFollowOutputRef.current = bottomGap <= 96
+  }, [])
 
   const updateConversation = React.useCallback(async (
     changes: { title?: string; pinned?: boolean; archived?: boolean },
@@ -1070,7 +1095,11 @@ function ChatView({
         </div>
       </div>
 
-      <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto px-3 py-5 sm:px-8 sm:py-6">
+      <div
+        ref={messageScrollRef}
+        className="thin-scrollbar min-h-0 flex-1 overflow-y-auto px-3 py-5 sm:px-8 sm:py-6"
+        onScroll={trackMessageScroll}
+      >
         <div className="mx-auto max-w-4xl space-y-5">
           {query.isLoading ? (
             <MessageSkeleton />
