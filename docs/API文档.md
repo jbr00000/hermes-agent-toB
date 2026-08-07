@@ -182,7 +182,63 @@ curl -N -X POST http://127.0.0.1:8000/chat \
 
 ---
 
-### 3.4 记忆 Memory
+### 3.4 Agent 任务 Tasks
+
+Agent 模式必须通过任务接口进入。服务端持久化任务、运行、计划、权限租约、工具事件和产物；前端不能通过本地状态自行提升权限。
+
+#### `POST /tasks`
+新建当前用户的 Agent 任务，同时创建一条 `interaction_type=agent` 的会话。
+```json
+// 请求
+{ "title": "检查费用测算文档" }
+// 响应 201
+{ "task": { "id": "...", "session_id": "...", "status": "draft", "permission": { "mode": "read" } } }
+```
+
+#### `GET /tasks` / `GET /tasks/{task_id}`
+列表接口返回当前用户的任务摘要；详情接口同时返回 `session`、`messages`、`active_run`、`plan`、`permission`、`runs`、`events` 和 `artifacts`。
+
+运行中的 `active_run.partial_content` 来自 Redis 完整回答快照。最终消息、计划和工具事件以 MySQL 为准。
+
+#### `POST /tasks/{task_id}/plan`（SSE）
+以只读工具生成计划。无论当前权限租约为何，Plan 阶段都强制只读。
+```json
+{ "message": "读取文档并生成执行计划", "request_id": "可选幂等标识" }
+```
+
+除 `/chat` 的 `session/delta/final/error/done` 事件外，还可能收到：
+
+| SSE 事件 | 含义 |
+|---|---|
+| `task.status` | 任务进入 `planning/running/completed/failed/cancelled` 等状态 |
+| `tool.started` | 工具开始，参数已脱敏和截断 |
+| `tool.progress` | 工具进度 |
+| `tool.completed` | 工具完成，结果已脱敏和截断 |
+| `plan.required` | 计划已生成，任务进入 `awaiting_approval` |
+
+#### `POST /tasks/{task_id}/approve`
+批准最新待审批计划。批准后任务进入 `ready`。
+
+#### `PUT /tasks/{task_id}/permission`
+设置当前任务的临时权限租约。
+```json
+{ "mode": "full", "ttl_seconds": 900 }
+```
+
+`mode` 可取 `read`、`controlled`、`full`。当前版本只有 `full` 会在 Execute 阶段启用 Docker 终端；扩展工具尚未接入风险分类，因此 `controlled` 暂不开放未分类写工具。任务执行完成、失败或取消后自动恢复为 `read`。
+
+#### `POST /tasks/{task_id}/execute`（SSE）
+只允许执行已批准的计划。请求体可传 `request_id`；不传时由服务端生成。
+
+#### `POST /tasks/{task_id}/cancel` / `POST /tasks/{task_id}/retry`
+取消当前运行，或按最近一次运行阶段重试。SSE 断开本身不会取消任务。
+
+#### `DELETE /tasks/{task_id}`
+删除非运行中的任务聚合，包括会话、消息、运行、计划、权限租约、工具事件和产物记录；审计记录保留。
+
+---
+
+### 3.5 记忆 Memory
 
 持久记忆（跨会话，按 user_id 隔离）。存进去后，该用户**每次 /chat 都会自动注入**到 agent 系统提示。
 
@@ -208,7 +264,7 @@ curl -N -X POST http://127.0.0.1:8000/chat \
 
 ---
 
-### 3.5 用户管理 Users（仅 admin）
+### 3.6 用户管理 Users（仅 admin）
 
 所有 `/users` 端点都需 **admin** token（非 admin 返回 403）。
 
@@ -242,7 +298,7 @@ curl -N -X POST http://127.0.0.1:8000/chat \
 
 ---
 
-### 3.6 功能开关 Features
+### 3.7 功能开关 Features
 
 #### `GET /features`
 返回当前功能开关状态（前端据此渲染「是否启用宿主机访问」按钮）。
@@ -253,7 +309,7 @@ curl -N -X POST http://127.0.0.1:8000/chat \
 
 ---
 
-### 3.7 健康 Health
+### 3.8 健康 Health
 
 #### `GET /health`（无需鉴权）
 ```json
@@ -309,9 +365,12 @@ async function chat(token, message, sessionId) {
 2. **对话**：`POST /chat`（带 token + message）→ 流式渲染。存返回的 `session_id`。
 3. **续聊**：`POST /chat`（带 token + message + 上次的 `session_id`）→ agent 记得上下文。
 4. **历史**：`GET /sessions` 列表 → `GET /sessions/{id}` 看详情。
-5. **记忆**：`POST /memory` 存长期事实 → 之后所有对话自动带上。
-6. **管理**（admin）：`/users` 增删用户、改角色。
-7. **开关**：`GET /features` 读 host_terminal 状态，渲染按钮。
+5. **Agent 规划**：`POST /tasks` → `POST /tasks/{id}/plan`，消费 SSE 并等待 `plan.required`。
+6. **Agent 审批执行**：`POST /tasks/{id}/approve` → 按需设置临时权限 → `POST /tasks/{id}/execute`。
+7. **Agent 恢复**：全局前端管理器继续持有 SSE；页面刷新后用 `GET /tasks/{id}` 的运行状态、工具事件和 Redis 快照恢复。
+8. **记忆**：`POST /memory` 存长期事实 → 之后所有对话自动带上。
+9. **管理**（admin）：`/users` 增删用户、改角色。
+10. **开关**：`GET /features` 读 host_terminal 状态，渲染按钮。
 
 ---
 

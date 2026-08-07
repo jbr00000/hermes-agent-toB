@@ -10,6 +10,12 @@ def build_agent(
     user_id: str,
     prefill_messages=None,
     mode: str = None,
+    permission_mode: str = "read",
+    tool_progress_callback=None,
+    tool_start_callback=None,
+    tool_complete_callback=None,
+    status_callback=None,
+    event_callback=None,
 ):
     """Construct an AIAgent scoped to one server-side chat session.
 
@@ -37,7 +43,6 @@ def build_agent(
     from run_agent import AIAgent
     from server.memory import list_memory_contents
     from server.features import get_features
-    from server.mcp import enabled_mcp_toolsets, register_deployment_mcp_servers
     from server.runtime_config import load_runtime_config
     from server.tool_policy import resolve_toolsets
 
@@ -45,12 +50,13 @@ def build_agent(
     is_chat = mode == "chat"
     features = get_features()
     runtime_config = load_runtime_config()
-    # Deployment MCP servers do not yet carry a trustworthy read/write risk
-    # declaration. Keep them out of Chat until that metadata is enforced.
-    mcp_toolsets = [] if is_chat else enabled_mcp_toolsets()
-    if mcp_toolsets:
-        register_deployment_mcp_servers()
-    toolsets = resolve_toolsets(mode=mode, features=features) + mcp_toolsets
+    # Extension tools remain disabled until each deployment tool declares a
+    # trustworthy risk level and passes the task permission policy.
+    toolsets = resolve_toolsets(
+        mode=mode,
+        features=features,
+        permission_mode=permission_mode,
+    )
 
     # Build an ephemeral system-prompt section combining persistent memory
     # (per-user, loaded fresh each request) and the plan-mode instruction.
@@ -66,7 +72,9 @@ def build_agent(
             "You are in PLAN mode. Investigate with read-only tools, then produce a clear, "
             "structured plan for the user to approve. Do NOT execute any changes — no writes, "
             "no mutations, no long-running actions. End with a concrete step list the user can "
-            "approve to switch to EXECUTE mode."
+            "approve to switch to EXECUTE mode. The EXECUTE phase can use a Docker-sandboxed "
+            "terminal when the user grants full task permission. You cannot call that terminal "
+            "during PLAN mode, but you may include necessary terminal steps in the plan."
         )
     if is_chat:
         parts.append(
@@ -93,4 +101,9 @@ def build_agent(
         quiet_mode=True,
         prefill_messages=prefill_messages,
         ephemeral_system_prompt=ephemeral,
+        tool_progress_callback=tool_progress_callback,
+        tool_start_callback=tool_start_callback,
+        tool_complete_callback=tool_complete_callback,
+        status_callback=status_callback,
+        event_callback=event_callback,
     )

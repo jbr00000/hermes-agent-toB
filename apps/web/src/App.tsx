@@ -46,24 +46,32 @@ import {
 import { db } from './db'
 import { api } from './api'
 import {
+  isAgentRunActive,
+  mergeAgentMessages,
+  useAgentRun,
+  useAgentRunManager,
+} from './agentRunManager'
+import {
   isChatRunActive,
   mergeChatMessages,
   useChatRun,
   useChatRunManager,
 } from './chatRunManager'
 import { mockApi } from './mockApi'
-import { documents, sessions as fallbackSessions } from './mockData'
+import { documents } from './mockData'
 import {
   activeTabIdAtom,
   attachedFilesAtom,
   chatAttachedFilesAtom,
   createTab,
-  permissionModeAtom,
   selectedSpaceAtom,
+  tabId,
   tabsAtom,
   workspaceModeAtom,
 } from './state'
 import type {
+  AgentTaskDetail,
+  AgentTaskStatus,
   ChatMessage,
   ConversationSummary,
   AuthUser,
@@ -73,6 +81,8 @@ import type {
   PermissionMode,
   SessionSummary,
   TabType,
+  TaskPlan,
+  ToolEvent,
   UserRow,
   WorkspaceMode,
   WorkTab,
@@ -115,21 +125,27 @@ function typeIcon(type: TabType): LucideIcon {
 
 function statusText(status: SessionSummary['status']): string {
   return {
-    idle: '空闲',
+    draft: '草稿',
+    planning: '规划中',
+    awaiting_approval: '待审批',
+    ready: '待执行',
     running: '运行中',
-    plan_pending: '待审批',
-    approved: '已批准',
     completed: '已完成',
+    failed: '失败',
+    cancelled: '已取消',
   }[status]
 }
 
 function statusTone(status: SessionSummary['status']): string {
   return {
-    idle: 'bg-zinc-100 text-zinc-600',
+    draft: 'bg-zinc-100 text-zinc-600',
+    planning: 'bg-emerald-50 text-success',
+    awaiting_approval: 'bg-amber-50 text-caution',
+    ready: 'bg-sky-50 text-info',
     running: 'bg-emerald-50 text-success',
-    plan_pending: 'bg-amber-50 text-caution',
-    approved: 'bg-sky-50 text-info',
     completed: 'bg-zinc-100 text-zinc-600',
+    failed: 'bg-red-50 text-danger',
+    cancelled: 'bg-zinc-100 text-zinc-600',
   }[status]
 }
 
@@ -154,7 +170,13 @@ function docStatusTone(status: KnowledgeDocument['status']): string {
 export default function App(): React.ReactElement {
   const [user, setUser] = React.useState<AuthUser | null>(null)
   const [restoring, setRestoring] = React.useState(true)
+  const [, setTabs] = useAtom(tabsAtom)
+  const [, setActiveTabId] = useAtom(activeTabIdAtom)
+  const [, setAttachedFiles] = useAtom(attachedFilesAtom)
+  const [, setChatAttachedFiles] = useAtom(chatAttachedFilesAtom)
+  const queryClient = useQueryClient()
   const chatRunManager = useChatRunManager()
+  const agentRunManager = useAgentRunManager()
 
   React.useEffect(() => {
     api.restoreSession()
@@ -170,6 +192,12 @@ export default function App(): React.ReactElement {
       user={user}
       onLogout={() => {
         chatRunManager.clearAll()
+        agentRunManager.clearAll()
+        queryClient.clear()
+        setTabs([])
+        setActiveTabId(null)
+        setAttachedFiles([])
+        setChatAttachedFiles([])
         setUser(null)
       }}
     />
@@ -267,14 +295,16 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
   const [mobileSidebarOpen, setMobileSidebarOpen] = React.useState(false)
   const restoredRef = React.useRef(false)
   const queryClient = useQueryClient()
-  const sessionsQuery = useQuery({ queryKey: ['sessions'], queryFn: mockApi.listSessions })
+  const sessionsQuery = useQuery({ queryKey: ['tasks'], queryFn: api.listTasks })
   const conversationsQuery = useQuery({ queryKey: ['conversations'], queryFn: api.listConversations })
   const spacesQuery = useQuery({ queryKey: ['spaces'], queryFn: mockApi.listSpaces })
 
   React.useEffect(() => {
     if (restoredRef.current) return
     restoredRef.current = true
-    db.tabs.orderBy('order').toArray()
+    setTabs([])
+    setActiveTabId(null)
+    db.tabs.where('ownerId').equals(user.id).sortBy('order')
       .then((stored) => {
         if (stored.length > 0) {
           const preferred = stored
@@ -286,33 +316,66 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
         }
       })
       .finally(() => setHydrated(true))
-  }, [setActiveTabId, setTabs, setWorkspaceMode, workspaceMode])
+  }, [setActiveTabId, setTabs, setWorkspaceMode, user.id, workspaceMode])
 
   React.useEffect(() => {
     if (!hydrated || tabs.length > 0) return
     const first = workspaceMode === 'chat'
       ? conversationsQuery.data?.[0]
-      : sessionsQuery.data?.[0] ?? fallbackSessions[0]
-    const tab = first
-      ? createTab(workspaceMode, first.id, first.title, 0)
-      : createTab(workspaceMode, `draft-${Date.now()}`, workspaceMode === 'chat' ? '新问答' : '新智能体任务', 0)
-    setTabs([tab])
-    setActiveTabId(tab.id)
-  }, [conversationsQuery.data, hydrated, sessionsQuery.data, setActiveTabId, setTabs, tabs.length, workspaceMode])
+      : sessionsQuery.data?.[0]
+    if (first) {
+      const tab = createTab(user.id, workspaceMode, first.id, first.title, 0)
+      setTabs([tab])
+      setActiveTabId(tab.id)
+    }
+  }, [conversationsQuery.data, hydrated, sessionsQuery.data, setActiveTabId, setTabs, tabs.length, user.id, workspaceMode])
 
   React.useEffect(() => {
     if (!hydrated) return
     const timer = window.setTimeout(() => {
       db.transaction('rw', db.tabs, async () => {
-        await db.tabs.clear()
-        if (tabs.length > 0) await db.tabs.bulkPut(tabs)
+        await db.tabs.where('ownerId').equals(user.id).delete()
+        const ownedTabs = tabs.filter((tab) => tab.ownerId === user.id)
+        if (ownedTabs.length > 0) await db.tabs.bulkPut(ownedTabs)
       }).catch(console.error)
     }, 250)
     return () => window.clearTimeout(timer)
-  }, [hydrated, tabs])
+  }, [hydrated, tabs, user.id])
+
+  React.useEffect(() => {
+    if (!hydrated || !sessionsQuery.isSuccess) return
+    const taskIds = new Set((sessionsQuery.data ?? []).map((task) => task.id))
+    setTabs((current) => {
+      const valid = current
+        .filter((tab) => tab.type !== 'agent' || taskIds.has(tab.refId))
+        .map((tab, order) => ({ ...tab, order }))
+      if (valid.length === current.length) return current
+      if (activeTabId && !valid.some((tab) => tab.id === activeTabId)) {
+        const next = valid[0] ?? null
+        setActiveTabId(next?.id ?? null)
+        if (next?.type === 'agent' || next?.type === 'chat') setWorkspaceMode(next.type)
+      }
+      return valid
+    })
+  }, [activeTabId, hydrated, sessionsQuery.data, sessionsQuery.isSuccess, setActiveTabId, setTabs, setWorkspaceMode])
+
+  React.useEffect(() => {
+    if (!sessionsQuery.data) return
+    const titles = new Map(sessionsQuery.data.map((task) => [task.id, task.title]))
+    setTabs((current) => {
+      let changed = false
+      const next = current.map((tab) => {
+        const title = tab.type === 'agent' ? titles.get(tab.refId) : undefined
+        if (!title || title === tab.title) return tab
+        changed = true
+        return { ...tab, title, updatedAt: Date.now() }
+      })
+      return changed ? next : current
+    })
+  }, [sessionsQuery.data, setTabs])
 
   const openTab = React.useCallback((type: TabType, refId: string, title: string) => {
-    const id = `${type}:${refId}`
+    const id = tabId(user.id, type, refId)
     if (type === 'agent' || type === 'chat') setWorkspaceMode(type)
     setTabs((current) => {
       const existing = current.find((tab) => tab.id === id)
@@ -324,11 +387,11 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
         setNotice(`最多同时打开 ${MAX_TABS} 个标签`)
         return current
       }
-      const next = createTab(type, refId, title, current.length)
+      const next = createTab(user.id, type, refId, title, current.length)
       setActiveTabId(next.id)
       return [...current, next]
     })
-  }, [setActiveTabId, setTabs, setWorkspaceMode])
+  }, [setActiveTabId, setTabs, setWorkspaceMode, user.id])
 
   const closeTab = React.useCallback((tabId: string) => {
     setTabs((current) => {
@@ -361,8 +424,8 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
 
     const first = mode === 'chat'
       ? conversationsQuery.data?.[0]
-      : sessionsQuery.data?.[0] ?? fallbackSessions[0]
-    openTab(mode, first?.id ?? `draft-${Date.now()}`, first?.title ?? (mode === 'chat' ? '新问答' : '新智能体任务'))
+      : sessionsQuery.data?.[0]
+    if (first) openTab(mode, first.id, first.title)
   }, [conversationsQuery.data, openTab, sessionsQuery.data, setActiveTabId, setWorkspaceMode, tabs])
 
   const createConversation = React.useCallback(() => {
@@ -372,6 +435,16 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
         openTab('chat', conversation.id, conversation.title)
       })
       .catch((error) => setNotice(error instanceof Error ? error.message : '新建问答失败'))
+  }, [openTab, queryClient])
+
+  const createAgentTask = React.useCallback((title?: string) => {
+    api.createTask(title)
+      .then((task) => {
+        queryClient.setQueryData<AgentTaskDetail>(['task', task.id], task)
+        void queryClient.invalidateQueries({ queryKey: ['tasks'] })
+        openTab('agent', task.id, task.title)
+      })
+      .catch((error) => setNotice(error instanceof Error ? error.message : '新建任务失败'))
   }, [openTab, queryClient])
 
   const updateConversationTab = React.useCallback((sessionId: string, title: string) => {
@@ -394,6 +467,7 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
           onOpenTab={openTab}
           onModeChange={changeWorkspaceMode}
           onNewConversation={createConversation}
+          onNewAgentTask={() => createAgentTask()}
           mobileOpen={mobileSidebarOpen}
           onClose={() => setMobileSidebarOpen(false)}
         />
@@ -412,12 +486,13 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
                   tab={activeTab}
                   onOpenTab={openTab}
                   onConversationUpdated={updateConversationTab}
-                  onConversationArchived={(sessionId) => closeTab(`chat:${sessionId}`)}
+                  onConversationArchived={(sessionId) => closeTab(tabId(user.id, 'chat', sessionId))}
+                  onCreateAgentTask={createAgentTask}
+                  onTaskDeleted={(taskId) => closeTab(tabId(user.id, 'agent', taskId))}
                 />
               ) : (
                 <EmptyWorkspace onNewTask={() => {
-                  const first = sessionsQuery.data?.[0] ?? fallbackSessions[0]
-                  if (first) openTab('agent', first.id, first.title)
+                  createAgentTask()
                 }} />
               )}
             </main>
@@ -446,6 +521,7 @@ function Sidebar({
   onOpenTab,
   onModeChange,
   onNewConversation,
+  onNewAgentTask,
   mobileOpen,
   onClose,
 }: {
@@ -457,6 +533,7 @@ function Sidebar({
   onOpenTab: (type: TabType, refId: string, title: string) => void
   onModeChange: (mode: WorkspaceMode) => void
   onNewConversation: () => void
+  onNewAgentTask: () => void
   mobileOpen: boolean
   onClose: () => void
 }) {
@@ -487,6 +564,11 @@ function Sidebar({
 
   const createConversation = () => {
     onNewConversation()
+    onClose()
+  }
+
+  const createAgentTask = () => {
+    onNewAgentTask()
     onClose()
   }
 
@@ -550,7 +632,7 @@ function Sidebar({
           className="mt-4 flex h-9 w-full items-center justify-center gap-2 rounded-md bg-ink px-3 text-sm font-medium text-white transition active:scale-[0.98]"
           onClick={() => mode === 'chat'
             ? createConversation()
-            : openTab('agent', `draft-${Date.now()}`, '新智能体任务')}
+            : createAgentTask()}
         >
           <Plus size={16} />
           {mode === 'agent' ? '新建任务' : '新建问答'}
@@ -580,7 +662,7 @@ function Sidebar({
                   onClick={() => openTab('agent', session.id, session.title)}
                 >
                   <div className="flex items-center gap-2">
-                    <span className={cn('h-2 w-2 shrink-0 rounded-full status-dot', session.status === 'running' ? 'bg-success text-success' : session.status === 'plan_pending' ? 'bg-caution text-caution' : 'bg-zinc-400 text-zinc-400')} />
+                    <span className={cn('h-2 w-2 shrink-0 rounded-full status-dot', session.status === 'running' || session.status === 'planning' ? 'bg-success text-success' : session.status === 'awaiting_approval' ? 'bg-caution text-caution' : 'bg-zinc-400 text-zinc-400')} />
                     <span className="min-w-0 flex-1 truncate text-sm font-medium">{session.title}</span>
                   </div>
                   <div className="mt-1 flex items-center justify-between pl-4 text-[11px] text-zinc-500">
@@ -589,6 +671,11 @@ function Sidebar({
                   </div>
                 </button>
               ))}
+              {visibleSessions.length === 0 && (
+                <div className="border-y border-line px-2.5 py-3 text-xs text-zinc-500">
+                  暂无任务
+                </div>
+              )}
             </div>
           </NavGroup>
         ) : (
@@ -795,13 +882,17 @@ function TabContent({
   onOpenTab,
   onConversationUpdated,
   onConversationArchived,
+  onCreateAgentTask,
+  onTaskDeleted,
 }: {
   tab: WorkTab
   onOpenTab: (type: TabType, refId: string, title: string) => void
   onConversationUpdated: (sessionId: string, title: string) => void
   onConversationArchived: (sessionId: string) => void
+  onCreateAgentTask: (title?: string) => void
+  onTaskDeleted: (taskId: string) => void
 }) {
-  if (tab.type === 'agent') return <AgentView sessionId={tab.refId} title={tab.title} />
+  if (tab.type === 'agent') return <AgentView taskId={tab.refId} title={tab.title} onDeleted={onTaskDeleted} />
   if (tab.type === 'chat') {
     return (
       <ChatView
@@ -810,7 +901,7 @@ function TabContent({
         title={tab.title}
         onConversationUpdated={onConversationUpdated}
         onConversationArchived={onConversationArchived}
-        onPromote={() => onOpenTab('agent', `from-${tab.refId}-${Date.now()}`, `${tab.title} · 执行`)}
+        onPromote={() => onCreateAgentTask(`${tab.title} · 执行`)}
       />
     )
   }
@@ -1226,52 +1317,135 @@ function ChatView({
   )
 }
 
-function AgentView({ sessionId, title }: { sessionId: string; title: string }) {
-  const [permissionMode, setPermissionMode] = useAtom(permissionModeAtom)
+function AgentView({ taskId, title, onDeleted }: { taskId: string; title: string; onDeleted: (taskId: string) => void }) {
   const [files, setFiles] = useAtom(attachedFilesAtom)
-  const query = useQuery({ queryKey: ['messages', sessionId], queryFn: () => mockApi.listMessages(sessionId) })
-  const [localMessages, setLocalMessages] = React.useState<ChatMessage[]>([])
+  const queryClient = useQueryClient()
+  const agentRunManager = useAgentRunManager()
+  const run = useAgentRun(taskId)
+  const query = useQuery({
+    queryKey: ['task', taskId],
+    queryFn: () => api.getTask(taskId),
+    refetchInterval: (result) => result.state.data?.activeRun ? 1000 : false,
+  })
   const [draft, setDraft] = React.useState('')
-  const [streaming, setStreaming] = React.useState(false)
+  const [actionPending, setActionPending] = React.useState(false)
+  const [actionError, setActionError] = React.useState<string | null>(null)
   const fileInputRef = React.useRef<HTMLInputElement | null>(null)
+  const scrollRef = React.useRef<HTMLDivElement | null>(null)
+  const restoredScrollRef = React.useRef(false)
 
   React.useEffect(() => {
-    setLocalMessages(query.data ?? [])
-  }, [query.data, sessionId])
+    if (query.data) agentRunManager.reconcileServerState(query.data)
+  }, [agentRunManager, query.data])
 
-  const sendMessage = React.useCallback(() => {
+  const task = query.data
+  const active = isAgentRunActive(run)
+  const taskStatus = run?.taskStatus ?? task?.status ?? 'draft'
+  const permissionMode = run?.permissionMode ?? task?.permission.mode ?? 'read'
+  const messages = mergeAgentMessages(task?.messages ?? [], run)
+  const toolEvents = React.useMemo(() => {
+    const persisted = task?.events ?? []
+    const live = run?.toolEvents ?? []
+    const ids = new Set(persisted.map((event) => event.id))
+    return [...persisted, ...live.filter((event) => !ids.has(event.id))]
+  }, [run?.toolEvents, task?.events])
+  const approvedPlan = task?.plan?.status === 'approved'
+  const canPlan = !active && Boolean(task) && !approvedPlan && taskStatus !== 'completed'
+
+  React.useLayoutEffect(() => {
+    const element = scrollRef.current
+    if (!element || restoredScrollRef.current || !task) return
+    restoredScrollRef.current = true
+    const saved = agentRunManager.getScrollPosition(taskId)
+    element.scrollTop = active ? element.scrollHeight : Math.min(saved ?? element.scrollHeight, element.scrollHeight)
+  }, [active, agentRunManager, task, taskId])
+
+  React.useEffect(() => {
+    restoredScrollRef.current = false
+    return () => {
+      const element = scrollRef.current
+      if (element) agentRunManager.setScrollPosition(taskId, element.scrollTop)
+    }
+  }, [agentRunManager, taskId])
+
+  React.useLayoutEffect(() => {
+    const element = scrollRef.current
+    if (element && active) element.scrollTop = element.scrollHeight
+  }, [active, messages.length, run?.assistantMessage.content, toolEvents.length])
+
+  const sendPlanRequest = React.useCallback(() => {
     const text = draft.trim()
-    if (!text || streaming) return
-    const now = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-    const assistantId = `assistant-${Date.now()}`
+    if (!text || !task || !canPlan) return
     setDraft('')
-    setStreaming(true)
-    setLocalMessages((current) => [
-      ...current,
-      { id: `user-${Date.now()}`, role: 'user', content: text, createdAt: now },
-      { id: assistantId, role: 'assistant', content: '', createdAt: now },
-    ])
+    setActionError(null)
+    try {
+      agentRunManager.startPlan(task, text)
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : '无法启动规划')
+    }
+  }, [agentRunManager, canPlan, draft, task])
 
-    const chunks = [
-      '已进入前端模拟执行流程。',
-      '我会先识别任务风险，再展示计划审批和权限模式。',
-      '当前任务引用了临时附件与业务空间知识库；如果涉及共享知识库修改或数据库写入，将要求完全访问。',
-    ]
-    let index = 0
-    const timer = window.setInterval(() => {
-      setLocalMessages((current) => current.map((message) => (
-        message.id === assistantId
-          ? { ...message, content: `${message.content}${message.content ? '\n' : ''}${chunks[index] ?? ''}` }
-          : message
-      )))
-      index += 1
-      if (index >= chunks.length) {
-        window.clearInterval(timer)
-        setStreaming(false)
-        if (permissionMode === 'full') setPermissionMode('read')
-      }
-    }, 520)
-  }, [draft, permissionMode, setPermissionMode, streaming])
+  const changePermission = React.useCallback(async (mode: PermissionMode) => {
+    if (!task || active) return
+    setActionPending(true)
+    setActionError(null)
+    try {
+      const permission = await api.setTaskPermission(task.id, mode)
+      queryClient.setQueryData<AgentTaskDetail>(['task', task.id], (current) => (
+        current ? { ...current, permission } : current
+      ))
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : '权限变更失败')
+    } finally {
+      setActionPending(false)
+    }
+  }, [active, queryClient, task])
+
+  const approvePlan = React.useCallback(async () => {
+    if (!task || active) return
+    setActionPending(true)
+    setActionError(null)
+    try {
+      const updated = await api.approveTask(task.id)
+      queryClient.setQueryData(['task', task.id], updated)
+      await queryClient.invalidateQueries({ queryKey: ['tasks'] })
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : '计划审批失败')
+    } finally {
+      setActionPending(false)
+    }
+  }, [active, queryClient, task])
+
+  const executePlan = React.useCallback(() => {
+    if (!task || active || task.plan?.status !== 'approved') return
+    setActionError(null)
+    try {
+      agentRunManager.startExecute(task)
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : '无法启动执行')
+    }
+  }, [active, agentRunManager, task])
+
+  const stopTask = React.useCallback(() => {
+    void agentRunManager.cancel(taskId).catch((error) => {
+      setActionError(error instanceof Error ? error.message : '停止任务失败')
+    })
+  }, [agentRunManager, taskId])
+
+  const deleteTask = React.useCallback(async () => {
+    if (active || !window.confirm('确认删除该任务及其对话、计划和工具记录？')) return
+    setActionPending(true)
+    setActionError(null)
+    try {
+      await api.deleteTask(taskId)
+      queryClient.removeQueries({ queryKey: ['task', taskId] })
+      await queryClient.invalidateQueries({ queryKey: ['tasks'] })
+      onDeleted(taskId)
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : '删除任务失败')
+      setActionPending(false)
+    }
+  }, [active, onDeleted, queryClient, taskId])
 
   const addFiles = (selected: FileList | null) => {
     if (!selected?.length) return
@@ -1289,40 +1463,69 @@ function AgentView({ sessionId, title }: { sessionId: string; title: string }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-14 items-center justify-between border-b border-line px-5">
+      <div className="flex min-h-14 items-center justify-between gap-2 border-b border-line px-3 py-2 sm:h-14 sm:px-5 sm:py-0">
         <div className="min-w-0">
           <div className="truncate text-sm font-semibold">{title}</div>
           <div className="mt-0.5 flex items-center gap-2 text-xs text-zinc-500">
-            <span>Session {sessionId}</span>
+            <span className="block max-w-[180px] truncate sm:max-w-none">Task {taskId}</span>
             <span className="h-1 w-1 rounded-full bg-zinc-300" />
-            <span>{streaming ? '运行中' : '可输入'}</span>
+            <span>{statusText(taskStatus)}</span>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <PermissionSegment value={permissionMode} onChange={setPermissionMode} compact />
-          <button className="h-8 rounded-md border border-line px-2.5 text-xs hover:bg-field">
-            <MoreHorizontal size={15} />
+          <PermissionSegment
+            value={permissionMode}
+            onChange={(mode) => void changePermission(mode)}
+            compact
+            disabled={active || actionPending}
+          />
+          <button
+            title="删除任务"
+            className="flex h-8 w-8 items-center justify-center rounded-md border border-line text-zinc-500 hover:bg-red-50 hover:text-danger disabled:opacity-40"
+            disabled={active || actionPending}
+            onClick={() => void deleteTask()}
+          >
+            <Trash2 size={15} />
           </button>
         </div>
       </div>
 
-      <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto px-8 py-6">
+      <div
+        ref={scrollRef}
+        className="thin-scrollbar min-h-0 flex-1 overflow-y-auto px-8 py-6"
+        onScroll={(event) => {
+          if (!active) agentRunManager.setScrollPosition(taskId, event.currentTarget.scrollTop)
+        }}
+      >
         <div className="mx-auto max-w-4xl space-y-5">
-          <PlanBanner permissionMode={permissionMode} onModeChange={setPermissionMode} />
+          <TaskPlanPanel
+            status={taskStatus}
+            plan={task?.plan ?? null}
+            permissionMode={permissionMode}
+            pending={active || actionPending}
+            onApprove={() => void approvePlan()}
+            onExecute={executePlan}
+            onModeChange={(mode) => void changePermission(mode)}
+          />
           {query.isLoading ? (
             <MessageSkeleton />
-          ) : localMessages.length === 0 ? (
+          ) : query.isError ? (
+            <div className="border-y border-red-100 bg-red-50 px-4 py-8 text-center text-sm text-danger">
+              {query.error instanceof Error ? query.error.message : '任务加载失败'}
+            </div>
+          ) : messages.length === 0 ? (
             <div className="border-y border-line py-16 text-center">
               <Bot className="mx-auto mb-3 text-zinc-300" size={40} />
               <div className="text-sm font-medium">新任务</div>
+              <div className="mt-1 text-xs text-zinc-500">输入目标后，Agent 会先生成可审批的执行计划。</div>
             </div>
           ) : (
-            localMessages.map((message) => <MessageBubble key={message.id} message={message} />)
+            messages.map((message) => <MessageBubble key={message.id} message={message} />)
           )}
-          {streaming && (
-            <div className="flex items-center gap-2 text-sm text-zinc-500">
-              <span className="h-2 w-2 animate-pulse rounded-full bg-success" />
-              正在生成
+          <ToolEventTimeline events={toolEvents} activeRunId={run?.requestId ?? task?.currentRunId ?? null} />
+          {actionError && (
+            <div className="border-l-2 border-danger bg-red-50 px-3 py-2 text-sm text-danger">
+              {actionError}
             </div>
           )}
         </div>
@@ -1334,7 +1537,8 @@ function AgentView({ sessionId, title }: { sessionId: string; title: string }) {
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             className="block min-h-[82px] w-full resize-none bg-transparent px-4 py-3 text-sm outline-none"
-            placeholder="输入任务，例如：读取费用测算表，总结主要内容并生成 txt"
+            placeholder={approvedPlan ? '计划已批准，可在上方调整权限后执行' : '输入任务目标，Agent 将先生成执行计划'}
+            disabled={!canPlan}
           />
           <div className="flex items-center justify-between border-t border-line px-3 py-2">
             <div className="flex items-center gap-1.5">
@@ -1347,13 +1551,13 @@ function AgentView({ sessionId, title }: { sessionId: string; title: string }) {
             <button
               className={cn(
                 'flex h-8 items-center gap-2 rounded-md px-3 text-sm font-medium transition active:scale-[0.98]',
-                streaming || !draft.trim() ? 'bg-zinc-200 text-zinc-400' : 'bg-ink text-white',
+                active || (canPlan && draft.trim()) ? 'bg-ink text-white' : 'bg-zinc-200 text-zinc-400',
               )}
-              disabled={streaming || !draft.trim()}
-              onClick={sendMessage}
+              disabled={!active && (!canPlan || !draft.trim())}
+              onClick={active ? stopTask : sendPlanRequest}
             >
-              {streaming ? <CircleStop size={15} /> : <Send size={15} />}
-              {streaming ? '生成中' : '发送'}
+              {active ? <CircleStop size={15} /> : <Send size={15} />}
+              {active ? '停止' : '生成计划'}
             </button>
           </div>
         </div>
@@ -1458,39 +1662,127 @@ function MessageSkeleton() {
   )
 }
 
-function PlanBanner({ permissionMode, onModeChange }: { permissionMode: PermissionMode; onModeChange: (mode: PermissionMode) => void }) {
-  const needsFull = permissionMode !== 'full'
+function TaskPlanPanel({
+  status,
+  plan,
+  permissionMode,
+  pending,
+  onApprove,
+  onExecute,
+  onModeChange,
+}: {
+  status: AgentTaskStatus
+  plan: TaskPlan | null
+  permissionMode: PermissionMode
+  pending: boolean
+  onApprove: () => void
+  onExecute: () => void
+  onModeChange: (mode: PermissionMode) => void
+}) {
+  if (!plan && status === 'draft') return null
+  const awaitingApproval = plan?.status === 'pending' && status === 'awaiting_approval'
+  const executable = plan?.status === 'approved' && ['ready', 'failed', 'cancelled'].includes(status)
   return (
     <div className="border-y border-line bg-[#fcfcfd] px-4 py-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-md bg-amber-50 text-caution">
-            <AlertTriangle size={18} />
+          <div className={cn(
+            'flex h-9 w-9 shrink-0 items-center justify-center rounded-md',
+            awaitingApproval ? 'bg-amber-50 text-caution' : 'bg-emerald-50 text-success',
+          )}>
+            {awaitingApproval ? <AlertTriangle size={18} /> : <FileCheck2 size={18} />}
           </div>
-          <div>
-            <div className="text-sm font-semibold">计划审批模拟</div>
-            <div className="text-xs text-zinc-500">写共享知识库或数据库写入需计划审批与完全访问同时满足</div>
+          <div className="min-w-0">
+            <div className="text-sm font-semibold">
+              {status === 'planning' ? '正在生成执行计划' : awaitingApproval ? `执行计划 v${plan?.version}` : status === 'completed' ? '任务已完成' : '已批准执行计划'}
+            </div>
+            <div className="text-xs text-zinc-500">
+              {awaitingApproval
+                ? '审批后才可执行；涉及写入或终端操作时还需切换到完全访问。'
+                : permissionMode === 'full'
+                  ? '完全访问将在本次执行结束后自动恢复为只读。'
+                  : '当前只会启用与权限等级匹配的工具。'}
+            </div>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button className="flex h-8 items-center gap-1.5 rounded-md border border-line px-3 text-xs hover:bg-field">
-            <FileCheck2 size={14} />
-            批准计划
-          </button>
-          <button
-            className={cn('flex h-8 items-center gap-1.5 rounded-md px-3 text-xs font-medium', needsFull ? 'bg-zinc-200 text-zinc-500' : 'bg-ink text-white')}
-            onClick={() => onModeChange('full')}
-          >
-            <Play size={14} />
-            {needsFull ? '切换完全访问' : '执行'}
-          </button>
+          {awaitingApproval && (
+            <button
+              className="flex h-8 items-center gap-1.5 rounded-md bg-ink px-3 text-xs font-medium text-white disabled:bg-zinc-300"
+              disabled={pending}
+              onClick={onApprove}
+            >
+              {pending ? <LoaderCircle size={14} className="animate-spin" /> : <FileCheck2 size={14} />}
+              批准计划
+            </button>
+          )}
+          {executable && permissionMode !== 'full' && (
+            <button
+              className="flex h-8 items-center gap-1.5 rounded-md border border-line px-3 text-xs hover:bg-field disabled:text-zinc-400"
+              disabled={pending}
+              onClick={() => onModeChange('full')}
+            >
+              <KeyRound size={14} />
+              完全访问
+            </button>
+          )}
+          {executable && (
+            <button
+              className="flex h-8 items-center gap-1.5 rounded-md bg-ink px-3 text-xs font-medium text-white disabled:bg-zinc-300"
+              disabled={pending}
+              onClick={onExecute}
+            >
+              <Play size={14} />
+              {status === 'failed' || status === 'cancelled' ? '重新执行' : '执行'}
+            </button>
+          )}
         </div>
       </div>
+      {plan?.content && (
+        <details className="mt-3 border-t border-line pt-3" open={awaitingApproval}>
+          <summary className="cursor-pointer text-xs font-medium text-zinc-600">查看计划内容</summary>
+          <div className="mt-3 max-h-64 overflow-y-auto text-sm leading-6 text-zinc-700 [&_li]:ml-5 [&_li]:list-disc [&_ol_li]:list-decimal [&_p+p]:mt-2">
+            <ReactMarkdown>{plan.content}</ReactMarkdown>
+          </div>
+        </details>
+      )}
     </div>
   )
 }
 
-function PermissionSegment({ value, onChange, compact = false }: { value: PermissionMode; onChange: (mode: PermissionMode) => void; compact?: boolean }) {
+function ToolEventTimeline({ events, activeRunId }: { events: ToolEvent[]; activeRunId: string | null }) {
+  const auditableEvents = events.filter((event) => !event.toolName?.startsWith('_'))
+  const visible = activeRunId
+    ? auditableEvents.filter((event) => event.runId === activeRunId)
+    : auditableEvents.slice(-6)
+  if (visible.length === 0) return null
+  return (
+    <section className="border-y border-line py-3" aria-live="polite">
+      <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-zinc-500">
+        <History size={14} />
+        工具活动
+      </div>
+      <div className="space-y-1.5">
+        {visible.slice(-8).map((event) => {
+          const failed = event.status === 'failed'
+          const completed = event.eventType === 'tool.completed'
+          return (
+            <div key={`${event.runId}-${event.sequence}-${event.eventType}`} className="flex items-center gap-2 text-xs text-zinc-600">
+              <span className={cn(
+                'h-1.5 w-1.5 rounded-full',
+                failed ? 'bg-danger' : completed ? 'bg-success' : 'animate-pulse bg-caution',
+              )} />
+              <span className="font-medium">{event.toolName ?? 'Agent tool'}</span>
+              <span className="text-zinc-400">{failed ? '执行失败' : completed ? '已完成' : '执行中'}</span>
+            </div>
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
+function PermissionSegment({ value, onChange, compact = false, disabled = false }: { value: PermissionMode; onChange: (mode: PermissionMode) => void; compact?: boolean; disabled?: boolean }) {
   const items: Array<{ value: PermissionMode; label: string; icon: LucideIcon }> = [
     { value: 'read', label: '只读', icon: LockKeyhole },
     { value: 'controlled', label: '受控写入', icon: FileCheck2 },
@@ -1504,12 +1796,15 @@ function PermissionSegment({ value, onChange, compact = false }: { value: Permis
         return (
           <button
             key={item.value}
+            title={item.label}
             className={cn(
               'flex items-center gap-1.5 rounded text-xs transition',
               compact ? 'h-8 w-8 justify-center px-0 sm:w-auto sm:px-2' : 'h-7 px-2',
               value === item.value ? 'bg-panel text-ink shadow-sm' : 'text-zinc-500 hover:text-ink',
               compact && item.value === 'controlled' && 'hidden xl:flex',
+              disabled && 'cursor-not-allowed opacity-50',
             )}
+            disabled={disabled}
             onClick={() => onChange(item.value)}
           >
             <Icon size={13} />
@@ -1817,10 +2112,30 @@ function AuditView() {
 }
 
 function RightPanel({ activeTab }: { activeTab: WorkTab | null }) {
-  const [permissionMode, setPermissionMode] = useAtom(permissionModeAtom)
   const [files] = useAtom(attachedFilesAtom)
+  const queryClient = useQueryClient()
+  const taskId = activeTab?.type === 'agent' ? activeTab.refId : ''
+  const run = useAgentRun(taskId)
+  const taskQuery = useQuery({
+    queryKey: ['task', taskId],
+    queryFn: () => api.getTask(taskId),
+    enabled: Boolean(taskId),
+  })
   const docsQuery = useQuery({ queryKey: ['documents'], queryFn: mockApi.listDocuments })
   const referencedDocs = (docsQuery.data ?? []).slice(0, 3)
+  const task = taskQuery.data
+  const permissionMode = run?.permissionMode ?? task?.permission.mode ?? 'read'
+  const taskStatus = run?.taskStatus ?? task?.status ?? 'draft'
+  const active = isAgentRunActive(run)
+
+  const setPermissionMode = (mode: PermissionMode) => {
+    if (!task || active) return
+    void api.setTaskPermission(task.id, mode).then((permission) => {
+      queryClient.setQueryData<AgentTaskDetail>(['task', task.id], (current) => (
+        current ? { ...current, permission } : current
+      ))
+    })
+  }
 
   if (activeTab?.type === 'chat') {
     return <ChatRightPanel referencedDocs={referencedDocs} />
@@ -1837,7 +2152,7 @@ function RightPanel({ activeTab }: { activeTab: WorkTab | null }) {
       </div>
       <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto p-4">
         <PanelSection title="权限模式" icon={ShieldCheck}>
-          <PermissionSegment value={permissionMode} onChange={setPermissionMode} />
+          <PermissionSegment value={permissionMode} onChange={setPermissionMode} disabled={!task || active} />
           {permissionMode === 'full' && (
             <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-caution">
               完全访问仅当前任务生效，任务结束后自动降权。
@@ -1847,6 +2162,9 @@ function RightPanel({ activeTab }: { activeTab: WorkTab | null }) {
 
         <PanelSection title="本次任务文件" icon={FileArchive}>
           <div className="divide-y divide-line border-y border-line">
+            {files.length === 0 && (
+              <div className="py-3 text-xs text-zinc-500">暂无任务文件</div>
+            )}
             {files.map((file) => (
               <div key={file.id} className="py-2.5 text-sm">
                 <div className="flex min-w-0 items-center gap-2">
@@ -1863,25 +2181,15 @@ function RightPanel({ activeTab }: { activeTab: WorkTab | null }) {
         </PanelSection>
 
         <PanelSection title="引用知识库" icon={Database}>
-          <div className="space-y-2">
-            {referencedDocs.map((doc) => (
-              <div key={doc.id} className="rounded-md border border-line bg-panel px-3 py-2 text-sm">
-                <div className="truncate font-medium">{doc.title}</div>
-                <div className="mt-1 flex items-center justify-between text-xs text-zinc-500">
-                  <span>{doc.library}</span>
-                  <span>{doc.permission === 'override' ? '单独授权' : '继承权限'}</span>
-                </div>
-              </div>
-            ))}
-          </div>
+          <div className="border-y border-line py-3 text-xs text-zinc-500">未选择知识库</div>
         </PanelSection>
 
         <PanelSection title="计划状态" icon={ClipboardList}>
           <div className="space-y-2 text-sm">
-            <StepLine done label="识别任务风险" />
-            <StepLine done label="生成执行计划" />
-            <StepLine label="用户审批" />
-            <StepLine label="执行与结果回传" />
+            <StepLine done={taskStatus !== 'draft'} label="识别任务风险" />
+            <StepLine done={Boolean(task?.plan)} label="生成执行计划" />
+            <StepLine done={task?.plan?.status === 'approved'} label="用户审批" />
+            <StepLine done={taskStatus === 'completed'} label="执行与结果回传" />
           </div>
         </PanelSection>
       </div>

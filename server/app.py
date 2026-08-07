@@ -10,7 +10,7 @@ from server import auth as auth_module
 from server import features as features_module
 from server import memory as memory_module
 from server.storage import database_health, get_runtime_store
-from server.routes import auth, chat, features, memory, sessions, users
+from server.routes import auth, chat, features, memory, sessions, tasks, users
 
 
 def create_app() -> FastAPI:
@@ -23,6 +23,7 @@ def create_app() -> FastAPI:
     app.include_router(auth.router)
     app.include_router(chat.router)
     app.include_router(sessions.router)
+    app.include_router(tasks.router)
     app.include_router(users.router)
     app.include_router(memory.router)
     app.include_router(features.router)

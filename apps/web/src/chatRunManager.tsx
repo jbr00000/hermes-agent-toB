@@ -281,16 +281,21 @@ export class ChatRunManager {
           terminalEventReceived = true
           this.flush(sessionId)
           this.update(sessionId, (snapshot) => {
+            const terminalStatus = event.status === 'cancelled'
+              ? 'cancelled' as const
+              : event.status === 'failed'
+                ? 'failed' as const
+                : 'completed' as const
             const finalMessage = event.message && typeof event.message !== 'string'
               ? event.message
               : {
                   ...snapshot.assistantMessage,
                   content: event.content ?? snapshot.assistantMessage.content,
-                  status: event.status === 'cancelled' ? 'cancelled' as const : 'completed' as const,
+                  status: terminalStatus,
                 }
             return {
               ...snapshot,
-              status: event.status === 'cancelled' ? 'cancelled' : 'completed',
+              status: terminalStatus,
               assistantMessage: finalMessage,
               title: event.title ?? snapshot.title,
               updatedAt: Date.now(),

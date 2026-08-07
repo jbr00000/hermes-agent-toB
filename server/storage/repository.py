@@ -10,13 +10,19 @@ from sqlalchemy import delete, func, select
 
 from .database import session_scope
 from .models import (
+    AgentTask,
     AuditEvent,
+    Artifact,
     AuthSession,
     Conversation,
     MemoryCandidate,
     MemoryItem,
     Message,
     ModelRun,
+    PermissionLease,
+    TaskPlan,
+    TaskRun,
+    ToolEvent,
     User,
 )
 
@@ -57,6 +63,73 @@ def _conversation_dict(row: Conversation) -> dict[str, Any]:
         "started_at": row.created_at,
         "updated_at": row.updated_at,
         "ended_at": row.ended_at,
+    }
+
+
+def _task_dict(row: AgentTask) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "user_id": row.user_id,
+        "session_id": row.conversation_id,
+        "title": row.title,
+        "status": row.status,
+        "risk_level": row.risk_level,
+        "current_run_id": row.current_run_id,
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+        "completed_at": row.completed_at,
+    }
+
+
+def _task_run_dict(row: TaskRun) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "task_id": row.task_id,
+        "phase": row.phase,
+        "attempt": row.attempt,
+        "status": row.status,
+        "error": row.error,
+        "started_at": row.started_at,
+        "completed_at": row.completed_at,
+    }
+
+
+def _task_plan_dict(row: TaskPlan) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "task_id": row.task_id,
+        "version": row.version,
+        "content": row.content,
+        "status": row.status,
+        "created_by": row.created_by,
+        "approved_by": row.approved_by,
+        "created_at": row.created_at,
+        "approved_at": row.approved_at,
+    }
+
+
+def _permission_dict(row: PermissionLease | None) -> dict[str, Any]:
+    if row is None:
+        return {"id": None, "mode": "read", "created_at": None, "expires_at": None}
+    return {
+        "id": row.id,
+        "mode": row.mode,
+        "created_at": row.created_at,
+        "expires_at": row.expires_at,
+    }
+
+
+def _tool_event_dict(row: ToolEvent) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "task_id": row.task_id,
+        "run_id": row.run_id,
+        "sequence": row.sequence_no,
+        "event_type": row.event_type,
+        "tool_name": row.tool_name,
+        "status": row.status,
+        "payload": row.payload or {},
+        "created_at": row.created_at,
     }
 
 
@@ -298,6 +371,17 @@ class StorageRepository:
                 if key == "title" and value is not None:
                     value = " ".join(str(value).split()).strip()[:100] or None
                 setattr(row, key, value)
+                if key == "title" and value is not None:
+                    task = session.scalar(
+                        select(AgentTask).where(
+                            AgentTask.tenant_id == tenant_id(),
+                            AgentTask.user_id == user_id,
+                            AgentTask.conversation_id == conversation_id,
+                        )
+                    )
+                    if task is not None:
+                        task.title = value
+                        task.updated_at = time.time()
             row.updated_at = time.time()
             session.flush()
             return _conversation_dict(row)
@@ -322,6 +406,574 @@ class StorageRepository:
             if row is not None and row.tenant_id == tenant_id():
                 row.title = " ".join(title.split()).strip()[:100] or row.title
                 row.updated_at = time.time()
+                task = session.scalar(
+                    select(AgentTask).where(
+                        AgentTask.tenant_id == tenant_id(),
+                        AgentTask.conversation_id == conversation_id,
+                    )
+                )
+                if task is not None:
+                    task.title = row.title or task.title
+                    task.updated_at = row.updated_at
+
+    def create_agent_task(self, user_id: str, title: str | None = None) -> dict[str, Any]:
+        now = time.time()
+        normalized_title = " ".join((title or "").split()).strip()[:100] or "New agent task"
+        conversation_id = str(uuid.uuid4())
+        task = AgentTask(
+            id=str(uuid.uuid4()),
+            tenant_id=tenant_id(),
+            user_id=user_id,
+            conversation_id=conversation_id,
+            title=normalized_title,
+            status="draft",
+            risk_level="unknown",
+            current_run_id=None,
+            created_at=now,
+            updated_at=now,
+            completed_at=None,
+        )
+        conversation = Conversation(
+            id=conversation_id,
+            tenant_id=tenant_id(),
+            user_id=user_id,
+            source="headless",
+            interaction_type="agent",
+            title=normalized_title,
+            status="idle",
+            pinned=False,
+            archived=False,
+            model=None,
+            model_config={},
+            plan_state=None,
+            created_at=now,
+            updated_at=now,
+        )
+        with session_scope() as session:
+            session.add_all([conversation, task])
+            session.flush()
+            return _task_dict(task)
+
+    def get_owned_task(self, user_id: str, task_id: str) -> dict[str, Any] | None:
+        with session_scope() as session:
+            row = session.scalar(
+                select(AgentTask).where(
+                    AgentTask.tenant_id == tenant_id(),
+                    AgentTask.user_id == user_id,
+                    AgentTask.id == task_id,
+                )
+            )
+            return _task_dict(row) if row is not None else None
+
+    def get_task_by_conversation(
+        self, user_id: str, conversation_id: str
+    ) -> dict[str, Any] | None:
+        with session_scope() as session:
+            row = session.scalar(
+                select(AgentTask).where(
+                    AgentTask.tenant_id == tenant_id(),
+                    AgentTask.user_id == user_id,
+                    AgentTask.conversation_id == conversation_id,
+                )
+            )
+            return _task_dict(row) if row is not None else None
+
+    def list_tasks(self, user_id: str, *, limit: int = 100) -> list[dict[str, Any]]:
+        with session_scope() as session:
+            rows = session.scalars(
+                select(AgentTask)
+                .join(Conversation, Conversation.id == AgentTask.conversation_id)
+                .where(
+                    AgentTask.tenant_id == tenant_id(),
+                    AgentTask.user_id == user_id,
+                    Conversation.archived.is_(False),
+                )
+                .order_by(AgentTask.updated_at.desc())
+                .limit(limit)
+            ).all()
+            return [_task_dict(row) for row in rows]
+
+    def update_task(self, user_id: str, task_id: str, **changes: Any) -> dict[str, Any] | None:
+        allowed = {"title", "status", "risk_level", "current_run_id", "completed_at"}
+        now = time.time()
+        with session_scope() as session:
+            row = session.scalar(
+                select(AgentTask).where(
+                    AgentTask.tenant_id == tenant_id(),
+                    AgentTask.user_id == user_id,
+                    AgentTask.id == task_id,
+                )
+            )
+            if row is None:
+                return None
+            for key, value in changes.items():
+                if key not in allowed:
+                    continue
+                if key == "title" and value is not None:
+                    value = " ".join(str(value).split()).strip()[:100] or row.title
+                setattr(row, key, value)
+            row.updated_at = now
+            if "title" in changes:
+                conversation = session.get(Conversation, row.conversation_id)
+                if conversation is not None:
+                    conversation.title = row.title
+                    conversation.updated_at = now
+            session.flush()
+            return _task_dict(row)
+
+    def create_task_run(
+        self, request_id: str, user_id: str, task_id: str, phase: str
+    ) -> dict[str, Any]:
+        now = time.time()
+        with session_scope() as session:
+            task = session.scalar(
+                select(AgentTask)
+                .where(
+                    AgentTask.tenant_id == tenant_id(),
+                    AgentTask.user_id == user_id,
+                    AgentTask.id == task_id,
+                )
+                .with_for_update()
+            )
+            if task is None:
+                raise KeyError(task_id)
+            if task.current_run_id:
+                raise RuntimeError("task already has an active run")
+            attempt = int(
+                session.scalar(
+                    select(func.max(TaskRun.attempt)).where(
+                        TaskRun.tenant_id == tenant_id(),
+                        TaskRun.task_id == task_id,
+                        TaskRun.phase == phase,
+                    )
+                )
+                or 0
+            ) + 1
+            row = TaskRun(
+                id=request_id,
+                tenant_id=tenant_id(),
+                user_id=user_id,
+                task_id=task_id,
+                phase=phase,
+                attempt=attempt,
+                status="running",
+                error=None,
+                started_at=now,
+                completed_at=None,
+            )
+            session.add(row)
+            task.current_run_id = request_id
+            task.status = "planning" if phase == "plan" else "running"
+            task.updated_at = now
+            conversation = session.get(Conversation, task.conversation_id)
+            if conversation is not None:
+                conversation.status = "running"
+                conversation.updated_at = now
+            session.flush()
+            return _task_run_dict(row)
+
+    def finish_task_run(
+        self,
+        request_id: str,
+        *,
+        status: str,
+        task_status: str,
+        error: str | None = None,
+    ) -> dict[str, Any] | None:
+        now = time.time()
+        with session_scope() as session:
+            row = session.scalar(
+                select(TaskRun).where(
+                    TaskRun.tenant_id == tenant_id(), TaskRun.id == request_id
+                )
+            )
+            if row is None:
+                return None
+            row.status = status
+            row.error = error
+            row.completed_at = now
+            task = session.get(AgentTask, row.task_id)
+            if task is not None and task.tenant_id == tenant_id():
+                if task.current_run_id == request_id:
+                    task.current_run_id = None
+                task.status = task_status
+                task.updated_at = now
+                task.completed_at = now if task_status == "completed" else None
+                conversation = session.get(Conversation, task.conversation_id)
+                if conversation is not None:
+                    conversation.status = "idle" if status == "completed" else task_status
+                    conversation.ended_at = now if task_status == "completed" else None
+                    conversation.updated_at = now
+            session.flush()
+            return _task_run_dict(row)
+
+    def list_task_runs(self, user_id: str, task_id: str) -> list[dict[str, Any]]:
+        with session_scope() as session:
+            rows = session.scalars(
+                select(TaskRun)
+                .where(
+                    TaskRun.tenant_id == tenant_id(),
+                    TaskRun.user_id == user_id,
+                    TaskRun.task_id == task_id,
+                )
+                .order_by(TaskRun.started_at, TaskRun.attempt)
+            ).all()
+            return [_task_run_dict(row) for row in rows]
+
+    def create_task_plan(self, user_id: str, task_id: str, content: str) -> dict[str, Any]:
+        now = time.time()
+        with session_scope() as session:
+            task = session.scalar(
+                select(AgentTask)
+                .where(
+                    AgentTask.tenant_id == tenant_id(),
+                    AgentTask.user_id == user_id,
+                    AgentTask.id == task_id,
+                )
+                .with_for_update()
+            )
+            if task is None:
+                raise KeyError(task_id)
+            existing = session.scalars(
+                select(TaskPlan).where(
+                    TaskPlan.tenant_id == tenant_id(),
+                    TaskPlan.task_id == task_id,
+                    TaskPlan.status.in_(("pending", "approved")),
+                )
+            ).all()
+            for prior in existing:
+                prior.status = "superseded"
+            version = int(
+                session.scalar(
+                    select(func.max(TaskPlan.version)).where(
+                        TaskPlan.tenant_id == tenant_id(), TaskPlan.task_id == task_id
+                    )
+                )
+                or 0
+            ) + 1
+            row = TaskPlan(
+                id=str(uuid.uuid4()),
+                tenant_id=tenant_id(),
+                task_id=task_id,
+                version=version,
+                content=content,
+                status="pending",
+                created_by=user_id,
+                approved_by=None,
+                created_at=now,
+                approved_at=None,
+            )
+            session.add(row)
+            task.status = "awaiting_approval"
+            task.updated_at = now
+            conversation = session.get(Conversation, task.conversation_id)
+            if conversation is not None:
+                conversation.plan_state = "plan_pending"
+                conversation.approved_at = None
+                conversation.status = "idle"
+                conversation.updated_at = now
+            session.flush()
+            return _task_plan_dict(row)
+
+    def get_latest_task_plan(self, user_id: str, task_id: str) -> dict[str, Any] | None:
+        with session_scope() as session:
+            owned_task = session.scalar(
+                select(AgentTask.id).where(
+                    AgentTask.tenant_id == tenant_id(),
+                    AgentTask.user_id == user_id,
+                    AgentTask.id == task_id,
+                )
+            )
+            if owned_task is None:
+                return None
+            row = session.scalar(
+                select(TaskPlan)
+                .where(TaskPlan.tenant_id == tenant_id(), TaskPlan.task_id == task_id)
+                .order_by(TaskPlan.version.desc())
+                .limit(1)
+            )
+            return _task_plan_dict(row) if row is not None else None
+
+    def approve_task_plan(self, user_id: str, task_id: str) -> dict[str, Any] | None:
+        now = time.time()
+        with session_scope() as session:
+            task = session.scalar(
+                select(AgentTask)
+                .where(
+                    AgentTask.tenant_id == tenant_id(),
+                    AgentTask.user_id == user_id,
+                    AgentTask.id == task_id,
+                )
+                .with_for_update()
+            )
+            if task is None:
+                return None
+            row = session.scalar(
+                select(TaskPlan)
+                .where(
+                    TaskPlan.tenant_id == tenant_id(),
+                    TaskPlan.task_id == task_id,
+                    TaskPlan.status == "pending",
+                )
+                .order_by(TaskPlan.version.desc())
+                .limit(1)
+            )
+            if row is None:
+                return None
+            row.status = "approved"
+            row.approved_by = user_id
+            row.approved_at = now
+            task.status = "ready"
+            task.updated_at = now
+            conversation = session.get(Conversation, task.conversation_id)
+            if conversation is not None:
+                conversation.plan_state = "plan_approved"
+                conversation.approved_at = now
+                conversation.updated_at = now
+            session.flush()
+            return _task_plan_dict(row)
+
+    def get_task_permission(self, user_id: str, task_id: str) -> dict[str, Any]:
+        now = time.time()
+        with session_scope() as session:
+            row = session.scalar(
+                select(PermissionLease)
+                .where(
+                    PermissionLease.tenant_id == tenant_id(),
+                    PermissionLease.user_id == user_id,
+                    PermissionLease.task_id == task_id,
+                    PermissionLease.revoked_at.is_(None),
+                    PermissionLease.expires_at > now,
+                )
+                .order_by(PermissionLease.created_at.desc())
+                .limit(1)
+            )
+            return _permission_dict(row)
+
+    def set_task_permission(
+        self, user_id: str, task_id: str, mode: str, ttl_seconds: int
+    ) -> dict[str, Any]:
+        now = time.time()
+        with session_scope() as session:
+            task = session.scalar(
+                select(AgentTask).where(
+                    AgentTask.tenant_id == tenant_id(),
+                    AgentTask.user_id == user_id,
+                    AgentTask.id == task_id,
+                )
+            )
+            if task is None:
+                raise KeyError(task_id)
+            active = session.scalars(
+                select(PermissionLease).where(
+                    PermissionLease.tenant_id == tenant_id(),
+                    PermissionLease.user_id == user_id,
+                    PermissionLease.task_id == task_id,
+                    PermissionLease.revoked_at.is_(None),
+                )
+            ).all()
+            for lease in active:
+                lease.revoked_at = now
+            if mode == "read":
+                return _permission_dict(None)
+            row = PermissionLease(
+                id=str(uuid.uuid4()),
+                tenant_id=tenant_id(),
+                task_id=task_id,
+                user_id=user_id,
+                mode=mode,
+                created_at=now,
+                expires_at=now + ttl_seconds,
+                revoked_at=None,
+            )
+            session.add(row)
+            session.flush()
+            return _permission_dict(row)
+
+    def revoke_task_permissions(self, user_id: str, task_id: str) -> None:
+        now = time.time()
+        with session_scope() as session:
+            rows = session.scalars(
+                select(PermissionLease).where(
+                    PermissionLease.tenant_id == tenant_id(),
+                    PermissionLease.user_id == user_id,
+                    PermissionLease.task_id == task_id,
+                    PermissionLease.revoked_at.is_(None),
+                )
+            ).all()
+            for row in rows:
+                row.revoked_at = now
+
+    def record_tool_event(
+        self,
+        *,
+        task_id: str,
+        run_id: str,
+        event_type: str,
+        status: str,
+        tool_name: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        now = time.time()
+        with session_scope() as session:
+            run = session.scalar(
+                select(TaskRun)
+                .where(TaskRun.tenant_id == tenant_id(), TaskRun.id == run_id)
+                .with_for_update()
+            )
+            if run is None or run.task_id != task_id:
+                raise KeyError(run_id)
+            sequence = int(
+                session.scalar(
+                    select(func.max(ToolEvent.sequence_no)).where(ToolEvent.run_id == run_id)
+                )
+                or 0
+            ) + 1
+            row = ToolEvent(
+                tenant_id=tenant_id(),
+                task_id=task_id,
+                run_id=run_id,
+                sequence_no=sequence,
+                event_type=event_type,
+                tool_name=tool_name,
+                status=status,
+                payload=payload or {},
+                created_at=now,
+            )
+            session.add(row)
+            session.flush()
+            return _tool_event_dict(row)
+
+    def list_tool_events(self, user_id: str, task_id: str) -> list[dict[str, Any]]:
+        with session_scope() as session:
+            owned_task = session.scalar(
+                select(AgentTask.id).where(
+                    AgentTask.tenant_id == tenant_id(),
+                    AgentTask.user_id == user_id,
+                    AgentTask.id == task_id,
+                )
+            )
+            if owned_task is None:
+                return []
+            rows = session.scalars(
+                select(ToolEvent)
+                .where(ToolEvent.tenant_id == tenant_id(), ToolEvent.task_id == task_id)
+                .order_by(ToolEvent.created_at, ToolEvent.id)
+            ).all()
+            return [_tool_event_dict(row) for row in rows]
+
+    def list_artifacts(self, user_id: str, task_id: str) -> list[dict[str, Any]]:
+        with session_scope() as session:
+            owned_task = session.scalar(
+                select(AgentTask.id).where(
+                    AgentTask.tenant_id == tenant_id(),
+                    AgentTask.user_id == user_id,
+                    AgentTask.id == task_id,
+                )
+            )
+            if owned_task is None:
+                return []
+            rows = session.scalars(
+                select(Artifact)
+                .where(Artifact.tenant_id == tenant_id(), Artifact.task_id == task_id)
+                .order_by(Artifact.created_at)
+            ).all()
+            return [
+                {
+                    "id": row.id,
+                    "task_id": row.task_id,
+                    "run_id": row.run_id,
+                    "name": row.name,
+                    "path": row.storage_path,
+                    "media_type": row.media_type,
+                    "size_bytes": row.size_bytes,
+                    "status": row.status,
+                    "created_at": row.created_at,
+                    "expires_at": row.expires_at,
+                }
+                for row in rows
+            ]
+
+    def delete_owned_task(self, user_id: str, task_id: str) -> str:
+        """Delete a task aggregate while retaining its independent audit trail."""
+        with session_scope() as session:
+            task = session.scalar(
+                select(AgentTask)
+                .where(
+                    AgentTask.tenant_id == tenant_id(),
+                    AgentTask.user_id == user_id,
+                    AgentTask.id == task_id,
+                )
+                .with_for_update()
+            )
+            if task is None:
+                return "missing"
+            if task.current_run_id:
+                return "running"
+            active_run = session.scalar(
+                select(ModelRun.id)
+                .where(
+                    ModelRun.tenant_id == tenant_id(),
+                    ModelRun.user_id == user_id,
+                    ModelRun.conversation_id == task.conversation_id,
+                    ModelRun.status == "running",
+                )
+                .limit(1)
+            )
+            if active_run is not None:
+                return "running"
+
+            session.add(
+                AuditEvent(
+                    tenant_id=tenant_id(),
+                    event_type="task_delete",
+                    conversation_id=task.conversation_id,
+                    user_id=user_id,
+                    status="completed",
+                    mode="agent",
+                    event_metadata={"task_id": task_id, "retained_audit": True},
+                    error=None,
+                    created_at=time.time(),
+                )
+            )
+            run_ids = select(TaskRun.id).where(
+                TaskRun.tenant_id == tenant_id(), TaskRun.task_id == task_id
+            )
+            session.execute(
+                delete(ToolEvent).where(
+                    ToolEvent.tenant_id == tenant_id(), ToolEvent.task_id == task_id
+                )
+            )
+            session.execute(
+                delete(Artifact).where(
+                    Artifact.tenant_id == tenant_id(), Artifact.task_id == task_id
+                )
+            )
+            session.execute(
+                delete(PermissionLease).where(
+                    PermissionLease.tenant_id == tenant_id(),
+                    PermissionLease.task_id == task_id,
+                )
+            )
+            session.execute(
+                delete(TaskPlan).where(
+                    TaskPlan.tenant_id == tenant_id(), TaskPlan.task_id == task_id
+                )
+            )
+            session.execute(delete(TaskRun).where(TaskRun.id.in_(run_ids)))
+            session.execute(delete(Message).where(Message.conversation_id == task.conversation_id))
+            session.execute(
+                delete(ModelRun).where(
+                    ModelRun.tenant_id == tenant_id(),
+                    ModelRun.user_id == user_id,
+                    ModelRun.conversation_id == task.conversation_id,
+                )
+            )
+            conversation = session.get(Conversation, task.conversation_id)
+            session.delete(task)
+            if conversation is not None:
+                session.delete(conversation)
+            return "deleted"
 
     def append_message(
         self,

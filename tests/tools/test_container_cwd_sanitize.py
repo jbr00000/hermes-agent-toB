@@ -29,6 +29,10 @@ class TestIsUnusableContainerCwd:
     def test_windows_forwardslash_host_path_rejected(self):
         assert tt._is_unusable_container_cwd("C:/Users/someuser") is True
 
+    def test_windows_non_system_drive_host_path_rejected(self):
+        assert tt._is_unusable_container_cwd(r"F:\project\Hermes Agent") is True
+        assert tt._is_unusable_container_cwd("D:/work/project") is True
+
     def test_posix_home_host_path_rejected(self):
         assert tt._is_unusable_container_cwd("/home/ben/projects") is True
 

@@ -8,7 +8,7 @@ import queue
 import threading
 import time
 import uuid
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -32,6 +32,65 @@ class ChatRequest(BaseModel):
 
 _active_agents: dict[str, tuple[str, object]] = {}
 _active_agents_lock = threading.Lock()
+
+_SENSITIVE_EVENT_KEYS = {
+    "api_key",
+    "apikey",
+    "authorization",
+    "cookie",
+    "password",
+    "secret",
+    "token",
+}
+
+
+def _is_sensitive_event_key(key: Any) -> bool:
+    normalized = str(key).strip().lower().replace("-", "_")
+    if normalized in _SENSITIVE_EVENT_KEYS:
+        return True
+    return any(
+        normalized.startswith(f"{segment}_") or normalized.endswith(f"_{segment}")
+        for segment in _SENSITIVE_EVENT_KEYS
+    )
+
+
+def _safe_event_value(value: Any, *, depth: int = 0) -> Any:
+    if depth >= 4:
+        return "[truncated]"
+    if isinstance(value, dict):
+        return {
+            str(key): (
+                "[redacted]"
+                if _is_sensitive_event_key(key)
+                else _safe_event_value(item, depth=depth + 1)
+            )
+            for key, item in list(value.items())[:50]
+        }
+    if isinstance(value, (list, tuple)):
+        return [_safe_event_value(item, depth=depth + 1) for item in list(value)[:50]]
+    if isinstance(value, str):
+        return value[:4000]
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return str(value)[:4000]
+
+
+def _tool_result_failed(result: Any) -> bool:
+    parsed = result
+    if isinstance(result, str):
+        try:
+            parsed = json.loads(result)
+        except (TypeError, json.JSONDecodeError):
+            return False
+    if not isinstance(parsed, dict):
+        return False
+    status = str(parsed.get("status") or "").strip().lower()
+    exit_code = parsed.get("exit_code")
+    return (
+        status in {"error", "failed", "failure"}
+        or bool(parsed.get("error"))
+        or (isinstance(exit_code, int) and exit_code != 0)
+    )
 
 
 def _agent_runtime_metadata(agent, mode: str | None) -> dict:
@@ -90,6 +149,18 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
         mode_state = resolve_chat_mode(user_id, session_id, req.mode)
         effective_mode = mode_state["tool_mode"]
 
+    task = (
+        repository.get_task_by_conversation(user_id, session_id)
+        if interaction_type == "agent"
+        else None
+    )
+    permission = (
+        repository.get_task_permission(user_id, task["id"])
+        if task is not None
+        else {"mode": "read"}
+    )
+    permission_mode = "read" if effective_mode in {"chat", "plan"} else permission["mode"]
+
     request_id = req.request_id or str(uuid.uuid4())
     lock_token = runtime_store.acquire_conversation(session_id)
     if lock_token is None:
@@ -99,6 +170,17 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
     except IntegrityError as exc:
         runtime_store.release_conversation(session_id, lock_token)
         raise HTTPException(status_code=409, detail="request_id already exists") from exc
+    if task is not None:
+        try:
+            repository.create_task_run(request_id, user_id, task["id"], effective_mode)
+        except RuntimeError as exc:
+            repository.finish_model_run(request_id, status="failed", error=str(exc))
+            runtime_store.release_conversation(session_id, lock_token)
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except Exception:
+            repository.finish_model_run(request_id, status="failed", error="task run creation failed")
+            runtime_store.release_conversation(session_id, lock_token)
+            raise
 
     repository.update_conversation(user_id, session_id, status="running")
     runtime_store.mark_request(request_id, "running")
@@ -122,6 +204,8 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
     stream_attached = threading.Event()
     stream_attached.set()
     agent_holder: dict[str, object] = {}
+    tool_statuses: dict[str, str] = {}
+    tool_status_lock = threading.Lock()
 
     def emit(event: str, data: dict) -> int:
         nonlocal event_sequence
@@ -139,6 +223,78 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
                 }
             )
         return event_id
+
+    def emit_tool_event(
+        event_type: str,
+        *,
+        tool_name: str | None,
+        status: str,
+        payload: dict[str, Any],
+    ) -> None:
+        if task is None:
+            return
+        stored = repository.record_tool_event(
+            task_id=task["id"],
+            run_id=request_id,
+            event_type=event_type,
+            tool_name=tool_name,
+            status=status,
+            payload=_safe_event_value(payload),
+        )
+        emit(
+            event_type,
+            {
+                **stored,
+                "task_id": task["id"],
+                "request_id": request_id,
+            },
+        )
+
+    def on_tool_start(tool_call_id: str, tool_name: str, display_args: Any) -> None:
+        if tool_name.startswith("_"):
+            return
+        emit_tool_event(
+            "tool.started",
+            tool_name=tool_name,
+            status="running",
+            payload={"tool_call_id": tool_call_id, "arguments": display_args},
+        )
+
+    def on_tool_complete(
+        tool_call_id: str,
+        tool_name: str,
+        display_args: Any,
+        result: Any,
+    ) -> None:
+        if tool_name.startswith("_"):
+            return
+        failed = _tool_result_failed(result)
+        with tool_status_lock:
+            tool_statuses[tool_name] = "failed" if failed else "completed"
+        emit_tool_event(
+            "tool.completed",
+            tool_name=tool_name,
+            status="failed" if failed else "completed",
+            payload={
+                "tool_call_id": tool_call_id,
+                "arguments": display_args,
+                "result": result,
+            },
+        )
+
+    def on_tool_progress(*args: Any, **kwargs: Any) -> None:
+        event_name = str(args[0]) if args else "tool.progress"
+        if event_name != "tool.progress":
+            return
+        tool_name = str(args[1]) if len(args) > 1 else None
+        if tool_name and tool_name.startswith("_"):
+            return
+        emit_tool_event(
+            "tool.progress",
+            tool_name=tool_name,
+            status="running",
+            payload={"arguments": list(args[2:]), "metadata": kwargs},
+        )
 
     def on_delta(chunk: str) -> None:
         nonlocal snapshot_last_saved_at
@@ -182,7 +338,16 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
                 title = " ".join(req.message.split()).strip()[:40] or title
                 repository.update_conversation(user_id, session_id, title=title)
 
-            user_message = repository.append_message(session_id, "user", req.message)
+            displayed_user_message = (
+                "执行已批准计划"
+                if task is not None and effective_mode == "execute"
+                else req.message
+            )
+            user_message = repository.append_message(
+                session_id,
+                "user",
+                displayed_user_message,
+            )
             emit(
                 "session",
                 {
@@ -198,6 +363,10 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
                 user_id=user_id,
                 prefill_messages=history,
                 mode=effective_mode,
+                permission_mode=permission_mode,
+                tool_progress_callback=on_tool_progress,
+                tool_start_callback=on_tool_start,
+                tool_complete_callback=on_tool_complete,
             )
             agent_holder["agent"] = agent
             with _active_agents_lock:
@@ -205,6 +374,7 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
 
             runtime_metadata = _agent_runtime_metadata(agent, effective_mode)
             runtime_metadata["plan_state"] = mode_state.get("state")
+            runtime_metadata["permission_mode"] = permission_mode
             model_config = {
                 "provider": runtime_metadata.get("provider"),
                 "reasoning_config": runtime_metadata.get("reasoning_config"),
@@ -228,7 +398,13 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
 
             final = agent.chat(req.message, stream_callback=on_delta) or ""
             cancelled = runtime_store.is_cancelled(request_id)
-            assistant_status = "cancelled" if cancelled else "completed"
+            with tool_status_lock:
+                unresolved_tool_failure = any(
+                    status == "failed" for status in tool_statuses.values()
+                )
+            assistant_status = (
+                "cancelled" if cancelled else "failed" if unresolved_tool_failure else "completed"
+            )
             duration_ms = max(0, int((time.monotonic() - run_started_at) * 1000))
             assistant_message = repository.append_message(
                 session_id,
@@ -238,13 +414,87 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
                 model_run_id=request_id,
                 duration_ms=duration_ms,
             )
-            if final and not cancelled:
+            if final and assistant_status == "completed":
                 try:
                     save_memory_candidate(user_id, session_id, req.message, final)
                 except Exception:
                     logger.debug("Could not save memory candidate", exc_info=True)
 
-            final_status = "cancelled" if cancelled else "completed"
+            final_status = assistant_status
+            if task is not None:
+                if cancelled:
+                    repository.finish_task_run(
+                        request_id,
+                        status="cancelled",
+                        task_status="cancelled",
+                    )
+                    repository.revoke_task_permissions(user_id, task["id"])
+                    emit(
+                        "task.status",
+                        {
+                            "task_id": task["id"],
+                            "request_id": request_id,
+                            "status": "cancelled",
+                            "permission_mode": "read",
+                        },
+                    )
+                elif unresolved_tool_failure:
+                    repository.finish_task_run(
+                        request_id,
+                        status="failed",
+                        task_status="failed",
+                        error="one or more tools failed",
+                    )
+                    repository.revoke_task_permissions(user_id, task["id"])
+                    emit(
+                        "task.status",
+                        {
+                            "task_id": task["id"],
+                            "request_id": request_id,
+                            "status": "failed",
+                            "permission_mode": "read",
+                        },
+                    )
+                elif effective_mode == "plan":
+                    plan = repository.create_task_plan(user_id, task["id"], final)
+                    repository.finish_task_run(
+                        request_id,
+                        status="completed",
+                        task_status="awaiting_approval",
+                    )
+                    emit(
+                        "plan.required",
+                        {
+                            "task_id": task["id"],
+                            "request_id": request_id,
+                            "plan": plan,
+                        },
+                    )
+                    emit(
+                        "task.status",
+                        {
+                            "task_id": task["id"],
+                            "request_id": request_id,
+                            "status": "awaiting_approval",
+                            "permission_mode": "read",
+                        },
+                    )
+                else:
+                    repository.finish_task_run(
+                        request_id,
+                        status="completed",
+                        task_status="completed",
+                    )
+                    repository.revoke_task_permissions(user_id, task["id"])
+                    emit(
+                        "task.status",
+                        {
+                            "task_id": task["id"],
+                            "request_id": request_id,
+                            "status": "completed",
+                            "permission_mode": "read",
+                        },
+                    )
             record_event(
                 event_type="chat_turn",
                 session_id=session_id,
@@ -262,6 +512,7 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
                 status=final_status,
                 provider=runtime_metadata.get("provider"),
                 model=runtime_metadata.get("model"),
+                error="one or more tools failed" if unresolved_tool_failure else None,
             )
             repository.update_conversation(user_id, session_id, status="idle")
             final_event_id = emit(
@@ -285,8 +536,15 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
                 ttl_seconds=300,
             )
         except Exception as exc:
-            logger.exception("Chat request %s failed", request_id)
+            cancelled = runtime_store.is_cancelled(request_id)
+            if cancelled:
+                logger.info("Chat request %s cancelled during agent interruption", request_id)
+            else:
+                logger.exception("Chat request %s failed", request_id)
             error_text = f"{type(exc).__name__}: {exc}"
+            with snapshot_lock:
+                partial_content = "".join(snapshot_chunks)
+            assistant_message = None
             try:
                 from server.audit import record_event
 
@@ -294,31 +552,73 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
                     event_type="chat_turn",
                     session_id=session_id,
                     user_id=user_id,
-                    status="failed",
+                    status="cancelled" if cancelled else "failed",
                     mode=effective_mode,
                     metadata={"request_id": request_id, "plan_state": mode_state.get("state")},
-                    error=error_text,
+                    error=None if cancelled else error_text,
                 )
-                repository.finish_model_run(request_id, status="failed", error=error_text)
+                if cancelled:
+                    duration_ms = max(0, int((time.monotonic() - run_started_at) * 1000))
+                    assistant_message = repository.append_message(
+                        session_id,
+                        "assistant",
+                        partial_content,
+                        status="cancelled",
+                        model_run_id=request_id,
+                        duration_ms=duration_ms,
+                    )
+                repository.finish_model_run(
+                    request_id,
+                    status="cancelled" if cancelled else "failed",
+                    error=None if cancelled else error_text,
+                )
                 repository.update_conversation(user_id, session_id, status="idle")
+                if task is not None:
+                    repository.finish_task_run(
+                        request_id,
+                        status="cancelled" if cancelled else "failed",
+                        task_status="cancelled" if cancelled else "failed",
+                        error=None if cancelled else error_text,
+                    )
+                    repository.revoke_task_permissions(user_id, task["id"])
+                    emit(
+                        "task.status",
+                        {
+                            "task_id": task["id"],
+                            "request_id": request_id,
+                            "status": "cancelled" if cancelled else "failed",
+                            "permission_mode": "read",
+                        },
+                    )
             except Exception:
-                logger.exception("Failed to persist Chat failure state")
-            error_event_id = emit(
-                "error",
-                {
-                    "message": "回答生成失败，请稍后重试",
-                    "code": type(exc).__name__,
-                    "request_id": request_id,
-                },
-            )
-            with snapshot_lock:
-                partial_content = "".join(snapshot_chunks)
+                logger.exception("Failed to persist Chat terminal state")
+            if cancelled:
+                terminal_event_id = emit(
+                    "final",
+                    {
+                        "content": partial_content,
+                        "message": assistant_message,
+                        "session_id": session_id,
+                        "request_id": request_id,
+                        "title": title,
+                        "status": "cancelled",
+                    },
+                )
+            else:
+                terminal_event_id = emit(
+                    "error",
+                    {
+                        "message": "回答生成失败，请稍后重试",
+                        "code": type(exc).__name__,
+                        "request_id": request_id,
+                    },
+                )
             runtime_store.save_chat_snapshot(
                 request_id,
                 session_id,
                 partial_content,
-                error_event_id,
-                status="failed",
+                terminal_event_id,
+                status="cancelled" if cancelled else "failed",
                 started_at=snapshot_started_at,
                 ttl_seconds=300,
             )
@@ -329,6 +629,17 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
             runtime_store.release_conversation(session_id, lock_token)
             if stream_attached.is_set():
                 event_queue.put(sentinel)
+
+    if task is not None:
+        emit(
+            "task.status",
+            {
+                "task_id": task["id"],
+                "request_id": request_id,
+                "status": "planning" if effective_mode == "plan" else "running",
+                "permission_mode": permission_mode,
+            },
+        )
 
     threading.Thread(target=run_agent, daemon=True, name=f"chat-{request_id[:8]}").start()
 

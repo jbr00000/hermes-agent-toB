@@ -39,12 +39,20 @@ agent:
 
     monkeypatch.setattr(memory, "list_memory_contents", lambda _user_id: [])
 
-    build_agent(session_id="s1", user_id="u1", mode="execute")
+    callback = lambda *args: None
+    build_agent(
+        session_id="s1",
+        user_id="u1",
+        mode="execute",
+        permission_mode="full",
+        tool_start_callback=callback,
+    )
 
     assert captured["provider"] == "custom"
     assert captured["model"] == "llama-3.3"
     assert captured["reasoning_config"] == {"enabled": True, "effort": "low"}
-    assert captured["enabled_toolsets"] == ["db", "session_search", "terminal"]
+    assert captured["enabled_toolsets"] == ["db", "terminal"]
+    assert captured["tool_start_callback"] is callback
 
 
 def test_build_agent_plan_mode_removes_terminal_toolset(monkeypatch, tmp_path) -> None:
@@ -70,12 +78,13 @@ model: deepseek-v4-pro
 
     build_agent(session_id="s1", user_id="u1", mode="plan")
 
-    assert captured["enabled_toolsets"] == ["db", "session_search"]
+    assert captured["enabled_toolsets"] == ["db"]
     assert "PLAN mode" in captured["ephemeral_system_prompt"]
+    assert "Docker-sandboxed terminal" in captured["ephemeral_system_prompt"]
     assert "remember this" in captured["ephemeral_system_prompt"]
 
 
-def test_build_agent_adds_enabled_deployment_mcp_toolsets(monkeypatch, tmp_path) -> None:
+def test_build_agent_defers_deployment_mcp_toolsets(monkeypatch, tmp_path) -> None:
     home = tmp_path / "hermes_home"
     home.mkdir()
     monkeypatch.setenv("HERMES_HOME", str(home))
@@ -107,6 +116,5 @@ mcp_servers:
 
     build_agent(session_id="s1", user_id="u1", mode="execute")
 
-    assert registered == [True]
-    assert "mcp-metrics" in captured["enabled_toolsets"]
-    assert "mcp-disabled-one" not in captured["enabled_toolsets"]
+    assert registered == []
+    assert captured["enabled_toolsets"] == ["db"]

@@ -22,6 +22,10 @@ class HermesWebDb extends Dexie {
       tabs: 'id, type, refId, order, updatedAt',
       tabUiState: 'tabId, updatedAt',
     })
+    this.version(2).stores({
+      tabs: 'id, ownerId, type, refId, order, updatedAt',
+      tabUiState: 'tabId, updatedAt',
+    })
   }
 }
 

@@ -8,7 +8,7 @@ export const spaces: KnowledgeSpace[] = [
 
 export const sessions: SessionSummary[] = [
   { id: 's-1001', title: '智库平台费用测算文档总结', space: '轨道公司', status: 'running', updatedAt: '09:42', risk: 'medium' },
-  { id: 's-1002', title: '合同条款差异分析', space: '合同资料', status: 'plan_pending', updatedAt: '昨天', risk: 'high' },
+  { id: 's-1002', title: '合同条款差异分析', space: '合同资料', status: 'awaiting_approval', updatedAt: '昨天', risk: 'high' },
   { id: 's-1003', title: '知识库入库规则梳理', space: '费用测算', status: 'completed', updatedAt: '周五', risk: 'low' },
 ]
 

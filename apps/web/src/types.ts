@@ -4,6 +4,7 @@ export type WorkspaceMode = 'agent' | 'chat'
 
 export interface WorkTab {
   id: string
+  ownerId: string
   type: TabType
   title: string
   refId: string
@@ -13,6 +14,87 @@ export interface WorkTab {
 }
 
 export type PermissionMode = 'read' | 'controlled' | 'full'
+
+export type AgentTaskStatus =
+  | 'draft'
+  | 'planning'
+  | 'awaiting_approval'
+  | 'ready'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+
+export interface TaskPermission {
+  id: string | null
+  mode: PermissionMode
+  createdAt: number | null
+  expiresAt: number | null
+}
+
+export interface TaskPlan {
+  id: string
+  taskId: string
+  version: number
+  content: string
+  status: 'pending' | 'approved' | 'superseded'
+  createdAt: number
+  approvedAt: number | null
+}
+
+export interface TaskRun {
+  id: string
+  taskId: string
+  phase: 'plan' | 'execute'
+  attempt: number
+  status: 'running' | 'completed' | 'failed' | 'cancelled'
+  error: string | null
+  startedAt: number
+  completedAt: number | null
+}
+
+export interface ToolEvent {
+  id: number
+  taskId: string
+  runId: string
+  sequence: number
+  eventType: 'tool.started' | 'tool.progress' | 'tool.completed' | string
+  toolName: string | null
+  status: string
+  payload: Record<string, unknown>
+  createdAt: number
+}
+
+export interface AgentTaskDetail {
+  id: string
+  sessionId: string
+  title: string
+  status: AgentTaskStatus
+  risk: 'low' | 'medium' | 'high' | 'unknown'
+  currentRunId: string | null
+  createdAt: number
+  updatedAt: number
+  completedAt: number | null
+  session: {
+    id: string
+    title: string
+    status: string
+  }
+  messages: ChatMessage[]
+  activeRun: ActiveModelRun | null
+  plan: TaskPlan | null
+  permission: TaskPermission
+  runs: TaskRun[]
+  events: ToolEvent[]
+  artifacts: Array<{
+    id: string
+    name: string
+    path: string
+    mediaType: string | null
+    sizeBytes: number | null
+    status: string
+  }>
+}
 
 export interface AuthUser {
   id: string
@@ -24,9 +106,9 @@ export interface SessionSummary {
   id: string
   title: string
   space: string
-  status: 'idle' | 'running' | 'plan_pending' | 'approved' | 'completed'
+  status: AgentTaskStatus
   updatedAt: string
-  risk: 'low' | 'medium' | 'high'
+  risk: 'low' | 'medium' | 'high' | 'unknown'
 }
 
 export interface ConversationSummary {

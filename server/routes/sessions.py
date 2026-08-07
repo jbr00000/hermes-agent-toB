@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from server import sessions as sess
 from server.deps import get_current_user
-from server.storage import get_runtime_store
+from server.storage import get_repository, get_runtime_store
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -76,7 +76,13 @@ def get_session_detail(session_id: str, user: dict = Depends(get_current_user)):
 
 @router.delete("/{session_id}")
 def delete_session(session_id: str, user: dict = Depends(get_current_user)):
-    result = sess.delete_owned_session(user["id"], session_id)
+    repository = get_repository()
+    task = repository.get_task_by_conversation(user["id"], session_id)
+    result = (
+        repository.delete_owned_task(user["id"], task["id"])
+        if task is not None
+        else sess.delete_owned_session(user["id"], session_id)
+    )
     if result == "missing":
         raise HTTPException(status_code=404, detail="session not found")
     if result == "running":

@@ -1215,6 +1215,7 @@ def _safe_getcwd() -> str:
 # (``C:\Users\...`` / ``C:/Users/...``) — the latter is how a Windows host's
 # cwd looks when it leaks toward a Linux container's ``-w`` flag.
 _HOST_CWD_PREFIXES = ("/Users/", "/home/", "C:\\", "C:/")
+_WINDOWS_DRIVE_PATH = re.compile(r"^[A-Za-z]:[\\/]")
 
 _CONTAINER_BACKENDS = frozenset({"docker", "singularity", "modal", "daytona"})
 
@@ -1230,7 +1231,7 @@ def _is_unusable_container_cwd(cwd: str) -> bool:
     """
     if not cwd:
         return False
-    if any(cwd.startswith(p) for p in _HOST_CWD_PREFIXES):
+    if _WINDOWS_DRIVE_PATH.match(cwd) or any(cwd.startswith(p) for p in _HOST_CWD_PREFIXES):
         return True
     # Relative paths (".", "src/") can't be a container workdir either. Windows
     # drive paths are absolute on Windows but os.path.isabs() is False on a
@@ -1314,7 +1315,8 @@ def _get_env_config() -> Dict[str, Any]:
         docker_cwd_source = os.getenv("TERMINAL_CWD") or _safe_getcwd()
         candidate = os.path.abspath(os.path.expanduser(docker_cwd_source))
         if (
-            any(candidate.startswith(p) for p in _HOST_CWD_PREFIXES)
+            _WINDOWS_DRIVE_PATH.match(candidate)
+            or any(candidate.startswith(p) for p in _HOST_CWD_PREFIXES)
             or (os.path.isabs(candidate) and os.path.isdir(candidate) and not candidate.startswith(("/workspace", "/root")))
         ):
             host_cwd = candidate

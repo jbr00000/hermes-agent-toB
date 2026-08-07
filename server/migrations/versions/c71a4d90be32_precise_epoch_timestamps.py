@@ -39,6 +39,17 @@ TIMESTAMP_COLUMNS = {
 
 
 def _alter_timestamps(source_type: sa.types.TypeEngine, target_type: sa.types.TypeEngine) -> None:
+    if op.get_bind().dialect.name == "sqlite":
+        for table, columns in TIMESTAMP_COLUMNS.items():
+            with op.batch_alter_table(table) as batch_op:
+                for column, nullable in columns:
+                    batch_op.alter_column(
+                        column,
+                        existing_type=source_type,
+                        type_=target_type,
+                        existing_nullable=nullable,
+                    )
+        return
     for table, columns in TIMESTAMP_COLUMNS.items():
         for column, nullable in columns:
             op.alter_column(

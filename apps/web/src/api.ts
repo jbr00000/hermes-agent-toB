@@ -1,9 +1,16 @@
 import type {
   ActiveModelRun,
+  AgentTaskDetail,
   AuthUser,
   ChatMessage,
   ConversationDetail,
   ConversationSummary,
+  PermissionMode,
+  SessionSummary,
+  TaskPermission,
+  TaskPlan,
+  TaskRun,
+  ToolEvent,
 } from './types'
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') ?? '/api'
@@ -47,6 +54,78 @@ interface BackendModelRun {
   sequence?: number
   snapshot_updated_at?: number | null
 }
+
+interface BackendTaskPermission {
+  id: string | null
+  mode: PermissionMode
+  created_at: number | null
+  expires_at: number | null
+}
+
+interface BackendTaskPlan {
+  id: string
+  task_id: string
+  version: number
+  content: string
+  status: TaskPlan['status']
+  created_at: number
+  approved_at: number | null
+}
+
+interface BackendTaskRun {
+  id: string
+  task_id: string
+  phase: TaskRun['phase']
+  attempt: number
+  status: TaskRun['status']
+  error: string | null
+  started_at: number
+  completed_at: number | null
+}
+
+interface BackendToolEvent {
+  id: number
+  task_id: string
+  run_id: string
+  sequence: number
+  event_type: string
+  tool_name: string | null
+  status: string
+  payload: Record<string, unknown>
+  created_at: number
+}
+
+interface BackendTask {
+  id: string
+  session_id: string
+  title: string
+  status: AgentTaskDetail['status']
+  risk_level: AgentTaskDetail['risk']
+  current_run_id: string | null
+  created_at: number
+  updated_at: number
+  completed_at: number | null
+  session: BackendSession
+  messages: BackendMessage[]
+  active_run: BackendModelRun | null
+  plan: BackendTaskPlan | null
+  permission: BackendTaskPermission
+  runs: BackendTaskRun[]
+  events: BackendToolEvent[]
+  artifacts: Array<{
+    id: string
+    name: string
+    path: string
+    media_type: string | null
+    size_bytes: number | null
+    status: string
+  }>
+}
+
+type BackendTaskSummary = Pick<
+  BackendTask,
+  'id' | 'title' | 'status' | 'risk_level' | 'updated_at'
+>
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -151,6 +230,99 @@ function toActiveRun(row: BackendModelRun | null): ActiveModelRun | null {
   }
 }
 
+function toPermission(row: BackendTaskPermission): TaskPermission {
+  return {
+    id: row.id,
+    mode: row.mode,
+    createdAt: row.created_at === null ? null : row.created_at * 1000,
+    expiresAt: row.expires_at === null ? null : row.expires_at * 1000,
+  }
+}
+
+function toPlan(row: BackendTaskPlan | null): TaskPlan | null {
+  if (!row) return null
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    version: row.version,
+    content: row.content,
+    status: row.status,
+    createdAt: row.created_at * 1000,
+    approvedAt: row.approved_at === null ? null : row.approved_at * 1000,
+  }
+}
+
+function toTaskRun(row: BackendTaskRun): TaskRun {
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    phase: row.phase,
+    attempt: row.attempt,
+    status: row.status,
+    error: row.error,
+    startedAt: row.started_at * 1000,
+    completedAt: row.completed_at === null ? null : row.completed_at * 1000,
+  }
+}
+
+function toToolEvent(row: BackendToolEvent): ToolEvent {
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    runId: row.run_id,
+    sequence: row.sequence,
+    eventType: row.event_type,
+    toolName: row.tool_name,
+    status: row.status,
+    payload: row.payload,
+    createdAt: row.created_at * 1000,
+  }
+}
+
+function toTask(row: BackendTask): AgentTaskDetail {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    title: row.title,
+    status: row.status,
+    risk: row.risk_level,
+    currentRunId: row.current_run_id,
+    createdAt: row.created_at * 1000,
+    updatedAt: row.updated_at * 1000,
+    completedAt: row.completed_at === null ? null : row.completed_at * 1000,
+    session: {
+      id: row.session.id,
+      title: row.session.title,
+      status: row.session.status,
+    },
+    messages: row.messages.map(toMessage),
+    activeRun: toActiveRun(row.active_run),
+    plan: toPlan(row.plan),
+    permission: toPermission(row.permission),
+    runs: row.runs.map(toTaskRun),
+    events: row.events.map(toToolEvent),
+    artifacts: row.artifacts.map((artifact) => ({
+      id: artifact.id,
+      name: artifact.name,
+      path: artifact.path,
+      mediaType: artifact.media_type,
+      sizeBytes: artifact.size_bytes,
+      status: artifact.status,
+    })),
+  }
+}
+
+function toTaskSummary(row: BackendTaskSummary): SessionSummary {
+  return {
+    id: row.id,
+    title: row.title,
+    space: '企业工作区',
+    status: row.status,
+    updatedAt: formatTime(row.updated_at),
+    risk: row.risk_level,
+  }
+}
+
 export interface ChatStreamEvent {
   session_id?: string
   request_id?: string
@@ -171,6 +343,7 @@ export interface ChatStreamHandlers {
   onDelta?: (event: ChatStreamEvent) => void
   onFinal?: (event: ChatStreamEvent) => void
   onError?: (event: ChatStreamEvent) => void
+  onEvent?: (eventName: string, event: ChatStreamEvent) => void
 }
 
 function dispatchSseBlock(block: string, handlers: ChatStreamHandlers): void {
@@ -186,10 +359,30 @@ function dispatchSseBlock(block: string, handlers: ChatStreamHandlers): void {
     ...raw,
     message: raw.message && typeof raw.message !== 'string' ? toMessage(raw.message) : raw.message,
   }
+  handlers.onEvent?.(event, payload)
   if (event === 'session') handlers.onSession?.(payload)
   if (event === 'delta') handlers.onDelta?.(payload)
   if (event === 'final') handlers.onFinal?.(payload)
   if (event === 'error') handlers.onError?.(payload)
+}
+
+async function consumeEventStream(
+  response: Response,
+  handlers: ChatStreamHandlers,
+): Promise<void> {
+  if (!response.body) throw new ApiError(502, '服务端未返回流式响应')
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    buffer += decoder.decode(value, { stream: !done }).replace(/\r\n/g, '\n')
+    const blocks = buffer.split('\n\n')
+    buffer = blocks.pop() ?? ''
+    for (const block of blocks) dispatchSseBlock(block, handlers)
+    if (done) break
+  }
+  if (buffer.trim()) dispatchSseBlock(buffer, handlers)
 }
 
 export const api = {
@@ -275,6 +468,98 @@ export const api = {
     if (!response.ok) throw await parseError(response)
   },
 
+  async listTasks(): Promise<SessionSummary[]> {
+    const response = await apiFetch('/tasks')
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as { tasks: BackendTaskSummary[] }
+    return body.tasks.map(toTaskSummary)
+  },
+
+  async createTask(title?: string): Promise<AgentTaskDetail> {
+    const response = await apiFetch('/tasks', {
+      method: 'POST',
+      body: JSON.stringify({ title }),
+    })
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as { task: BackendTask }
+    return toTask(body.task)
+  },
+
+  async getTask(taskId: string): Promise<AgentTaskDetail> {
+    const response = await apiFetch(`/tasks/${encodeURIComponent(taskId)}`)
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as { task: BackendTask }
+    return toTask(body.task)
+  },
+
+  async deleteTask(taskId: string): Promise<void> {
+    const response = await apiFetch(`/tasks/${encodeURIComponent(taskId)}`, {
+      method: 'DELETE',
+    })
+    if (!response.ok) throw await parseError(response)
+  },
+
+  async setTaskPermission(
+    taskId: string,
+    mode: PermissionMode,
+    ttlSeconds = 900,
+  ): Promise<TaskPermission> {
+    const response = await apiFetch(`/tasks/${encodeURIComponent(taskId)}/permission`, {
+      method: 'PUT',
+      body: JSON.stringify({ mode, ttl_seconds: ttlSeconds }),
+    })
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as { permission: BackendTaskPermission }
+    return toPermission(body.permission)
+  },
+
+  async approveTask(taskId: string): Promise<AgentTaskDetail> {
+    const response = await apiFetch(`/tasks/${encodeURIComponent(taskId)}/approve`, {
+      method: 'POST',
+    })
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as { task: BackendTask }
+    return toTask(body.task)
+  },
+
+  async streamTaskPlan(
+    taskId: string,
+    requestId: string,
+    message: string,
+    handlers: ChatStreamHandlers,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const response = await apiFetch(`/tasks/${encodeURIComponent(taskId)}/plan`, {
+      method: 'POST',
+      signal,
+      body: JSON.stringify({ request_id: requestId, message }),
+    })
+    if (!response.ok) throw await parseError(response)
+    await consumeEventStream(response, handlers)
+  },
+
+  async streamTaskExecute(
+    taskId: string,
+    requestId: string,
+    handlers: ChatStreamHandlers,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const response = await apiFetch(`/tasks/${encodeURIComponent(taskId)}/execute`, {
+      method: 'POST',
+      signal,
+      body: JSON.stringify({ request_id: requestId }),
+    })
+    if (!response.ok) throw await parseError(response)
+    await consumeEventStream(response, handlers)
+  },
+
+  async cancelTask(taskId: string): Promise<void> {
+    const response = await apiFetch(`/tasks/${encodeURIComponent(taskId)}/cancel`, {
+      method: 'POST',
+    })
+    if (!response.ok) throw await parseError(response)
+  },
+
   async streamChat(
     sessionId: string,
     requestId: string,
@@ -293,20 +578,7 @@ export const api = {
       }),
     })
     if (!response.ok) throw await parseError(response)
-    if (!response.body) throw new ApiError(502, '服务端未返回流式响应')
-
-    const reader = response.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-    while (true) {
-      const { done, value } = await reader.read()
-      buffer += decoder.decode(value, { stream: !done }).replace(/\r\n/g, '\n')
-      const blocks = buffer.split('\n\n')
-      buffer = blocks.pop() ?? ''
-      for (const block of blocks) dispatchSseBlock(block, handlers)
-      if (done) break
-    }
-    if (buffer.trim()) dispatchSseBlock(buffer, handlers)
+    await consumeEventStream(response, handlers)
   },
 
   async cancelChat(requestId: string): Promise<void> {

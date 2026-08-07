@@ -116,6 +116,117 @@ class ModelRun(Base):
     completed_at: Mapped[float | None] = mapped_column(Double)
 
 
+class AgentTask(Base):
+    __tablename__ = "agent_tasks"
+    __table_args__ = (
+        UniqueConstraint("conversation_id", name="uq_agent_tasks_conversation"),
+        Index("idx_agent_tasks_owner_updated", "tenant_id", "user_id", "updated_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    conversation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    title: Mapped[str] = mapped_column(String(100), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
+    risk_level: Mapped[str] = mapped_column(String(16), nullable=False, default="unknown")
+    current_run_id: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[float] = mapped_column(Double, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Double, nullable=False)
+    completed_at: Mapped[float | None] = mapped_column(Double)
+
+
+class TaskRun(Base):
+    __tablename__ = "task_runs"
+    __table_args__ = (
+        Index("idx_task_runs_task_started", "tenant_id", "task_id", "started_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    task_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    phase: Mapped[str] = mapped_column(String(16), nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    error: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[float] = mapped_column(Double, nullable=False)
+    completed_at: Mapped[float | None] = mapped_column(Double)
+
+
+class TaskPlan(Base):
+    __tablename__ = "task_plans"
+    __table_args__ = (
+        UniqueConstraint("task_id", "version", name="uq_task_plans_task_version"),
+        Index("idx_task_plans_task_created", "tenant_id", "task_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    task_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    created_by: Mapped[str] = mapped_column(String(36), nullable=False)
+    approved_by: Mapped[str | None] = mapped_column(String(36))
+    created_at: Mapped[float] = mapped_column(Double, nullable=False)
+    approved_at: Mapped[float | None] = mapped_column(Double)
+
+
+class PermissionLease(Base):
+    __tablename__ = "permission_leases"
+    __table_args__ = (
+        Index("idx_permission_leases_task_active", "tenant_id", "task_id", "expires_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    task_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[float] = mapped_column(Double, nullable=False)
+    expires_at: Mapped[float] = mapped_column(Double, nullable=False)
+    revoked_at: Mapped[float | None] = mapped_column(Double)
+
+
+class ToolEvent(Base):
+    __tablename__ = "tool_events"
+    __table_args__ = (
+        UniqueConstraint("run_id", "sequence_no", name="uq_tool_events_run_sequence"),
+        Index("idx_tool_events_task_created", "tenant_id", "task_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    task_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    sequence_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    tool_name: Mapped[str | None] = mapped_column(String(128))
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[float] = mapped_column(Double, nullable=False)
+
+
+class Artifact(Base):
+    __tablename__ = "artifacts"
+    __table_args__ = (
+        Index("idx_artifacts_task_created", "tenant_id", "task_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    task_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    run_id: Mapped[str | None] = mapped_column(String(64))
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    storage_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    media_type: Mapped[str | None] = mapped_column(String(128))
+    size_bytes: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    created_at: Mapped[float] = mapped_column(Double, nullable=False)
+    expires_at: Mapped[float | None] = mapped_column(Double)
+
+
 class MemoryItem(Base):
     __tablename__ = "memory_items"
     __table_args__ = (Index("idx_memory_items_owner_created", "tenant_id", "user_id", "created_at"),)
