@@ -23,6 +23,10 @@ class AgentWorker:
         self.repository = get_repository()
         self._last_recovery_at = 0.0
 
+    @staticmethod
+    def max_delivery_attempts() -> int:
+        return max(1, int(os.environ.get("HERMES_AGENT_MAX_ATTEMPTS", "3")))
+
     def _recover_job(self, job: dict) -> None:
         request_id = str(job["request_id"])
         run = self.repository.get_task_run(request_id)
@@ -31,6 +35,21 @@ class AgentWorker:
                 request_id,
                 self.worker_id,
                 status=run["status"] if run else "missing",
+                allow_stale=True,
+            )
+            return
+        state = self.runtime_store.agent_job_state(request_id) or {}
+        if state.get("state") == "unavailable":
+            return
+        if int(state.get("attempt") or 0) >= self.max_delivery_attempts():
+            reason = (
+                f"Agent job exceeded {self.max_delivery_attempts()} delivery attempts"
+            )
+            fail_interrupted_execute_job(job, reason)
+            self.runtime_store.finish_agent_job(
+                request_id,
+                self.worker_id,
+                status="failed",
                 allow_stale=True,
             )
             return
@@ -48,19 +67,37 @@ class AgentWorker:
         )
 
     def recover(self) -> None:
-        for job in self.runtime_store.take_expired_agent_jobs():
-            self._recover_job(job)
+        try:
+            expired_jobs = self.runtime_store.take_expired_agent_jobs()
+        except RuntimeError:
+            expired_jobs = []
+            logger.warning("Redis Agent recovery scan unavailable", exc_info=True)
+        for job in expired_jobs:
+            try:
+                self._recover_job(job)
+            except Exception:
+                logger.exception("Could not recover Agent job %s", job.get("request_id"))
 
-        for run in self.repository.list_recoverable_task_runs():
+        try:
+            recoverable_runs = self.repository.list_recoverable_task_runs()
+        except Exception:
+            logger.warning("MySQL Agent recovery scan unavailable", exc_info=True)
+            return
+        for run in recoverable_runs:
             job = run.get("request_payload") or {}
             if not job or not job.get("request_id"):
                 if run["status"] == "running":
                     logger.error("Cannot recover Agent run %s without payload", run["id"])
                 continue
             state = self.runtime_store.agent_job_state(run["id"])
+            if state and state.get("state") == "unavailable":
+                continue
             if state and state.get("state") in {"queued", "processing"}:
                 continue
-            self._recover_job(job)
+            try:
+                self._recover_job(job)
+            except Exception:
+                logger.exception("Could not recover Agent run %s", run["id"])
 
     def run_once(self, *, timeout_seconds: int = 2) -> bool:
         self.runtime_store.touch_worker(self.worker_id)
@@ -75,6 +112,15 @@ class AgentWorker:
         if job is None:
             return False
         request_id = str(job["request_id"])
+        if int(job.get("delivery_attempt") or 0) > self.max_delivery_attempts():
+            fail_interrupted_execute_job(
+                job,
+                f"Agent job exceeded {self.max_delivery_attempts()} delivery attempts",
+            )
+            self.runtime_store.finish_agent_job(
+                request_id, self.worker_id, status="failed"
+            )
+            return True
         status = "failed"
         try:
             status = execute_agent_job(job, self.worker_id)

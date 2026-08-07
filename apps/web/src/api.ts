@@ -91,6 +91,7 @@ interface BackendToolEvent {
   sequence: number
   event_type: string
   tool_name: string | null
+  risk_level: ToolEvent['riskLevel']
   status: string
   payload: Record<string, unknown>
   created_at: number
@@ -99,6 +100,7 @@ interface BackendToolEvent {
 interface BackendTask {
   id: string
   session_id: string
+  source_session_id: string | null
   title: string
   status: AgentTaskDetail['status']
   risk_level: AgentTaskDetail['risk']
@@ -275,6 +277,7 @@ function toToolEvent(row: BackendToolEvent): ToolEvent {
     sequence: row.sequence,
     eventType: row.event_type,
     toolName: row.tool_name,
+    riskLevel: row.risk_level,
     status: row.status,
     payload: row.payload,
     createdAt: row.created_at * 1000,
@@ -285,6 +288,7 @@ function toTask(row: BackendTask): AgentTaskDetail {
   return {
     id: row.id,
     sessionId: row.session_id,
+    sourceSessionId: row.source_session_id,
     title: row.title,
     status: row.status,
     risk: row.risk_level,
@@ -477,10 +481,10 @@ export const api = {
     return body.tasks.map(toTaskSummary)
   },
 
-  async createTask(title?: string): Promise<AgentTaskDetail> {
+  async createTask(title?: string, sourceSessionId?: string): Promise<AgentTaskDetail> {
     const response = await apiFetch('/tasks', {
       method: 'POST',
-      body: JSON.stringify({ title }),
+      body: JSON.stringify({ title, source_session_id: sourceSessionId }),
     })
     if (!response.ok) throw await parseError(response)
     const body = await response.json() as { task: BackendTask }

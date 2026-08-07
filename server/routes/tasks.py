@@ -17,6 +17,7 @@ router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 class CreateTaskRequest(BaseModel):
     title: str | None = Field(default=None, max_length=100)
+    source_session_id: str | None = Field(default=None, min_length=1, max_length=64)
 
 
 class PlanTaskRequest(BaseModel):
@@ -70,7 +71,16 @@ def _task_detail(user_id: str, task_id: str) -> dict:
 
 @router.post("", status_code=201)
 def create_task(req: CreateTaskRequest, user: dict = Depends(get_current_user)):
-    task = get_repository().create_agent_task(user["id"], req.title)
+    try:
+        task = get_repository().create_agent_task(
+            user["id"], req.title, source_session_id=req.source_session_id
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="source Chat session not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"task": _task_detail(user["id"], task["id"])}
 
 
@@ -232,14 +242,17 @@ async def execute_task(
 
 @router.post("/{task_id}/cancel", status_code=202)
 def cancel_task(task_id: str, user: dict = Depends(get_current_user)):
-    task = get_repository().get_owned_task(user["id"], task_id)
+    repository = get_repository()
+    task = repository.get_owned_task(user["id"], task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="task not found")
     request_id = task.get("current_run_id")
     if not request_id:
         raise HTTPException(status_code=409, detail="task is not running")
-    run = get_repository().get_owned_model_run(user["id"], request_id)
+    run = repository.get_owned_model_run(user["id"], request_id)
     if run is None or run["status"] not in {"queued", "running"}:
+        raise HTTPException(status_code=409, detail="task is not running")
+    if not repository.request_task_run_cancel(user["id"], request_id):
         raise HTTPException(status_code=409, detail="task is not running")
     get_runtime_store().cancel_request(request_id)
     return {"request_id": request_id, "status": "cancelling"}

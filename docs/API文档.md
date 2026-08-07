@@ -187,12 +187,12 @@ curl -N -X POST http://127.0.0.1:8000/chat \
 Agent 模式必须通过任务接口进入。服务端持久化任务、运行、计划、权限租约、工具事件和产物；前端不能通过本地状态自行提升权限。
 
 #### `POST /tasks`
-新建当前用户的 Agent 任务，同时创建一条 `interaction_type=agent` 的会话。
+新建当前用户的 Agent 任务，同时创建一条 `interaction_type=agent` 的会话。可通过 `source_session_id` 承接一条已结束且属于当前用户的 Chat 会话；服务端会在创建时复制其消息快照，并保存来源会话 ID。
 ```json
 // 请求
-{ "title": "检查费用测算文档" }
+{ "title": "检查费用测算文档", "source_session_id": "可选的 Chat 会话 ID" }
 // 响应 201
-{ "task": { "id": "...", "session_id": "...", "status": "draft", "permission": { "mode": "read" } } }
+{ "task": { "id": "...", "session_id": "...", "source_session_id": "...", "status": "draft", "permission": { "mode": "read" } } }
 ```
 
 #### `GET /tasks` / `GET /tasks/{task_id}`
@@ -201,7 +201,7 @@ Agent 模式必须通过任务接口进入。服务端持久化任务、运行�
 排队或运行中的 `active_run.partial_content` 来自 Redis 完整回答快照，并包含 `status=queued|running` 与 `phase=plan|execute`。最终消息、计划和工具事件以 MySQL 为准。
 
 #### `POST /tasks/{task_id}/plan`（SSE）
-以只读工具生成计划。无论当前权限租约为何，Plan 阶段都强制只读。接口将任务写入 Redis 队列后保持 SSE 订阅；实际执行由独立 Agent Worker 完成，浏览器断开不会终止任务。
+以只读工具生成计划。无论当前权限租约为何，Plan 阶段都强制只读。接口将任务写入 Redis 队列后保持 SSE 订阅；实际执行由独立 Agent Worker 完成，浏览器断开不会终止任务。Redis 入队失败时服务端将 MySQL 运行记录收敛为失败、释放任务占用并返回 `503` 和 `Retry-After`。
 ```json
 { "message": "读取文档并生成执行计划", "request_id": "可选幂等标识" }
 ```
@@ -211,9 +211,9 @@ Agent 模式必须通过任务接口进入。服务端持久化任务、运行�
 | SSE 事件 | 含义 |
 |---|---|
 | `task.status` | 任务进入 `queued/planning/running/completed/failed/cancelled` 等状态 |
-| `tool.started` | 工具开始，参数已脱敏和截断 |
-| `tool.progress` | 工具进度 |
-| `tool.completed` | 工具完成，结果已脱敏和截断 |
+| `tool.started` | 工具开始；包含 `risk_level` 和参数键名/SQL 指纹摘要，不包含原始参数 |
+| `tool.progress` | 工具进度；只包含结构化进度摘要 |
+| `tool.completed` | 工具完成；包含状态、耗时和结果类型/规模摘要，不包含原始结果 |
 | `plan.required` | 计划已生成，任务进入 `awaiting_approval` |
 
 #### `POST /tasks/{task_id}/approve`
@@ -231,10 +231,10 @@ Agent 模式必须通过任务接口进入。服务端持久化任务、运行�
 只允许执行已批准的计划。请求体可传 `request_id`；不传时由服务端生成。Worker 真正领取任务时会重新校验权限租约，过期租约按 `read` 处理。
 
 #### `GET /tasks/{task_id}/runs/{request_id}/events`（SSE）
-重新订阅已经入队或运行中的 Agent 任务。`content_offset` 查询参数表示前端已经持有的回答字符数，服务端只补发其后的快照内容，并重放尚需去重的状态/工具事件。
+重新订阅已经入队或运行中的 Agent 任务。`content_offset` 查询参数表示前端已经持有的回答字符数，服务端只补发其后的快照内容，并按 Redis 有序事件游标重放后续状态/工具事件。Redis/MySQL 读取在线程池执行，不占用 Uvicorn 事件循环。
 
 #### `POST /tasks/{task_id}/cancel` / `POST /tasks/{task_id}/retry`
-取消当前排队或运行中的任务，或按最近一次运行阶段重试。SSE 断开本身不会取消任务。Worker 异常后 Plan 可以自动回队；已经开始的 Execute 不会自动重放，必须显式重试。
+取消当前排队或运行中的任务，或按最近一次运行阶段重试。取消请求首先持久化到 MySQL，Redis 只承担快速通知，因此 API/Worker 重启后仍然有效。SSE 断开本身不会取消任务。Worker 异常后 Plan 最多按 `HERMES_AGENT_MAX_ATTEMPTS` 投递；超过上限进入失败终态。已经开始的 Execute 不会自动重放，必须显式重试。
 
 #### `DELETE /tasks/{task_id}`
 删除非运行中的任务聚合，包括会话、消息、运行、计划、权限租约、工具事件和产物记录；审计记录保留。

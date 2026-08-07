@@ -61,6 +61,7 @@ export interface ToolEvent {
   sequence: number
   eventType: 'tool.started' | 'tool.progress' | 'tool.completed' | string
   toolName: string | null
+  riskLevel: 'read' | 'controlled_write' | 'high_risk' | 'unknown'
   status: string
   payload: Record<string, unknown>
   createdAt: number
@@ -69,6 +70,7 @@ export interface ToolEvent {
 export interface AgentTaskDetail {
   id: string
   sessionId: string
+  sourceSessionId: string | null
   title: string
   status: AgentTaskStatus
   risk: 'low' | 'medium' | 'high' | 'unknown'

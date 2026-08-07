@@ -17,6 +17,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from server.deps import get_current_user
 from server.storage import get_repository, get_runtime_store
+from server.tool_events import sanitize_tool_event_payload, tool_risk_level
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -32,48 +33,6 @@ class ChatRequest(BaseModel):
 
 _active_agents: dict[str, tuple[str, object]] = {}
 _active_agents_lock = threading.Lock()
-
-_SENSITIVE_EVENT_KEYS = {
-    "api_key",
-    "apikey",
-    "authorization",
-    "cookie",
-    "password",
-    "secret",
-    "token",
-}
-
-
-def _is_sensitive_event_key(key: Any) -> bool:
-    normalized = str(key).strip().lower().replace("-", "_")
-    if normalized in _SENSITIVE_EVENT_KEYS:
-        return True
-    return any(
-        normalized.startswith(f"{segment}_") or normalized.endswith(f"_{segment}")
-        for segment in _SENSITIVE_EVENT_KEYS
-    )
-
-
-def _safe_event_value(value: Any, *, depth: int = 0) -> Any:
-    if depth >= 4:
-        return "[truncated]"
-    if isinstance(value, dict):
-        return {
-            str(key): (
-                "[redacted]"
-                if _is_sensitive_event_key(key)
-                else _safe_event_value(item, depth=depth + 1)
-            )
-            for key, item in list(value.items())[:50]
-        }
-    if isinstance(value, (list, tuple)):
-        return [_safe_event_value(item, depth=depth + 1) for item in list(value)[:50]]
-    if isinstance(value, str):
-        return value[:4000]
-    if value is None or isinstance(value, (bool, int, float)):
-        return value
-    return str(value)[:4000]
-
 
 def _tool_result_failed(result: Any) -> bool:
     parsed = result
@@ -210,6 +169,7 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
     stream_attached.set()
     agent_holder: dict[str, object] = {}
     tool_statuses: dict[str, str] = {}
+    tool_started_at: dict[str, float] = {}
     tool_status_lock = threading.Lock()
 
     def emit(event: str, data: dict) -> int:
@@ -243,8 +203,9 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
             run_id=request_id,
             event_type=event_type,
             tool_name=tool_name,
+            risk_level=tool_risk_level(tool_name),
             status=status,
-            payload=_safe_event_value(payload),
+            payload=sanitize_tool_event_payload(event_type, tool_name, payload),
         )
         emit(
             event_type,
@@ -258,6 +219,7 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
     def on_tool_start(tool_call_id: str, tool_name: str, display_args: Any) -> None:
         if tool_name.startswith("_"):
             return
+        tool_started_at[tool_call_id] = time.monotonic()
         emit_tool_event(
             "tool.started",
             tool_name=tool_name,
@@ -276,6 +238,12 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
         failed = _tool_result_failed(result)
         with tool_status_lock:
             tool_statuses[tool_name] = "failed" if failed else "completed"
+        started_at = tool_started_at.pop(tool_call_id, None)
+        duration_ms = (
+            max(0, int((time.monotonic() - started_at) * 1000))
+            if started_at is not None
+            else 0
+        )
         emit_tool_event(
             "tool.completed",
             tool_name=tool_name,
@@ -284,6 +252,7 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
                 "tool_call_id": tool_call_id,
                 "arguments": display_args,
                 "result": result,
+                "duration_ms": duration_ms,
             },
         )
 

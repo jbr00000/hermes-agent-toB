@@ -14,6 +14,7 @@ def _client(monkeypatch, tmp_path) -> TestClient:
     monkeypatch.setenv("HERMES_ADMIN_PASSWORD", "correct-horse-battery-staple")
     monkeypatch.delenv("HERMES_DATABASE_URL", raising=False)
     monkeypatch.delenv("HERMES_REDIS_URL", raising=False)
+    monkeypatch.setenv("HERMES_ALLOW_EMBEDDED_AGENT_WORKER", "1")
 
     from server import auth
     from server.storage import reset_storage_for_tests
@@ -148,14 +149,18 @@ def test_agent_plan_approval_execute_and_permission_downgrade(monkeypatch, tmp_p
         "tool.completed",
     }
     assert all(
-        event["payload"]["arguments"]["password"] == "[redacted]"
+        event["payload"]["arguments"]["keys"]
+        == ["access_token", "client_secret", "password", "query"]
         for event in detail["events"]
     )
     assert all(
-        event["payload"]["arguments"]["access_token"] == "[redacted]"
-        and event["payload"]["arguments"]["client_secret"] == "[redacted]"
+        "'password': 'secret'" not in str(event["payload"])
+        and "token-value" not in str(event["payload"])
+        and "secret-value" not in str(event["payload"])
+        and "SELECT 1" not in str(event["payload"])
         for event in detail["events"]
     )
+    assert all(event["risk_level"] == "read" for event in detail["events"])
 
     approved = client.post(f"/tasks/{task['id']}/approve", headers=headers)
     assert approved.status_code == 200
@@ -313,3 +318,59 @@ def test_agent_interruption_is_persisted_as_cancelled(monkeypatch, tmp_path) -> 
     assert detail["status"] == "cancelled"
     assert detail["permission"]["mode"] == "read"
     assert detail["runs"][-1]["status"] == "cancelled"
+
+
+def test_create_agent_task_can_snapshot_owned_chat_context(monkeypatch, tmp_path) -> None:
+    client = _client(monkeypatch, tmp_path)
+    headers = _login(client, "admin", "correct-horse-battery-staple")
+    source = client.post(
+        "/sessions",
+        headers=headers,
+        json={"interaction_type": "chat", "title": "费用测算讨论"},
+    ).json()["session"]
+
+    from server.storage import get_repository
+
+    repository = get_repository()
+    repository.append_message(source["id"], "user", "请分析费用测算文档")
+    repository.append_message(source["id"], "assistant", "需要进一步读取原始文件")
+
+    created = client.post(
+        "/tasks",
+        headers=headers,
+        json={"source_session_id": source["id"]},
+    )
+
+    assert created.status_code == 201
+    task = created.json()["task"]
+    assert task["source_session_id"] == source["id"]
+    assert task["title"] == "费用测算讨论"
+    assert [message["content"] for message in task["messages"]] == [
+        "请分析费用测算文档",
+        "需要进一步读取原始文件",
+    ]
+
+
+def test_agent_queue_failure_returns_503_and_releases_task(monkeypatch, tmp_path) -> None:
+    client = _client(monkeypatch, tmp_path)
+    headers = _login(client, "admin", "correct-horse-battery-staple")
+    task = client.post("/tasks", headers=headers, json={}).json()["task"]
+
+    from server.storage import get_runtime_store
+
+    runtime_store = get_runtime_store()
+
+    def unavailable(_job):
+        raise RuntimeError("Redis Agent queue is unavailable")
+
+    monkeypatch.setattr(runtime_store, "enqueue_agent_job", unavailable)
+    response = client.post(
+        f"/tasks/{task['id']}/plan",
+        headers=headers,
+        json={"message": "生成执行计划", "request_id": "queue-unavailable"},
+    )
+
+    assert response.status_code == 503
+    detail = client.get(f"/tasks/{task['id']}", headers=headers).json()["task"]
+    assert detail["current_run_id"] is None
+    assert detail["runs"][-1]["status"] == "failed"

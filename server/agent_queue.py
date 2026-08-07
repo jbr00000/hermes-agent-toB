@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import threading
 import time
 from typing import Any
@@ -18,9 +19,13 @@ _TERMINAL_EVENTS = {"final", "error"}
 _TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
 
 
+def _embedded_worker_allowed() -> bool:
+    return os.environ.get("HERMES_ALLOW_EMBEDDED_AGENT_WORKER", "0") == "1"
+
+
 def _start_embedded_worker(request_id: str) -> None:
     runtime_store = get_runtime_store()
-    if runtime_store.redis_enabled:
+    if runtime_store.redis_enabled or not _embedded_worker_allowed():
         return
     with _embedded_workers_lock:
         if request_id in _embedded_workers:
@@ -57,6 +62,11 @@ def enqueue_agent_run(
 ) -> None:
     repository = get_repository()
     runtime_store = get_runtime_store()
+    if not runtime_store.redis_enabled and not _embedded_worker_allowed():
+        raise HTTPException(
+            status_code=503,
+            detail="Agent queue requires Redis and a dedicated Worker",
+        )
     now = time.time()
     job = {
         "request_id": request_id,
@@ -79,7 +89,20 @@ def enqueue_agent_run(
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    created = runtime_store.enqueue_agent_job(job)
+    try:
+        created = runtime_store.enqueue_agent_job(job)
+    except RuntimeError as exc:
+        repository.finish_task_run(
+            request_id,
+            status="failed",
+            task_status="failed",
+            error="Agent queue unavailable",
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Agent queue is temporarily unavailable",
+            headers={"Retry-After": "5"},
+        ) from exc
     runtime_store.mark_request(request_id, "queued")
     if runtime_store.get_chat_snapshot(request_id) is None:
         runtime_store.save_chat_snapshot(
@@ -131,16 +154,21 @@ def stream_agent_run(
 
     async def event_gen():
         cursor = 0
-        initial_snapshot = runtime_store.get_chat_snapshot(request_id) or {}
+        initial_snapshot = (
+            await asyncio.to_thread(runtime_store.get_chat_snapshot, request_id) or {}
+        )
         initial_content = str(initial_snapshot.get("content") or "")
         emitted_content = initial_content[: max(0, content_offset)]
         terminal_emitted = False
         terminal_snapshot_observed = False
         terminal_database_seen_at: float | None = None
+        next_database_poll_at = 0.0
         while True:
             if await request.is_disconnected():
                 break
-            events = runtime_store.list_events(request_id, after_id=cursor)
+            events = await asyncio.to_thread(
+                runtime_store.list_events, request_id, after_id=cursor
+            )
             terminal_events: list[dict[str, Any]] = []
             for event in events:
                 event_id = int(event.get("id") or 0)
@@ -154,7 +182,9 @@ def stream_agent_run(
                     "data": json.dumps(event.get("data") or {}, ensure_ascii=False),
                 }
 
-            snapshot = runtime_store.get_chat_snapshot(request_id)
+            snapshot = await asyncio.to_thread(
+                runtime_store.get_chat_snapshot, request_id
+            )
             content = str(snapshot.get("content") or "") if snapshot else ""
             if content.startswith(emitted_content) and len(content) > len(emitted_content):
                 yield {
@@ -180,14 +210,22 @@ def stream_agent_run(
                     "data": json.dumps(event.get("data") or {}, ensure_ascii=False),
                 }
 
-            current_run = repository.get_task_run(request_id)
-            if current_run is None or current_run["status"] in _TERMINAL_STATUSES:
+            now = time.monotonic()
+            snapshot_terminal = bool(
+                snapshot and snapshot.get("status") in _TERMINAL_STATUSES
+            )
+            current_run = None
+            database_checked = False
+            if terminal_events or snapshot_terminal or now >= next_database_poll_at:
+                current_run = await asyncio.to_thread(repository.get_task_run, request_id)
+                database_checked = True
+                next_database_poll_at = now + 1.0
+            if database_checked and (
+                current_run is None or current_run["status"] in _TERMINAL_STATUSES
+            ):
                 now = time.monotonic()
                 if terminal_database_seen_at is None:
                     terminal_database_seen_at = now
-                snapshot_terminal = bool(
-                    snapshot and snapshot.get("status") in _TERMINAL_STATUSES
-                )
                 if (
                     not terminal_emitted
                     and not snapshot_terminal
@@ -233,7 +271,8 @@ def stream_agent_run(
                     ),
                 }
                 break
-            terminal_database_seen_at = None
-            await asyncio.sleep(0.1)
+            if database_checked:
+                terminal_database_seen_at = None
+            await asyncio.sleep(0.2)
 
     return EventSourceResponse(event_gen())

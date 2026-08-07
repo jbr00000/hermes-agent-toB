@@ -90,26 +90,31 @@ class RuntimeStore:
         except RedisError as exc:
             logger.warning("Redis request state write failed: %s", exc)
 
-    def cancel_request(self, request_id: str, ttl_seconds: int = 3600) -> None:
+    def cancel_request(self, request_id: str, ttl_seconds: int = 3600) -> bool:
         key = self._key("request", request_id, "cancel")
         if self._redis is not None:
             try:
                 self._redis.set(key, "1", ex=ttl_seconds)
-                return
+                return True
             except RedisError as exc:
                 logger.warning("Redis cancellation write failed: %s", exc)
         with self._local_guard:
             self._local_cancelled.add(key)
+        return self._redis is None
 
-    def is_cancelled(self, request_id: str) -> bool:
+    def cancellation_state(self, request_id: str) -> bool | None:
         key = self._key("request", request_id, "cancel")
         if self._redis is not None:
             try:
                 return self._redis.get(key) == "1"
             except RedisError as exc:
                 logger.warning("Redis cancellation read failed: %s", exc)
+                return None
         with self._local_guard:
             return key in self._local_cancelled
+
+    def is_cancelled(self, request_id: str) -> bool:
+        return self.cancellation_state(request_id) is True
 
     def append_event(
         self,
@@ -119,7 +124,7 @@ class RuntimeStore:
         data: dict[str, Any],
         ttl_seconds: int = 3600,
     ) -> None:
-        key = self._key("stream", request_id, "events")
+        key = self._key("stream", request_id, "events-v2")
         payload = json.dumps(
             {"id": event_id, "event": event, "data": data, "created_at": time.time()},
             ensure_ascii=False,
@@ -127,8 +132,8 @@ class RuntimeStore:
         if self._redis is not None:
             try:
                 pipe = self._redis.pipeline()
-                pipe.rpush(key, payload)
-                pipe.ltrim(key, -500, -1)
+                pipe.zadd(key, {payload: event_id})
+                pipe.zremrangebyrank(key, 0, -501)
                 pipe.expire(key, ttl_seconds)
                 pipe.execute()
                 return
@@ -140,11 +145,11 @@ class RuntimeStore:
             del events[:-500]
 
     def list_events(self, request_id: str, *, after_id: int = 0) -> list[dict[str, Any]]:
-        key = self._key("stream", request_id, "events")
+        key = self._key("stream", request_id, "events-v2")
         payloads: list[str] = []
         if self._redis is not None:
             try:
-                payloads = self._redis.lrange(key, 0, -1)
+                payloads = self._redis.zrangebyscore(key, f"({after_id}", "+inf")
             except RedisError as exc:
                 logger.warning("Redis SSE buffer read failed: %s", exc)
         else:
@@ -165,8 +170,21 @@ class RuntimeStore:
         return events
 
     def last_event_id(self, request_id: str) -> int:
-        events = self.list_events(request_id)
-        return max((int(event.get("id") or 0) for event in events), default=0)
+        key = self._key("stream", request_id, "events-v2")
+        if self._redis is not None:
+            try:
+                latest = self._redis.zrevrange(key, 0, 0, withscores=True)
+                return int(latest[0][1]) if latest else 0
+            except RedisError as exc:
+                logger.warning("Redis SSE event cursor read failed: %s", exc)
+        with self._local_guard:
+            return max(
+                (
+                    int(event.get("id") or 0)
+                    for event in self._local_events.get(key, [])
+                ),
+                default=0,
+            )
 
     def save_chat_snapshot(
         self,
@@ -338,7 +356,7 @@ class RuntimeStore:
         worker_id: str,
         *,
         lease_seconds: int = 15,
-    ) -> bool:
+    ) -> bool | None:
         meta_key = self._key("agent", "job", request_id, "meta")
         now = time.time()
         if self._redis is not None:
@@ -361,7 +379,7 @@ class RuntimeStore:
                 )
             except RedisError as exc:
                 logger.warning("Redis Agent lease heartbeat failed: %s", exc)
-                return False
+                return None
         with self._local_guard:
             meta = self._local_agent_processing.get(request_id)
             if not meta or meta.get("worker_id") != worker_id:
@@ -529,7 +547,7 @@ class RuntimeStore:
                 meta = self._redis.hgetall(meta_key)
             except RedisError as exc:
                 logger.warning("Redis Agent job state read failed: %s", exc)
-                return None
+                return {"state": "unavailable"}
             if not meta:
                 return None
             return {

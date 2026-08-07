@@ -89,6 +89,7 @@ services:
       HERMES_DATABASE_URL: mysql+pymysql://${HERMES_MYSQL_USER:-hermes_app}:${HERMES_MYSQL_PASSWORD}@mysql:3306/${HERMES_MYSQL_DATABASE:-hermes_tob}?charset=utf8mb4
       HERMES_REDIS_URL: redis://:${HERMES_REDIS_PASSWORD}@redis:6379/0
       HERMES_REQUIRE_AGENT_WORKER: "1"
+      HERMES_ALLOW_EMBEDDED_AGENT_WORKER: "0"
     networks:
       - hermes-data
       - hermes-egress
@@ -127,6 +128,7 @@ services:
       HERMES_DATABASE_URL: mysql+pymysql://${HERMES_MYSQL_USER:-hermes_app}:${HERMES_MYSQL_PASSWORD}@mysql:3306/${HERMES_MYSQL_DATABASE:-hermes_tob}?charset=utf8mb4
       HERMES_REDIS_URL: redis://:${HERMES_REDIS_PASSWORD}@redis:6379/0
       HERMES_AGENT_RUN_TIMEOUT_SECONDS: ${HERMES_AGENT_RUN_TIMEOUT_SECONDS:-300}
+      HERMES_AGENT_MAX_ATTEMPTS: ${HERMES_AGENT_MAX_ATTEMPTS:-3}
     networks:
       - hermes-data
       - hermes-egress

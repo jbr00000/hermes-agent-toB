@@ -362,6 +362,11 @@ export class AgentRunManager {
                   : snapshot.toolEvents.length + 1,
                 eventType: eventName,
                 toolName: typeof event.tool_name === 'string' ? event.tool_name : null,
+                riskLevel: ['read', 'controlled_write', 'high_risk'].includes(
+                  String(event.risk_level),
+                )
+                  ? event.risk_level as ToolEvent['riskLevel']
+                  : 'unknown',
                 status: typeof event.status === 'string' ? event.status : 'running',
                 payload: typeof event.payload === 'object' && event.payload
                   ? event.payload as Record<string, unknown>

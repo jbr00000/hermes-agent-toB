@@ -120,3 +120,103 @@ def test_worker_requeues_planning_but_does_not_replay_started_execution(
     worker.recover()
     assert repository.get_task_run("execute-run")["status"] == "failed"
     assert store.agent_job_state("execute-run")["state"] == "failed"
+
+
+def test_worker_stops_requeueing_poison_job_at_max_attempts(monkeypatch, tmp_path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("HERMES_AGENT_MAX_ATTEMPTS", "2")
+    monkeypatch.delenv("HERMES_DATABASE_URL", raising=False)
+    monkeypatch.delenv("HERMES_REDIS_URL", raising=False)
+
+    from server.storage import get_repository, get_runtime_store, init_storage
+    from server.storage import reset_storage_for_tests
+    import server.worker as worker_module
+
+    reset_storage_for_tests()
+    init_storage()
+    repository = get_repository()
+    store = get_runtime_store()
+    task = repository.create_agent_task("user-1")
+    job = {
+        **_job("poison-run", "plan"),
+        "task_id": task["id"],
+        "session_id": task["session_id"],
+    }
+    repository.enqueue_task_run("poison-run", "user-1", task["id"], "plan", job)
+    store.enqueue_agent_job(job)
+
+    def fail_before_start(_job_payload, _worker_id):
+        raise RuntimeError("deterministic poison message")
+
+    monkeypatch.setattr(worker_module, "execute_agent_job", fail_before_start)
+    worker = worker_module.AgentWorker("poison-worker")
+
+    assert worker.run_once(timeout_seconds=0) is True
+    worker.recover()
+    assert worker.run_once(timeout_seconds=0) is True
+    worker.recover()
+
+    assert repository.get_task_run("poison-run")["status"] == "failed"
+    assert repository.get_owned_task("user-1", task["id"])["current_run_id"] is None
+    assert store.agent_job_state("poison-run")["attempt"] == 2
+
+
+def test_durable_cancel_survives_runtime_state_loss(monkeypatch, tmp_path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.delenv("HERMES_DATABASE_URL", raising=False)
+    monkeypatch.delenv("HERMES_REDIS_URL", raising=False)
+
+    from server.storage import get_repository, init_storage, reset_storage_for_tests
+    import server.agent_execution as execution
+
+    reset_storage_for_tests()
+    init_storage()
+    repository = get_repository()
+    task = repository.create_agent_task("user-1")
+    job = {
+        **_job("cancel-run", "plan"),
+        "task_id": task["id"],
+        "session_id": task["session_id"],
+        "queued_at": time.time(),
+    }
+    repository.enqueue_task_run("cancel-run", "user-1", task["id"], "plan", job)
+    assert repository.request_task_run_cancel("user-1", "cancel-run") is True
+
+    fresh_runtime = RuntimeStore()
+    fresh_runtime.enqueue_agent_job(job)
+    assert fresh_runtime.claim_agent_job("cancel-worker", timeout_seconds=0)
+    assert fresh_runtime.is_cancelled("cancel-run") is False
+    monkeypatch.setattr(execution, "get_repository", lambda: repository)
+    monkeypatch.setattr(execution, "get_runtime_store", lambda: fresh_runtime)
+
+    status = execution.execute_agent_job(job, "cancel-worker")
+
+    assert status == "cancelled"
+    assert repository.get_task_run("cancel-run")["status"] == "cancelled"
+
+
+def test_mysql_recovery_scan_still_runs_when_redis_scan_fails(monkeypatch) -> None:
+    import server.worker as worker_module
+
+    worker = worker_module.AgentWorker("recovery-worker")
+    mysql_scanned = False
+
+    class Runtime:
+        def take_expired_agent_jobs(self):
+            raise RuntimeError("Redis unavailable")
+
+    class Repository:
+        def list_recoverable_task_runs(self):
+            nonlocal mysql_scanned
+            mysql_scanned = True
+            return []
+
+    worker.runtime_store = Runtime()
+    worker.repository = Repository()
+    worker.recover()
+
+    assert mysql_scanned is True

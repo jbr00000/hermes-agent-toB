@@ -8,55 +8,16 @@ import threading
 import time
 from typing import Any
 
+from server.audit import record_event
+from server.constants import is_default_agent_task_title
 from server.storage import get_repository, get_runtime_store
+from server.tool_events import sanitize_tool_event_payload, tool_risk_level
 
 logger = logging.getLogger(__name__)
 
 
 class AgentLeaseLost(RuntimeError):
     pass
-
-_SENSITIVE_EVENT_KEYS = {
-    "api_key",
-    "apikey",
-    "authorization",
-    "cookie",
-    "password",
-    "secret",
-    "token",
-}
-
-
-def _is_sensitive_event_key(key: Any) -> bool:
-    normalized = str(key).strip().lower().replace("-", "_")
-    if normalized in _SENSITIVE_EVENT_KEYS:
-        return True
-    return any(
-        normalized.startswith(f"{segment}_") or normalized.endswith(f"_{segment}")
-        for segment in _SENSITIVE_EVENT_KEYS
-    )
-
-
-def _safe_event_value(value: Any, *, depth: int = 0) -> Any:
-    if depth >= 4:
-        return "[truncated]"
-    if isinstance(value, dict):
-        return {
-            str(key): (
-                "[redacted]"
-                if _is_sensitive_event_key(key)
-                else _safe_event_value(item, depth=depth + 1)
-            )
-            for key, item in list(value.items())[:50]
-        }
-    if isinstance(value, (list, tuple)):
-        return [_safe_event_value(item, depth=depth + 1) for item in list(value)[:50]]
-    if isinstance(value, str):
-        return value[:4000]
-    if value is None or isinstance(value, (bool, int, float)):
-        return value
-    return str(value)[:4000]
-
 
 def _tool_result_failed(result: Any) -> bool:
     parsed = result
@@ -107,15 +68,59 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
     snapshot_chunks: list[str] = []
     snapshot_last_saved_at = run_started_at
     tool_statuses: dict[str, str] = {}
+    tool_started_at: dict[str, float] = {}
     tool_status_lock = threading.Lock()
     agent_holder: dict[str, object] = {}
     stop_heartbeat = threading.Event()
     timed_out = threading.Event()
     lease_lost = threading.Event()
+    cancel_requested = threading.Event()
     max_runtime = max(30, int(os.environ.get("HERMES_AGENT_RUN_TIMEOUT_SECONDS", "300")))
 
-    if repository.start_task_run(request_id, worker_id) is None:
+    started_run = repository.start_task_run(request_id, worker_id)
+    if started_run is None:
         return "ignored"
+    if started_run.get("cancel_requested_at") is not None:
+        finished_run = repository.finalize_task_run(
+            request_id,
+            user_id=user_id,
+            task_id=task_id,
+            status="cancelled",
+            task_status="cancelled",
+            expected_worker_id=worker_id,
+        )
+        if finished_run is None:
+            return "stale"
+        event_sequence += 1
+        runtime_store.append_event(
+            request_id,
+            event_sequence,
+            "task.status",
+            {
+                "task_id": task_id,
+                "request_id": request_id,
+                "status": "cancelled",
+                "permission_mode": "read",
+            },
+        )
+        event_sequence += 1
+        runtime_store.append_event(
+            request_id,
+            event_sequence,
+            "final",
+            {"content": "", "request_id": request_id, "status": "cancelled"},
+        )
+        runtime_store.save_chat_snapshot(
+            request_id,
+            session_id,
+            "",
+            event_sequence,
+            status="cancelled",
+            started_at=snapshot_started_at,
+            ttl_seconds=86400,
+        )
+        runtime_store.mark_request(request_id, "done")
+        return "cancelled"
     runtime_store.mark_request(request_id, "running")
     runtime_store.save_chat_snapshot(
         request_id,
@@ -125,6 +130,17 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
         started_at=snapshot_started_at,
     )
 
+    def durable_cancel_requested() -> bool:
+        try:
+            return repository.is_task_run_cancel_requested(request_id)
+        except Exception:
+            logger.warning(
+                "Agent cancellation state read failed for %s",
+                request_id,
+                exc_info=True,
+            )
+            return False
+
     def emit(event: str, data: dict[str, Any]) -> int:
         nonlocal event_sequence
         with event_lock:
@@ -133,6 +149,49 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
         if event != "delta":
             runtime_store.append_event(request_id, event_id, event, data)
         return event_id
+
+    def persist_terminal(
+        *,
+        status: str,
+        task_status: str,
+        error: str | None,
+        audit_metadata: dict[str, Any],
+    ) -> bool:
+        finished_run = repository.finalize_task_run(
+            request_id,
+            user_id=user_id,
+            task_id=task_id,
+            status=status,
+            task_status=task_status,
+            error=error,
+            expected_worker_id=worker_id,
+            provider=runtime_metadata.get("provider"),
+            model=runtime_metadata.get("model"),
+        )
+        if finished_run is None:
+            return False
+        emit(
+            "task.status",
+            {
+                "task_id": task_id,
+                "request_id": request_id,
+                "status": task_status,
+                "permission_mode": "read",
+            },
+        )
+        try:
+            record_event(
+                event_type="chat_turn",
+                session_id=session_id,
+                user_id=user_id,
+                status=status,
+                mode=phase,
+                metadata=audit_metadata,
+                error=error,
+            )
+        except Exception:
+            logger.exception("Could not append terminal audit event for %s", request_id)
+        return True
 
     def emit_tool_event(
         event_type: str,
@@ -146,8 +205,9 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
             run_id=request_id,
             event_type=event_type,
             tool_name=tool_name,
+            risk_level=tool_risk_level(tool_name),
             status=status,
-            payload=_safe_event_value(payload),
+            payload=sanitize_tool_event_payload(event_type, tool_name, payload),
         )
         emit(
             event_type,
@@ -157,6 +217,7 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
     def on_tool_start(tool_call_id: str, tool_name: str, display_args: Any) -> None:
         if tool_name.startswith("_"):
             return
+        tool_started_at[tool_call_id] = time.monotonic()
         emit_tool_event(
             "tool.started",
             tool_name=tool_name,
@@ -175,6 +236,12 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
         failed = _tool_result_failed(result)
         with tool_status_lock:
             tool_statuses[tool_name] = "failed" if failed else "completed"
+        started_at = tool_started_at.pop(tool_call_id, None)
+        duration_ms = (
+            max(0, int((time.monotonic() - started_at) * 1000))
+            if started_at is not None
+            else 0
+        )
         emit_tool_event(
             "tool.completed",
             tool_name=tool_name,
@@ -183,6 +250,7 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
                 "tool_call_id": tool_call_id,
                 "arguments": display_args,
                 "result": result,
+                "duration_ms": duration_ms,
             },
         )
 
@@ -202,7 +270,8 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
 
     def on_delta(chunk: str) -> None:
         nonlocal event_sequence, snapshot_last_saved_at
-        if runtime_store.is_cancelled(request_id):
+        if cancel_requested.is_set() or runtime_store.is_cancelled(request_id):
+            cancel_requested.set()
             interrupt = getattr(agent_holder.get("agent"), "interrupt", None)
             if callable(interrupt):
                 interrupt("cancelled by user")
@@ -232,16 +301,27 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
         last_database_heartbeat = 0.0
         while not stop_heartbeat.wait(2):
             runtime_store.touch_worker(worker_id)
-            if not runtime_store.heartbeat_agent_job(request_id, worker_id):
+            lease_state = runtime_store.heartbeat_agent_job(request_id, worker_id)
+            if lease_state is False:
                 lease_lost.set()
             now = time.monotonic()
             if now - last_database_heartbeat >= 10:
-                repository.heartbeat_task_run(request_id, worker_id)
+                try:
+                    repository.heartbeat_task_run(request_id, worker_id)
+                except Exception:
+                    logger.warning(
+                        "Agent database heartbeat failed for %s",
+                        request_id,
+                        exc_info=True,
+                    )
                 last_database_heartbeat = now
             if now - run_started_at >= max_runtime:
                 timed_out.set()
                 runtime_store.cancel_request(request_id)
-            if runtime_store.is_cancelled(request_id):
+            durable_cancelled = durable_cancel_requested()
+            if runtime_store.is_cancelled(request_id) or durable_cancelled:
+                cancel_requested.set()
+            if cancel_requested.is_set():
                 interrupt = getattr(agent_holder.get("agent"), "interrupt", None)
                 if callable(interrupt):
                     interrupt("Agent task timed out" if timed_out.is_set() else "cancelled by user")
@@ -260,10 +340,10 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
     runtime_metadata: dict[str, Any] = {"mode": phase}
     title = repository.get_owned_conversation(user_id, session_id)["title"]
     try:
-        if runtime_store.is_cancelled(request_id):
+        if cancel_requested.is_set() or durable_cancel_requested():
+            cancel_requested.set()
             raise RuntimeError("cancelled before execution started")
         from server.agent_factory import build_agent
-        from server.audit import record_event
         from server.memory import save_memory_candidate
         from server.sandbox import task_sandbox_key
 
@@ -276,7 +356,7 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
             {"role": item["role"], "content": item["content"]}
             for item in prior_messages
         ]
-        if not prior_messages or title in {"New agent task", "新任务", "新智能体任务"}:
+        if not prior_messages or is_default_agent_task_title(title):
             title = " ".join(message.split()).strip()[:40] or title
             repository.update_conversation(user_id, session_id, title=title)
 
@@ -349,11 +429,11 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
         ) or ""
         if (
             lease_lost.is_set()
-            or not runtime_store.heartbeat_agent_job(request_id, worker_id)
+            or runtime_store.heartbeat_agent_job(request_id, worker_id) is False
             or not repository.owns_task_run(request_id, worker_id)
         ):
             raise AgentLeaseLost(request_id)
-        cancelled = runtime_store.is_cancelled(request_id) and not timed_out.is_set()
+        cancelled = cancel_requested.is_set() and not timed_out.is_set()
         with tool_status_lock:
             unresolved_tool_failure = any(
                 status == "failed" for status in tool_statuses.values()
@@ -390,26 +470,31 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
             else None
         )
         if assistant_status == "cancelled":
-            finished_run = repository.finish_task_run(
-                request_id,
-                status="cancelled",
-                task_status="cancelled",
-                expected_worker_id=worker_id,
-            )
-            if finished_run is None:
-                raise AgentLeaseLost(request_id)
             task_status = "cancelled"
-        elif assistant_status == "failed":
-            finished_run = repository.finish_task_run(
-                request_id,
-                status="failed",
-                task_status="failed",
-                error=error,
-                expected_worker_id=worker_id,
-            )
-            if finished_run is None:
+            if not persist_terminal(
+                status="cancelled",
+                task_status=task_status,
+                error=None,
+                audit_metadata={
+                    **runtime_metadata,
+                    "request_id": request_id,
+                    "response_chars": len(final),
+                },
+            ):
                 raise AgentLeaseLost(request_id)
+        elif assistant_status == "failed":
             task_status = "failed"
+            if not persist_terminal(
+                status="failed",
+                task_status=task_status,
+                error=error,
+                audit_metadata={
+                    **runtime_metadata,
+                    "request_id": request_id,
+                    "response_chars": len(final),
+                },
+            ):
+                raise AgentLeaseLost(request_id)
         elif phase == "plan":
             plan = repository.create_task_plan(
                 user_id,
@@ -417,6 +502,8 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
                 final,
                 request_id=request_id,
                 expected_worker_id=worker_id,
+                provider=runtime_metadata.get("provider"),
+                model=runtime_metadata.get("model"),
             )
             if plan is None:
                 raise AgentLeaseLost(request_id)
@@ -425,46 +512,44 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
                 {"task_id": task_id, "request_id": request_id, "plan": plan},
             )
             task_status = "awaiting_approval"
-        else:
-            finished_run = repository.finish_task_run(
-                request_id,
-                status="completed",
-                task_status="completed",
-                expected_worker_id=worker_id,
+            emit(
+                "task.status",
+                {
+                    "task_id": task_id,
+                    "request_id": request_id,
+                    "status": task_status,
+                    "permission_mode": "read",
+                },
             )
-            if finished_run is None:
-                raise AgentLeaseLost(request_id)
+            try:
+                record_event(
+                    event_type="chat_turn",
+                    session_id=session_id,
+                    user_id=user_id,
+                    status=assistant_status,
+                    mode=phase,
+                    metadata={
+                        **runtime_metadata,
+                        "request_id": request_id,
+                        "response_chars": len(final),
+                    },
+                    error=error,
+                )
+            except Exception:
+                logger.exception("Could not append terminal audit event for %s", request_id)
+        else:
             task_status = "completed"
-        repository.revoke_task_permissions(user_id, task_id)
-        emit(
-            "task.status",
-            {
-                "task_id": task_id,
-                "request_id": request_id,
-                "status": task_status,
-                "permission_mode": "read",
-            },
-        )
-        record_event(
-            event_type="chat_turn",
-            session_id=session_id,
-            user_id=user_id,
-            status=assistant_status,
-            mode=phase,
-            metadata={
-                **runtime_metadata,
-                "request_id": request_id,
-                "response_chars": len(final),
-            },
-            error=error,
-        )
-        repository.finish_model_run(
-            request_id,
-            status=assistant_status,
-            provider=runtime_metadata.get("provider"),
-            model=runtime_metadata.get("model"),
-            error=error,
-        )
+            if not persist_terminal(
+                status="completed",
+                task_status=task_status,
+                error=None,
+                audit_metadata={
+                    **runtime_metadata,
+                    "request_id": request_id,
+                    "response_chars": len(final),
+                },
+            ):
+                raise AgentLeaseLost(request_id)
         final_event_id = emit(
             "final",
             {
@@ -490,14 +575,18 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
         logger.warning("Agent request %s stopped after losing its Worker lease", request_id)
         return "stale"
     except Exception as exc:
-        if lease_lost.is_set() or not runtime_store.heartbeat_agent_job(
+        if lease_lost.is_set() or runtime_store.heartbeat_agent_job(
             request_id, worker_id
-        ):
+        ) is False:
             logger.warning(
                 "Agent request %s failed after losing its Worker lease", request_id
             )
             return "stale"
-        cancelled = runtime_store.is_cancelled(request_id) and not timed_out.is_set()
+        cancelled = (
+            cancel_requested.is_set()
+            or runtime_store.is_cancelled(request_id)
+            or durable_cancel_requested()
+        ) and not timed_out.is_set()
         status = "cancelled" if cancelled else "failed"
         error_text = None if cancelled else f"{type(exc).__name__}: {exc}"
         if cancelled:
@@ -508,8 +597,6 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
             partial_content = "".join(snapshot_chunks)
         assistant_message = repository.get_message_for_run(request_id, "assistant")
         try:
-            from server.audit import record_event
-
             if cancelled and assistant_message is None:
                 assistant_message = repository.append_message(
                     session_id,
@@ -519,39 +606,18 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
                     model_run_id=request_id,
                     duration_ms=max(0, int((time.monotonic() - run_started_at) * 1000)),
                 )
-            finished_run = repository.finish_task_run(
-                request_id,
+            terminal_persisted = persist_terminal(
                 status=status,
                 task_status=status,
                 error=error_text,
-                expected_worker_id=worker_id,
+                audit_metadata={"request_id": request_id, "plan_state": plan_state},
             )
-            if finished_run is None:
+            if not terminal_persisted:
                 logger.warning(
                     "Agent request %s could not persist failure after losing ownership",
                     request_id,
                 )
                 return "stale"
-            repository.finish_model_run(request_id, status=status, error=error_text)
-            repository.revoke_task_permissions(user_id, task_id)
-            emit(
-                "task.status",
-                {
-                    "task_id": task_id,
-                    "request_id": request_id,
-                    "status": status,
-                    "permission_mode": "read",
-                },
-            )
-            record_event(
-                event_type="chat_turn",
-                session_id=session_id,
-                user_id=user_id,
-                status=status,
-                mode=phase,
-                metadata={"request_id": request_id, "plan_state": plan_state},
-                error=error_text,
-            )
         except Exception:
             logger.exception("Failed to persist Agent terminal state")
         if cancelled:
@@ -602,11 +668,14 @@ def fail_interrupted_execute_job(job: dict[str, Any], reason: str) -> None:
     user_id = str(job["user_id"])
     task_id = str(job["task_id"])
     session_id = str(job["session_id"])
-    repository.finish_model_run(request_id, status="failed", error=reason)
-    repository.finish_task_run(
-        request_id, status="failed", task_status="failed", error=reason
+    repository.finalize_task_run(
+        request_id,
+        user_id=user_id,
+        task_id=task_id,
+        status="failed",
+        task_status="failed",
+        error=reason,
     )
-    repository.revoke_task_permissions(user_id, task_id)
     event_id = runtime_store.last_event_id(request_id) + 1
     runtime_store.append_event(
         request_id,
