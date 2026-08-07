@@ -1954,17 +1954,25 @@ function KnowledgeBaseView({ selectedRef, onOpenTab }: { selectedRef: string; on
           </div>
         </aside>
         <section className="thin-scrollbar min-w-0 overflow-y-auto p-5">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
+          <div className="mb-4 flex items-start justify-between gap-3">
+            <div className="min-w-0">
               <div className="text-sm font-semibold">文档列表</div>
               <div className="text-xs text-zinc-500">默认继承空间权限，敏感文档可单独覆盖</div>
             </div>
-            <button className="flex h-8 items-center gap-2 rounded-md bg-ink px-3 text-sm text-white">
+            <button className="flex h-8 shrink-0 items-center gap-2 whitespace-nowrap rounded-md bg-ink px-3 text-sm text-white">
               <Plus size={15} />
               上传到待处理区
             </button>
           </div>
           <DataTable>
+            <colgroup>
+              <col className="w-[34%]" />
+              <col className="w-[18%]" />
+              <col className="w-[10%]" />
+              <col className="w-[13%]" />
+              <col className="w-[9%]" />
+              <col className="w-[16%]" />
+            </colgroup>
             <thead>
               <tr>
                 <Th>文档</Th>
@@ -1978,13 +1986,19 @@ function KnowledgeBaseView({ selectedRef, onOpenTab }: { selectedRef: string; on
             <tbody>
               {docs.map((doc) => (
                 <tr key={doc.id} className="border-b border-line last:border-0 hover:bg-[#fafafa]">
-                  <Td>
-                    <button className="flex min-w-0 items-center gap-2 text-left font-medium hover:text-info" onClick={() => onOpenTab('document', doc.id, doc.title)}>
+                  <Td className="overflow-hidden">
+                    <button
+                      title={doc.title}
+                      className="flex w-full min-w-0 max-w-full items-center gap-2 overflow-hidden text-left font-medium hover:text-info"
+                      onClick={() => onOpenTab('document', doc.id, doc.title)}
+                    >
                       <FileText size={15} className="shrink-0 text-zinc-400" />
-                      <span className="truncate">{doc.title}</span>
+                      <span className="min-w-0 flex-1 truncate">{doc.title}</span>
                     </button>
                   </Td>
-                  <Td>{doc.library}</Td>
+                  <Td className="overflow-hidden">
+                    <span className="block truncate" title={doc.library}>{doc.library}</span>
+                  </Td>
                   <Td><Badge className={docStatusTone(doc.status)}>{docStatusText(doc.status)}</Badge></Td>
                   <Td>{doc.permission === 'override' ? <Badge className="bg-amber-50 text-caution">单独授权</Badge> : <Badge className="bg-zinc-100 text-zinc-600">继承</Badge>}</Td>
                   <Td>{doc.chunks}</Td>
@@ -2413,12 +2427,12 @@ function DataTable({ children }: { children: React.ReactNode }) {
   )
 }
 
-function Th({ children }: { children: React.ReactNode }) {
-  return <th className="border-b border-line bg-[#fafafa] px-3 py-2 text-xs font-semibold text-zinc-500">{children}</th>
+function Th({ children, className }: { children: React.ReactNode; className?: string }) {
+  return <th className={cn('border-b border-line bg-[#fafafa] px-3 py-2 text-xs font-semibold text-zinc-500', className)}>{children}</th>
 }
 
-function Td({ children }: { children: React.ReactNode }) {
-  return <td className="min-w-0 px-3 py-3 align-middle text-sm text-zinc-700">{children}</td>
+function Td({ children, className }: { children: React.ReactNode; className?: string }) {
+  return <td className={cn('min-w-0 px-3 py-3 align-middle text-sm text-zinc-700', className)}>{children}</td>
 }
 
 function Badge({ children, className }: { children: React.ReactNode; className?: string }) {
