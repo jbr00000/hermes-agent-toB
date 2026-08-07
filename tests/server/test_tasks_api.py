@@ -196,6 +196,10 @@ def test_agent_plan_approval_execute_and_permission_downgrade(monkeypatch, tmp_p
     assert after_retry["runs"][-1]["attempt"] == 2
     assert captured[-1]["permission_mode"] == "read"
 
+    deleted = client.delete(f"/tasks/{task['id']}", headers=headers)
+    assert deleted.status_code == 200
+    assert client.get(f"/tasks/{task['id']}", headers=headers).status_code == 404
+
 
 def test_execute_with_failed_tool_marks_task_failed(monkeypatch, tmp_path) -> None:
     client = _client(monkeypatch, tmp_path)

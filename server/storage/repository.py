@@ -936,9 +936,6 @@ class StorageRepository:
                     created_at=time.time(),
                 )
             )
-            run_ids = select(TaskRun.id).where(
-                TaskRun.tenant_id == tenant_id(), TaskRun.task_id == task_id
-            )
             session.execute(
                 delete(ToolEvent).where(
                     ToolEvent.tenant_id == tenant_id(), ToolEvent.task_id == task_id
@@ -960,7 +957,11 @@ class StorageRepository:
                     TaskPlan.tenant_id == tenant_id(), TaskPlan.task_id == task_id
                 )
             )
-            session.execute(delete(TaskRun).where(TaskRun.id.in_(run_ids)))
+            session.execute(
+                delete(TaskRun).where(
+                    TaskRun.tenant_id == tenant_id(), TaskRun.task_id == task_id
+                )
+            )
             session.execute(delete(Message).where(Message.conversation_id == task.conversation_id))
             session.execute(
                 delete(ModelRun).where(

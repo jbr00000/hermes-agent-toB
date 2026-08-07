@@ -294,6 +294,7 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
   const [notice, setNotice] = React.useState<string | null>(null)
   const [mobileSidebarOpen, setMobileSidebarOpen] = React.useState(false)
   const restoredRef = React.useRef(false)
+  const initialTabSelectedRef = React.useRef(false)
   const queryClient = useQueryClient()
   const sessionsQuery = useQuery({ queryKey: ['tasks'], queryFn: api.listTasks })
   const conversationsQuery = useQuery({ queryKey: ['conversations'], queryFn: api.listConversations })
@@ -319,7 +320,14 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
   }, [setActiveTabId, setTabs, setWorkspaceMode, user.id, workspaceMode])
 
   React.useEffect(() => {
-    if (!hydrated || tabs.length > 0) return
+    if (!hydrated || initialTabSelectedRef.current) return
+    if (tabs.length > 0) {
+      initialTabSelectedRef.current = true
+      return
+    }
+    const sourceQuery = workspaceMode === 'chat' ? conversationsQuery : sessionsQuery
+    if (!sourceQuery.isSuccess) return
+    initialTabSelectedRef.current = true
     const first = workspaceMode === 'chat'
       ? conversationsQuery.data?.[0]
       : sessionsQuery.data?.[0]
@@ -328,7 +336,18 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
       setTabs([tab])
       setActiveTabId(tab.id)
     }
-  }, [conversationsQuery.data, hydrated, sessionsQuery.data, setActiveTabId, setTabs, tabs.length, user.id, workspaceMode])
+  }, [
+    conversationsQuery.data,
+    conversationsQuery.isSuccess,
+    hydrated,
+    sessionsQuery.data,
+    sessionsQuery.isSuccess,
+    setActiveTabId,
+    setTabs,
+    tabs.length,
+    user.id,
+    workspaceMode,
+  ])
 
   React.useEffect(() => {
     if (!hydrated) return
@@ -440,8 +459,22 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
   const createAgentTask = React.useCallback((title?: string) => {
     api.createTask(title)
       .then((task) => {
+        const summary: SessionSummary = {
+          id: task.id,
+          title: task.title,
+          space: '企业工作区',
+          status: task.status,
+          updatedAt: new Date(task.updatedAt).toLocaleTimeString('zh-CN', {
+            hour: '2-digit',
+            minute: '2-digit',
+          }),
+          risk: task.risk,
+        }
         queryClient.setQueryData<AgentTaskDetail>(['task', task.id], task)
-        void queryClient.invalidateQueries({ queryKey: ['tasks'] })
+        queryClient.setQueryData<SessionSummary[]>(['tasks'], (current = []) => [
+          summary,
+          ...current.filter((item) => item.id !== task.id),
+        ])
         openTab('agent', task.id, task.title)
       })
       .catch((error) => setNotice(error instanceof Error ? error.message : '新建任务失败'))
@@ -1438,9 +1471,8 @@ function AgentView({ taskId, title, onDeleted }: { taskId: string; title: string
     setActionError(null)
     try {
       await api.deleteTask(taskId)
-      queryClient.removeQueries({ queryKey: ['task', taskId] })
-      await queryClient.invalidateQueries({ queryKey: ['tasks'] })
       onDeleted(taskId)
+      void queryClient.invalidateQueries({ queryKey: ['tasks'] })
     } catch (error) {
       setActionError(error instanceof Error ? error.message : '删除任务失败')
       setActionPending(false)
