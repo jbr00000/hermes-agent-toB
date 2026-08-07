@@ -87,6 +87,10 @@ def delete_session(session_id: str, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="session not found")
     if result == "running":
         raise HTTPException(status_code=409, detail="running session cannot be deleted")
+    if task is not None:
+        from server.sandbox import destroy_task_sandbox
+
+        destroy_task_sandbox(user["id"], task["id"])
     return {"deleted": session_id}
 
 

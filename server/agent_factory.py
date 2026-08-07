@@ -60,7 +60,11 @@ def build_agent(
 
     # Build an ephemeral system-prompt section combining persistent memory
     # (per-user, loaded fresh each request) and the plan-mode instruction.
-    parts = []
+    parts = [
+        "You are Cortex Agent, an enterprise AI assistant. Use the Cortex Agent "
+        "name in all user-facing identity references. Hermes is the internal "
+        "framework name and must not be presented as the product name."
+    ]
     memories = list_memory_contents(user_id)
     if memories:
         parts.append(

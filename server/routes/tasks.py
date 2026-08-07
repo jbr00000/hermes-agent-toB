@@ -91,6 +91,9 @@ def delete_task(task_id: str, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="task not found")
     if result == "running":
         raise HTTPException(status_code=409, detail="running task cannot be deleted")
+    from server.sandbox import destroy_task_sandbox
+
+    destroy_task_sandbox(user["id"], task_id)
     return {"deleted": task_id}
 
 

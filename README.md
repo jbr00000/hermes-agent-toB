@@ -88,11 +88,11 @@ features:
   host_terminal: false   # 宿主机 shell（关=只 Docker 沙盒）
 ```
 
-`deployment.yaml.example` 是客户交付配置模板；默认不存在时系统使用安全默认值（Docker 沙盒、禁止网络出口、关闭 host terminal）。
+`deployment.yaml.example` 是客户交付配置模板；默认不存在时系统使用安全默认值（Docker 沙盒、禁止网络出口、关闭 host terminal）。to-B 服务会按租户、用户和任务生成不透明的独立沙盒键，并以交付配置中的 CPU、内存、PID、超时策略创建容器；旧容器只有在安全配置指纹一致时才会复用。执行结束会释放容器并保留任务目录供重试，任务删除时再同步删除持久目录。
 
 ## 安全模型
 
-- **沙盒默认**：agent 跑代码只在 Docker，不开 `host_terminal` 就够不到宿主。
+- **沙盒默认**：agent 跑代码只在 Docker；to-B 服务默认断网，拒绝用户配置的宿主目录、凭据、业务缓存和任意 Docker 参数，仅保留框架 skills 的只读挂载。开放网络必须同时配置 `network_egress: allow` 与运维开关 `HERMES_ALLOW_SANDBOX_NETWORK=1`。
 - **DB 只读在 GRANT 层**：db_query + 沙盒共用客户的只读凭证，写操作在数据库被拒。
 - **工具级审计**：headless 会话中的工具调用会记录工具名、参数键、SQL 指纹、耗时和状态，不复制完整 SQL 或 secret 值。
 - **按用户隔离**：会话/记忆/审计按 user_id 隔离（10–50 人共享一个部署，不串）。

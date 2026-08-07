@@ -160,6 +160,11 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
         else {"mode": "read"}
     )
     permission_mode = "read" if effective_mode in {"chat", "plan"} else permission["mode"]
+    sandbox_task_id = None
+    if task is not None:
+        from server.sandbox import task_sandbox_key
+
+        sandbox_task_id = task_sandbox_key(user_id, task["id"])
 
     request_id = req.request_id or str(uuid.uuid4())
     lock_token = runtime_store.acquire_conversation(session_id)
@@ -396,7 +401,10 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
                 metadata={**runtime_metadata, "request_id": request_id},
             )
 
-            final = agent.chat(req.message, stream_callback=on_delta) or ""
+            chat_kwargs: dict[str, Any] = {"stream_callback": on_delta}
+            if sandbox_task_id is not None:
+                chat_kwargs["task_id"] = sandbox_task_id
+            final = agent.chat(req.message, **chat_kwargs) or ""
             cancelled = runtime_store.is_cancelled(request_id)
             with tool_status_lock:
                 unresolved_tool_failure = any(
@@ -629,6 +637,15 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
             runtime_store.release_conversation(session_id, lock_token)
             if stream_attached.is_set():
                 event_queue.put(sentinel)
+            if task is not None and effective_mode == "execute":
+                from server.sandbox import release_task_sandbox
+
+                threading.Thread(
+                    target=release_task_sandbox,
+                    args=(user_id, task["id"]),
+                    daemon=True,
+                    name=f"sandbox-release-{task['id'][:8]}",
+                ).start()
 
     if task is not None:
         emit(

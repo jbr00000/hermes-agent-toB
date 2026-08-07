@@ -675,11 +675,20 @@ def test_labels_attribute_populated_after_init(monkeypatch):
 
     env = _make_dummy_env(task_id="abc")
 
-    assert env._labels == {
-        "hermes-agent": "1",
-        "hermes-task-id": "abc",
-        "hermes-profile": "default",
-    }
+    assert env._labels["hermes-agent"] == "1"
+    assert env._labels["hermes-task-id"] == "abc"
+    assert env._labels["hermes-profile"] == "default"
+    assert len(env._labels["hermes-config"]) == 32
+
+
+def test_reuse_probe_includes_security_config_fingerprint(monkeypatch):
+    monkeypatch.setattr(docker_env, "find_docker", lambda: "/usr/bin/docker")
+    calls = _mock_subprocess_run_with_reuse(monkeypatch, ps_state=None)
+
+    _make_dummy_env(task_id="fingerprint-test", network=False)
+
+    probe = next(call[0] for call in calls if call[0][1] == "ps")
+    assert any(str(value).startswith("label=hermes-config=") for value in probe)
 
 
 # ── Cross-process container reuse (issue #20561) ──────────────────

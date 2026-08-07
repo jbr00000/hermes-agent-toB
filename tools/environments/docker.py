@@ -5,6 +5,7 @@ configurable resource limits (CPU, memory, disk), and optional filesystem
 persistence via bind mounts.
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -312,6 +313,68 @@ def find_docker() -> Optional[str]:
     return None
 
 
+def remove_task_containers(task_id: str, *, docker_exe: str | None = None) -> int:
+    """Synchronously remove every Hermes container carrying *task_id*."""
+    docker = docker_exe or find_docker()
+    if not docker:
+        return 0
+    task_label = _sanitize_label_value(task_id)
+    try:
+        listing = subprocess.run(
+            [
+                docker,
+                "ps",
+                "-a",
+                "--filter",
+                "label=hermes-agent=1",
+                "--filter",
+                f"label=hermes-task-id={task_label}",
+                "--format",
+                "{{.ID}}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+            stdin=subprocess.DEVNULL,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        logger.debug("Could not list containers for task %s", task_label, exc_info=True)
+        return 0
+    if listing.returncode != 0:
+        return 0
+
+    removed = 0
+    for container_id in (line.strip() for line in listing.stdout.splitlines()):
+        if not container_id:
+            continue
+        try:
+            result = subprocess.run(
+                [docker, "rm", "-f", container_id],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+                stdin=subprocess.DEVNULL,
+            )
+            if result.returncode == 0:
+                removed += 1
+        except (subprocess.TimeoutExpired, OSError):
+            logger.debug("Could not remove container %s", container_id[:12], exc_info=True)
+    return removed
+
+
+def _sandbox_config_fingerprint(image: str, cwd: str, run_args: list[str]) -> str:
+    """Hash security-relevant create settings without exposing their values."""
+    payload = json.dumps(
+        {"image": image, "cwd": cwd, "run_args": run_args},
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()[:32]
+
+
 # Security flags applied to every container.
 # The container itself is the security boundary (isolated from host).
 # We drop all capabilities then add back the minimum needed:
@@ -595,6 +658,8 @@ class DockerEnvironment(BaseEnvironment):
         auto_mount_cwd: bool = False,
         run_as_host_user: bool = False,
         extra_args: list = None,
+        pids_limit: int = 256,
+        allow_sensitive_host_mounts: bool = True,
         persist_across_processes: bool = True,
     ):
         if cwd == "~":
@@ -629,8 +694,8 @@ class DockerEnvironment(BaseEnvironment):
             resource_args.extend(["--cpus", str(cpu)])
         if memory > 0 and _cgroup_limits_available(image):
             resource_args.extend(["--memory", f"{memory}m"])
-        if _cgroup_limits_available(image):
-            resource_args.extend(["--pids-limit", _DEFAULT_PIDS_LIMIT])
+        if pids_limit > 0 and _cgroup_limits_available(image):
+            resource_args.extend(["--pids-limit", str(pids_limit)])
         # to-B fork: per-container disk quota (--storage-opt size=) is DISABLED.
         # It's only supported on overlay2-over-XFS-with-pquota; Docker Desktop's
         # WSL2 backend rejects it with exit 125, and the _storage_opt_supported()
@@ -717,7 +782,8 @@ class DockerEnvironment(BaseEnvironment):
                 get_cache_directory_mounts,
             )
 
-            for mount_entry in get_credential_file_mounts():
+            credential_mounts = get_credential_file_mounts() if allow_sensitive_host_mounts else []
+            for mount_entry in credential_mounts:
                 src = Path(mount_entry["host_path"])
                 if src.is_dir():
                     # Docker-in-Docker: Docker auto-created the source path as
@@ -768,7 +834,8 @@ class DockerEnvironment(BaseEnvironment):
             # screenshots) so the agent can access uploaded files and other
             # cached media from inside the container.  Read-only — the
             # container reads these but the host gateway manages writes.
-            for cache_mount in get_cache_directory_mounts():
+            cache_mounts = get_cache_directory_mounts() if allow_sensitive_host_mounts else []
+            for cache_mount in cache_mounts:
                 src = Path(cache_mount["host_path"])
                 if not src.is_dir():
                     logger.warning(
@@ -867,10 +934,12 @@ class DockerEnvironment(BaseEnvironment):
         # container-start time and never changes for the container's lifetime.
         profile_name = _sanitize_label_value(_get_active_profile_name())
         task_label = _sanitize_label_value(task_id)
+        config_fingerprint = _sandbox_config_fingerprint(image, cwd, all_run_args)
         label_args = [
             "--label", "hermes-agent=1",
             "--label", f"hermes-task-id={task_label}",
             "--label", f"hermes-profile={profile_name}",
+            "--label", f"hermes-config={config_fingerprint}",
         ]
         # Save args for container recreation on "No such container" recovery.
         self._image = image
@@ -882,6 +951,7 @@ class DockerEnvironment(BaseEnvironment):
             "hermes-agent": "1",
             "hermes-task-id": task_label,
             "hermes-profile": profile_name,
+            "hermes-config": config_fingerprint,
         }
 
         # Cross-process container reuse (issue #20561 — docs claim "ONE long-lived
@@ -891,14 +961,16 @@ class DockerEnvironment(BaseEnvironment):
         # restores the documented contract; opt out via
         # ``terminal.docker_persist_across_processes: false``.
         #
-        # Reuse matches on labels only — we deliberately do NOT compare image
-        # / mounts / resources.  Operators who need a fresh container after
-        # changing those settings should set ``docker_persist_across_processes:
-        # false`` (or run ``docker rm -f`` against the labeled container) to
-        # force a clean start.
+        # Reuse also requires the security configuration fingerprint to match,
+        # so image, mount, network, resource, and extra-argument changes always
+        # result in a fresh container.
         reused = False
         if persist_across_processes:
-            existing = self._find_reusable_container(task_label, profile_name)
+            existing = self._find_reusable_container(
+                task_label,
+                profile_name,
+                config_fingerprint,
+            )
             if existing is not None:
                 container_id, state = existing
                 self._container_id = container_id
@@ -1196,7 +1268,12 @@ class DockerEnvironment(BaseEnvironment):
         logger.debug("Docker --storage-opt support: %s", _storage_opt_ok)
         return _storage_opt_ok
 
-    def _find_reusable_container(self, task_label: str, profile_label: str) -> Optional[tuple[str, str]]:
+    def _find_reusable_container(
+        self,
+        task_label: str,
+        profile_label: str,
+        config_fingerprint: str,
+    ) -> Optional[tuple[str, str]]:
         """Look for an existing container labeled for this (task, profile).
 
         Returns ``(container_id, state)`` on hit, ``None`` on miss / on any
@@ -1216,6 +1293,7 @@ class DockerEnvironment(BaseEnvironment):
                     "--filter", "label=hermes-agent=1",
                     "--filter", f"label=hermes-task-id={task_label}",
                     "--filter", f"label=hermes-profile={profile_label}",
+                    "--filter", f"label=hermes-config={config_fingerprint}",
                     "--format", "{{.ID}}\t{{.State}}",
                 ],
                 capture_output=True,
@@ -1285,10 +1363,8 @@ class DockerEnvironment(BaseEnvironment):
         container down (``docker stop`` + ``docker rm -f``). This is the
         explicit-teardown path for ``/reset``, ``cleanup_vm(task_id)``-driven
         resets, or any caller that wants a guaranteed fresh container on next
-        ``DockerEnvironment(task_id=...)``. No current caller passes
-        ``force_remove=True``; the parameter is here so the explicit-teardown
-        semantics can be wired up later without changing this method's
-        signature.
+        ``DockerEnvironment(task_id=...)``. The to-B server uses this path when
+        an Agent execution finishes or its task is deleted.
 
         Cleanup runs on a daemon thread with bounded ``subprocess.run`` calls
         (not the racy ``Popen(... &)`` pattern from before PR #33645). The

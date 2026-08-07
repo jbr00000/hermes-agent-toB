@@ -34,6 +34,7 @@ Usage:
 import importlib.util
 import json
 import logging
+import math
 import os
 import platform
 import re
@@ -1147,6 +1148,9 @@ def _resolve_container_task_id(task_id: Optional[str]) -> str:
     session to spin up its own container.  Only overrides containing
     backend-specific image keys or ``env_type`` trigger isolation.
     """
+    if task_id and task_id.startswith("tob-"):
+        return task_id
+
     _ISOLATION_KEYS = frozenset({
         "docker_image", "modal_image", "singularity_image",
         "daytona_image", "env_type",
@@ -1254,6 +1258,33 @@ def _truthy_env(name: str, default: str) -> bool:
     return os.getenv(name, default).strip().lower() in {"true", "1", "yes", "on"}
 
 
+def _memory_limit_mb(value: object, default: int) -> int:
+    """Convert deployment memory values such as ``2048`` or ``2g`` to MB."""
+    if value is None:
+        return default
+    match = re.fullmatch(
+        r"\s*(\d+(?:\.\d+)?)\s*(k|kb|m|mb|g|gb|ki|kib|mi|mib|gi|gib)?\s*",
+        str(value).lower(),
+    )
+    if not match:
+        return default
+    amount = float(match.group(1))
+    unit = match.group(2) or "m"
+    if unit in {"k", "kb", "ki", "kib"}:
+        amount /= 1024
+    elif unit in {"g", "gb", "gi", "gib"}:
+        amount *= 1024
+    return max(1, int(amount))
+
+
+def _positive_number(value: object, default: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if math.isfinite(parsed) and parsed > 0 else default
+
+
 def _get_env_config() -> Dict[str, Any]:
     """Get terminal environment configuration from environment variables."""
     # Default image with Python and Node.js for maximum compatibility
@@ -1261,6 +1292,8 @@ def _get_env_config() -> Dict[str, Any]:
     env_type = os.getenv("TERMINAL_ENV", "docker")
     sandbox_config = _load_deployment_sandbox_config()
     network_egress = str(getattr(sandbox_config, "network_egress", "deny") or "deny").lower()
+    to_b_server = _truthy_env("HERMES_TOB_SERVER", "false")
+    allow_sandbox_network = _truthy_env("HERMES_ALLOW_SANDBOX_NETWORK", "false")
     docker_network_default = "false" if network_egress == "deny" else "true"
     
     mount_docker_cwd = os.getenv("TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE", "false").lower() in {"true", "1", "yes"}
@@ -1271,7 +1304,14 @@ def _get_env_config() -> Dict[str, Any]:
     # the active backend is local/ssh.  Do not parse their JSON/numeric payloads
     # until a backend that can consume them is selected; a stale or invalid
     # Docker value should not make local terminal/execute_code unusable.
-    if container_backend:
+    if to_b_server and docker_backend:
+        container_cpu = _positive_number(getattr(sandbox_config, "cpu_limit", None), 1.0)
+        container_memory = _memory_limit_mb(
+            getattr(sandbox_config, "memory_limit", None),
+            2048,
+        )
+        container_disk = 51200
+    elif container_backend:
         container_cpu = _parse_env_var("TERMINAL_CONTAINER_CPU", "1", float, "number")
         container_memory = _parse_env_var("TERMINAL_CONTAINER_MEMORY", "5120")
         container_disk = _parse_env_var("TERMINAL_CONTAINER_DISK", "51200")
@@ -1280,7 +1320,19 @@ def _get_env_config() -> Dict[str, Any]:
         container_memory = 5120
         container_disk = 51200
 
-    if docker_backend:
+    container_pids_limit = int(getattr(sandbox_config, "pids_limit", None) or 256)
+    command_timeout = (
+        max(1, int(getattr(sandbox_config, "timeout_seconds", 300.0)))
+        if to_b_server and docker_backend
+        else _parse_env_var("TERMINAL_TIMEOUT", "180")
+    )
+    if to_b_server and docker_backend:
+        docker_forward_env = []
+        docker_volumes = []
+        docker_env = {}
+        docker_extra_args = []
+        docker_network = network_egress == "allow" and allow_sandbox_network
+    elif docker_backend:
         docker_forward_env = _parse_env_var("TERMINAL_DOCKER_FORWARD_ENV", "[]", json.loads, "valid JSON")
         docker_volumes = _parse_env_var("TERMINAL_DOCKER_VOLUMES", "[]", json.loads, "valid JSON")
         docker_env = _parse_env_var("TERMINAL_DOCKER_ENV", "{}", json.loads, "valid JSON")
@@ -1292,6 +1344,11 @@ def _get_env_config() -> Dict[str, Any]:
         docker_env = {}
         docker_extra_args = []
         docker_network = True
+
+    if to_b_server and docker_backend:
+        # The enterprise server is fail-closed. Local CLI settings cannot add
+        # host mounts, secrets, arbitrary run flags, or network access.
+        mount_docker_cwd = False
 
     # Default cwd: local uses the host's current directory, ssh uses the
     # remote home, and everything else starts in the backend's default
@@ -1340,7 +1397,7 @@ def _get_env_config() -> Dict[str, Any]:
         "cwd": cwd,
         "host_cwd": host_cwd,
         "docker_mount_cwd_to_workspace": mount_docker_cwd,
-        "timeout": _parse_env_var("TERMINAL_TIMEOUT", "180"),
+        "timeout": command_timeout,
         "lifetime_seconds": _parse_env_var("TERMINAL_LIFETIME_SECONDS", "300"),
         # SSH-specific config
         "ssh_host": os.getenv("TERMINAL_SSH_HOST", ""),
@@ -1360,12 +1417,24 @@ def _get_env_config() -> Dict[str, Any]:
         "container_cpu": container_cpu,
         "container_memory": container_memory,     # MB (default 5GB)
         "container_disk": container_disk,        # MB (default 50GB)
-        "container_persistent": os.getenv("TERMINAL_CONTAINER_PERSISTENT", "true").lower() in {"true", "1", "yes"},
+        "container_pids_limit": container_pids_limit,
+        "container_persistent": (
+            True
+            if to_b_server
+            else os.getenv("TERMINAL_CONTAINER_PERSISTENT", "true").lower()
+            in {"true", "1", "yes"}
+        ),
         "docker_volumes": docker_volumes,
         "docker_env": docker_env,
         "docker_network": docker_network,
-        "docker_run_as_host_user": os.getenv("TERMINAL_DOCKER_RUN_AS_HOST_USER", "false").lower() in {"true", "1", "yes"},
+        "docker_run_as_host_user": (
+            False
+            if to_b_server
+            else os.getenv("TERMINAL_DOCKER_RUN_AS_HOST_USER", "false").lower()
+            in {"true", "1", "yes"}
+        ),
         "docker_extra_args": docker_extra_args,
+        "docker_allow_sensitive_host_mounts": not to_b_server,
         # Cross-process container reuse (issue #20561).  The docs claim
         # "ONE long-lived container shared across sessions" — this toggle
         # makes that real by probing for a labeled container at startup and
@@ -1392,6 +1461,32 @@ def _get_modal_backend_state(modal_mode: object | None) -> Dict[str, Any]:
         has_direct=has_direct_modal_credentials(),
         managed_ready=is_managed_tool_gateway_ready("modal"),
     )
+
+
+def _container_config_from_env(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Project terminal configuration into the container backend contract."""
+    return {
+        "container_cpu": config.get("container_cpu", 1),
+        "container_memory": config.get("container_memory", 5120),
+        "container_disk": config.get("container_disk", 51200),
+        "container_pids_limit": config.get("container_pids_limit", 256),
+        "container_persistent": config.get("container_persistent", True),
+        "modal_mode": config.get("modal_mode", "auto"),
+        "docker_volumes": config.get("docker_volumes", []),
+        "docker_mount_cwd_to_workspace": config.get("docker_mount_cwd_to_workspace", False),
+        "docker_forward_env": config.get("docker_forward_env", []),
+        "docker_env": config.get("docker_env", {}),
+        "docker_network": config.get("docker_network", False),
+        "docker_run_as_host_user": config.get("docker_run_as_host_user", False),
+        "docker_extra_args": config.get("docker_extra_args", []),
+        "docker_allow_sensitive_host_mounts": config.get(
+            "docker_allow_sensitive_host_mounts", True
+        ),
+        "docker_persist_across_processes": config.get(
+            "docker_persist_across_processes", True
+        ),
+        "docker_orphan_reaper": config.get("docker_orphan_reaper", True),
+    }
 
 
 def _create_environment(env_type: str, image: str, cwd: str, timeout: int,
@@ -1440,6 +1535,7 @@ def _create_environment(env_type: str, image: str, cwd: str, timeout: int,
         return _DockerEnvironment(
             image=image, cwd=cwd, timeout=timeout,
             cpu=cpu, memory=memory, disk=disk,
+            pids_limit=cc.get("container_pids_limit", 256),
             persistent_filesystem=persistent, task_id=task_id,
             volumes=volumes,
             host_cwd=host_cwd,
@@ -1449,6 +1545,7 @@ def _create_environment(env_type: str, image: str, cwd: str, timeout: int,
             network=cc.get("docker_network", True),
             run_as_host_user=cc.get("docker_run_as_host_user", False),
             extra_args=docker_extra_args,
+            allow_sensitive_host_mounts=cc.get("docker_allow_sensitive_host_mounts", True),
             persist_across_processes=cc.get("docker_persist_across_processes", True),
         )
     
@@ -1651,7 +1748,7 @@ def cleanup_vm(task_id: str, *, force_remove: bool = False):
         pass
 
     if env is None:
-        return
+        return None
 
     try:
         if hasattr(env, 'cleanup'):
@@ -1676,6 +1773,7 @@ def cleanup_vm(task_id: str, *, force_remove: bool = False):
             logger.info("Environment for task %s already cleaned up", task_id)
         else:
             logger.warning("Error cleaning up environment for task %s: %s", task_id, e)
+    return env
 
 
 def _atexit_cleanup():
@@ -2118,21 +2216,7 @@ def terminal_tool(
 
                         container_config = None
                         if env_type in {"docker", "singularity", "modal", "daytona"}:
-                            container_config = {
-                                "container_cpu": config.get("container_cpu", 1),
-                                "container_memory": config.get("container_memory", 5120),
-                                "container_disk": config.get("container_disk", 51200),
-                                "container_persistent": config.get("container_persistent", True),
-                                "modal_mode": config.get("modal_mode", "auto"),
-                                "docker_volumes": config.get("docker_volumes", []),
-                                "docker_mount_cwd_to_workspace": config.get("docker_mount_cwd_to_workspace", False),
-                                "docker_forward_env": config.get("docker_forward_env", []),
-                                "docker_env": config.get("docker_env", {}),
-                                "docker_run_as_host_user": config.get("docker_run_as_host_user", False),
-                                "docker_extra_args": config.get("docker_extra_args", []),
-                                "docker_persist_across_processes": config.get("docker_persist_across_processes", True),
-                                "docker_orphan_reaper": config.get("docker_orphan_reaper", True),
-                            }
+                            container_config = _container_config_from_env(config)
 
                         local_config = None
                         if env_type == "local":

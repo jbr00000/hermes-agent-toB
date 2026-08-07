@@ -19,7 +19,7 @@ def create_app() -> FastAPI:
     memory_module.init_db()
     audit_module.init_db()
     features_module.apply_terminal_backend()  # TERMINAL_ENV = docker (default) | local (if host_terminal opted in)
-    app = FastAPI(title="Hermes Headless Server", version="0.4.0")
+    app = FastAPI(title="Cortex Agent Server", version="0.4.0")
     app.include_router(auth.router)
     app.include_router(chat.router)
     app.include_router(sessions.router)

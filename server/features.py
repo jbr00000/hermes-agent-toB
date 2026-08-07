@@ -59,4 +59,5 @@ def get_features() -> dict:
 def apply_terminal_backend() -> None:
     """Force TERMINAL_ENV from the resolved host_terminal flag."""
     flags = get_features()
+    os.environ["HERMES_TOB_SERVER"] = "1"
     os.environ["TERMINAL_ENV"] = "local" if flags.get("host_terminal") else "docker"

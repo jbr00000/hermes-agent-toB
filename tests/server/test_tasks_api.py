@@ -88,8 +88,8 @@ def test_agent_plan_approval_execute_and_permission_downgrade(monkeypatch, tmp_p
         def __init__(self, callbacks: dict) -> None:
             self.callbacks = callbacks
 
-        def chat(self, message, stream_callback=None):
-            captured.append({"message": message, **self.callbacks})
+        def chat(self, message, stream_callback=None, task_id=None):
+            captured.append({"message": message, "task_id": task_id, **self.callbacks})
             if self.callbacks.get("tool_start_callback"):
                 self.callbacks["tool_start_callback"](
                     "tool-1",
@@ -136,6 +136,7 @@ def test_agent_plan_approval_execute_and_permission_downgrade(monkeypatch, tmp_p
     assert "event: plan.required" in plan.text
     assert captured[-1]["mode"] == "plan"
     assert captured[-1]["permission_mode"] == "read"
+    assert captured[-1]["task_id"].startswith("tob-")
 
     detail = client.get(f"/tasks/{task['id']}", headers=headers).json()["task"]
     assert detail["status"] == "awaiting_approval"
@@ -215,7 +216,7 @@ def test_execute_with_failed_tool_marks_task_failed(monkeypatch, tmp_path) -> No
         def __init__(self, callbacks: dict) -> None:
             self.callbacks = callbacks
 
-        def chat(self, message, stream_callback=None):
+        def chat(self, message, stream_callback=None, task_id=None):
             if self.callbacks["mode"] == "execute":
                 self.callbacks["tool_start_callback"]("tool-1", "terminal", {})
                 self.callbacks["tool_complete_callback"](
@@ -276,7 +277,7 @@ def test_agent_interruption_is_persisted_as_cancelled(monkeypatch, tmp_path) -> 
         reasoning_config = {"enabled": False}
         enabled_toolsets = ["db"]
 
-        def chat(self, message, stream_callback=None):
+        def chat(self, message, stream_callback=None, task_id=None):
             started.set()
             interrupted.wait(timeout=5)
             raise RuntimeError("interrupted")

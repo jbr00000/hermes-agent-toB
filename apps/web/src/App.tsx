@@ -35,7 +35,6 @@ import {
   Search,
   Send,
   ShieldCheck,
-  Sparkles,
   Table2,
   Trash2,
   UserCog,
@@ -89,6 +88,7 @@ import type {
 } from './types'
 
 const MAX_TABS = 12
+const CORTEX_MARK_URL = '/assets/cortex-logo-mark.svg'
 
 function cn(...classes: Array<string | false | null | undefined>): string {
   return classes.filter(Boolean).join(' ')
@@ -239,11 +239,11 @@ function LoginView({ onLogin }: { onLogin: (user: AuthUser) => void }): React.Re
     <div className="min-h-[100dvh] overflow-y-auto bg-shell px-4 py-8 text-ink sm:px-6">
       <div className="mx-auto flex min-h-[calc(100dvh-4rem)] w-full max-w-[400px] flex-col justify-center">
         <div className="mb-5 flex items-center gap-3 px-1">
-          <div className="flex h-10 w-10 items-center justify-center rounded-md bg-ink text-white">
-            <Bot size={20} />
+          <div className="flex h-10 w-10 items-center justify-center rounded-md bg-[#237a57] text-white shadow-sm">
+            <img src={CORTEX_MARK_URL} alt="" className="h-8 w-8" />
           </div>
           <div>
-            <div className="text-lg font-semibold">Hermes Agent</div>
+            <div className="text-lg font-semibold">Cortex Agent</div>
             <div className="text-xs text-zinc-500">企业智能体工作台</div>
           </div>
         </div>
@@ -295,6 +295,9 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
   const [mobileSidebarOpen, setMobileSidebarOpen] = React.useState(false)
   const restoredRef = React.useRef(false)
   const initialTabSelectedRef = React.useRef(false)
+  const requestedWorkspaceModeRef = React.useRef<WorkspaceMode>(workspaceMode)
+  const pendingWorkspaceModeRef = React.useRef<WorkspaceMode | null>(null)
+  const modeCreationsRef = React.useRef(new Set<WorkspaceMode>())
   const queryClient = useQueryClient()
   const sessionsQuery = useQuery({ queryKey: ['tasks'], queryFn: api.listTasks })
   const conversationsQuery = useQuery({ queryKey: ['conversations'], queryFn: api.listConversations })
@@ -395,7 +398,10 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
 
   const openTab = React.useCallback((type: TabType, refId: string, title: string) => {
     const id = tabId(user.id, type, refId)
-    if (type === 'agent' || type === 'chat') setWorkspaceMode(type)
+    if (type === 'agent' || type === 'chat') {
+      requestedWorkspaceModeRef.current = type
+      setWorkspaceMode(type)
+    }
     setTabs((current) => {
       const existing = current.find((tab) => tab.id === id)
       if (existing) {
@@ -419,7 +425,10 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
       if (activeTabId === tabId) {
         const nextActive = next[Math.max(0, index - 1)] ?? next[0] ?? null
         setActiveTabId(nextActive?.id ?? null)
-        if (nextActive?.type === 'agent' || nextActive?.type === 'chat') setWorkspaceMode(nextActive.type)
+        if (nextActive?.type === 'agent' || nextActive?.type === 'chat') {
+          requestedWorkspaceModeRef.current = nextActive.type
+          setWorkspaceMode(nextActive.type)
+        }
       }
       return next
     })
@@ -428,36 +437,27 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
   const activateTab = React.useCallback((tabId: string) => {
     const tab = tabs.find((item) => item.id === tabId)
     setActiveTabId(tabId)
-    if (tab?.type === 'agent' || tab?.type === 'chat') setWorkspaceMode(tab.type)
+    if (tab?.type === 'agent' || tab?.type === 'chat') {
+      requestedWorkspaceModeRef.current = tab.type
+      setWorkspaceMode(tab.type)
+    }
   }, [setActiveTabId, setWorkspaceMode, tabs])
 
-  const changeWorkspaceMode = React.useCallback((mode: WorkspaceMode) => {
-    setWorkspaceMode(mode)
-    const existing = tabs
-      .filter((tab) => tab.type === mode)
-      .sort((left, right) => right.updatedAt - left.updatedAt)[0]
-    if (existing) {
-      setActiveTabId(existing.id)
-      return
-    }
-
-    const first = mode === 'chat'
-      ? conversationsQuery.data?.[0]
-      : sessionsQuery.data?.[0]
-    if (first) openTab(mode, first.id, first.title)
-  }, [conversationsQuery.data, openTab, sessionsQuery.data, setActiveTabId, setWorkspaceMode, tabs])
-
-  const createConversation = React.useCallback(() => {
-    api.createConversation()
+  const createConversation = React.useCallback((activate = true) => {
+    return api.createConversation()
       .then((conversation) => {
         queryClient.setQueryData<ConversationSummary[]>(['conversations'], (current = []) => [conversation, ...current])
-        openTab('chat', conversation.id, conversation.title)
+        if (activate) openTab('chat', conversation.id, conversation.title)
+        return conversation
       })
-      .catch((error) => setNotice(error instanceof Error ? error.message : '新建问答失败'))
+      .catch((error) => {
+        setNotice(error instanceof Error ? error.message : '新建问答失败')
+        return null
+      })
   }, [openTab, queryClient])
 
-  const createAgentTask = React.useCallback((title?: string) => {
-    api.createTask(title)
+  const createAgentTask = React.useCallback((title?: string, activate = true) => {
+    return api.createTask(title)
       .then((task) => {
         const summary: SessionSummary = {
           id: task.id,
@@ -475,10 +475,77 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
           summary,
           ...current.filter((item) => item.id !== task.id),
         ])
-        openTab('agent', task.id, task.title)
+        if (activate) openTab('agent', task.id, task.title)
+        return task
       })
-      .catch((error) => setNotice(error instanceof Error ? error.message : '新建任务失败'))
+      .catch((error) => {
+        setNotice(error instanceof Error ? error.message : '新建任务失败')
+        return null
+      })
   }, [openTab, queryClient])
+
+  const changeWorkspaceMode = React.useCallback((mode: WorkspaceMode) => {
+    requestedWorkspaceModeRef.current = mode
+    setWorkspaceMode(mode)
+    const existing = tabs
+      .filter((tab) => tab.type === mode)
+      .sort((left, right) => right.updatedAt - left.updatedAt)[0]
+    if (existing) {
+      pendingWorkspaceModeRef.current = null
+      setActiveTabId(existing.id)
+      return
+    }
+
+    setActiveTabId(null)
+    const sourceReady = mode === 'chat'
+      ? conversationsQuery.isSuccess
+      : sessionsQuery.isSuccess
+    if (!sourceReady) {
+      pendingWorkspaceModeRef.current = mode
+      return
+    }
+    pendingWorkspaceModeRef.current = null
+    const first = mode === 'chat'
+      ? conversationsQuery.data?.[0]
+      : sessionsQuery.data?.[0]
+    if (first) {
+      openTab(mode, first.id, first.title)
+      return
+    }
+    if (modeCreationsRef.current.has(mode)) return
+
+    modeCreationsRef.current.add(mode)
+    const creation = mode === 'chat'
+      ? createConversation(false)
+      : createAgentTask(undefined, false)
+    void creation
+      .then((created) => {
+        if (created && requestedWorkspaceModeRef.current === mode) {
+          openTab(mode, created.id, created.title)
+        }
+      })
+      .finally(() => modeCreationsRef.current.delete(mode))
+  }, [
+    conversationsQuery.data,
+    conversationsQuery.isSuccess,
+    createAgentTask,
+    createConversation,
+    openTab,
+    sessionsQuery.data,
+    sessionsQuery.isSuccess,
+    setActiveTabId,
+    setWorkspaceMode,
+    tabs,
+  ])
+
+  React.useEffect(() => {
+    const pendingMode = pendingWorkspaceModeRef.current
+    if (!pendingMode) return
+    const sourceReady = pendingMode === 'chat'
+      ? conversationsQuery.isSuccess
+      : sessionsQuery.isSuccess
+    if (sourceReady) changeWorkspaceMode(pendingMode)
+  }, [changeWorkspaceMode, conversationsQuery.isSuccess, sessionsQuery.isSuccess])
 
   const updateConversationTab = React.useCallback((sessionId: string, title: string) => {
     setTabs((current) => current.map((tab) => (
@@ -620,11 +687,11 @@ function Sidebar({
       )}>
       <div className="border-b border-line px-3 py-3">
         <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-ink text-white">
-            <Bot size={17} />
+          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-[#237a57] text-white shadow-sm">
+            <img src={CORTEX_MARK_URL} alt="" className="h-7 w-7" />
           </div>
           <div className="min-w-0">
-            <div className="truncate text-[15px] font-semibold">Hermes Agent</div>
+            <div className="truncate text-[15px] font-semibold">Cortex Agent</div>
             <div className="text-xs text-zinc-500">企业智能体工作台</div>
           </div>
           <button
@@ -1613,8 +1680,8 @@ function MessageBubble({ message }: { message: ChatMessage }) {
   return (
     <div className={cn('flex gap-3', !assistant && !system && 'justify-end')}>
       {(assistant || system) && (
-        <div className={cn('flex h-8 w-8 shrink-0 items-center justify-center rounded-md', system ? 'bg-amber-50 text-caution' : 'bg-emerald-50 text-success')}>
-          {system ? <ShieldCheck size={16} /> : <Bot size={16} />}
+        <div className={cn('flex h-8 w-8 shrink-0 items-center justify-center rounded-md', system ? 'bg-amber-50 text-caution' : 'bg-[#237a57] text-white')}>
+          {system ? <ShieldCheck size={16} /> : <img src={CORTEX_MARK_URL} alt="" className="h-7 w-7" />}
         </div>
       )}
       <div className={cn('max-w-[88%] rounded-md border px-3 py-3 text-sm leading-6 sm:max-w-[78%] sm:px-4', assistant || system ? 'border-line bg-panel' : 'border-ink bg-ink text-white')}>
@@ -1648,11 +1715,11 @@ function ThinkingBubble({ message }: { message: ChatMessage }) {
   return (
     <div className="flex items-start gap-3" role="status" aria-live="polite">
       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-[#237a57] text-white shadow-sm">
-        <Sparkles size={18} />
+        <img src={CORTEX_MARK_URL} alt="" className="h-8 w-8" />
       </div>
       <div className="min-w-0 pt-0.5">
         <div className="flex min-h-9 flex-wrap items-center gap-2">
-          <span className="text-sm font-medium text-zinc-500">Hermes · {displayTime}</span>
+          <span className="text-sm font-medium text-zinc-500">Cortex · {displayTime}</span>
           <span className="inline-flex h-8 items-center gap-2 rounded-full bg-[#e4f3ec] px-3 text-sm font-medium text-[#237a57]">
             <span className="h-2 w-2 animate-pulse rounded-full bg-[#82bda5]" />
             正在生成

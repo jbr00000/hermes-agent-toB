@@ -5959,18 +5959,28 @@ class AIAgent:
             moa_config=moa_config,
         )
 
-    def chat(self, message: str, stream_callback: Optional[callable] = None) -> str:
+    def chat(
+        self,
+        message: str,
+        stream_callback: Optional[callable] = None,
+        task_id: str = None,
+    ) -> str:
         """
         Simple chat interface that returns just the final response.
 
         Args:
             message (str): User message
             stream_callback: Optional callback invoked with each text delta during streaming.
+            task_id: Stable execution identity used to isolate task sandboxes.
 
         Returns:
             str: Final assistant response
         """
-        result = self.run_conversation(message, stream_callback=stream_callback)
+        result = self.run_conversation(
+            message,
+            task_id=task_id,
+            stream_callback=stream_callback,
+        )
         return result["final_response"]
 
     def _run_codex_app_server_turn(
