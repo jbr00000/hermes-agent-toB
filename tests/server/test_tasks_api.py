@@ -65,6 +65,7 @@ def test_agent_task_is_user_scoped_and_defaults_to_read(monkeypatch, tmp_path) -
     assert client.get("/tasks", headers=admin_headers).json()["tasks"] == []
 
     second = client.post("/tasks", headers=admin_headers, json={}).json()["task"]
+    assert second["title"] == "新任务"
     deleted_via_session = client.delete(
         f"/sessions/{second['session_id']}", headers=admin_headers
     )

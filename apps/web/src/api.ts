@@ -47,7 +47,8 @@ interface BackendMessage {
 
 interface BackendModelRun {
   id: string
-  status: 'running'
+  status: 'queued' | 'running'
+  phase?: 'plan' | 'execute' | null
   started_at: number
   elapsed_ms: number
   partial_content?: string
@@ -221,6 +222,7 @@ function toActiveRun(row: BackendModelRun | null): ActiveModelRun | null {
   return {
     id: row.id,
     status: row.status,
+    phase: row.phase ?? null,
     startedAt: row.started_at * 1000,
     elapsedMs: row.elapsed_ms,
     observedAt: Date.now(),
@@ -549,6 +551,21 @@ export const api = {
       signal,
       body: JSON.stringify({ request_id: requestId }),
     })
+    if (!response.ok) throw await parseError(response)
+    await consumeEventStream(response, handlers)
+  },
+
+  async streamTaskEvents(
+    taskId: string,
+    requestId: string,
+    contentOffset: number,
+    handlers: ChatStreamHandlers,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const response = await apiFetch(
+      `/tasks/${encodeURIComponent(taskId)}/runs/${encodeURIComponent(requestId)}/events?content_offset=${Math.max(0, contentOffset)}`,
+      { signal },
+    )
     if (!response.ok) throw await parseError(response)
     await consumeEventStream(response, handlers)
   },

@@ -198,10 +198,10 @@ Agent 模式必须通过任务接口进入。服务端持久化任务、运行�
 #### `GET /tasks` / `GET /tasks/{task_id}`
 列表接口返回当前用户的任务摘要；详情接口同时返回 `session`、`messages`、`active_run`、`plan`、`permission`、`runs`、`events` 和 `artifacts`。
 
-运行中的 `active_run.partial_content` 来自 Redis 完整回答快照。最终消息、计划和工具事件以 MySQL 为准。
+排队或运行中的 `active_run.partial_content` 来自 Redis 完整回答快照，并包含 `status=queued|running` 与 `phase=plan|execute`。最终消息、计划和工具事件以 MySQL 为准。
 
 #### `POST /tasks/{task_id}/plan`（SSE）
-以只读工具生成计划。无论当前权限租约为何，Plan 阶段都强制只读。
+以只读工具生成计划。无论当前权限租约为何，Plan 阶段都强制只读。接口将任务写入 Redis 队列后保持 SSE 订阅；实际执行由独立 Agent Worker 完成，浏览器断开不会终止任务。
 ```json
 { "message": "读取文档并生成执行计划", "request_id": "可选幂等标识" }
 ```
@@ -210,7 +210,7 @@ Agent 模式必须通过任务接口进入。服务端持久化任务、运行�
 
 | SSE 事件 | 含义 |
 |---|---|
-| `task.status` | 任务进入 `planning/running/completed/failed/cancelled` 等状态 |
+| `task.status` | 任务进入 `queued/planning/running/completed/failed/cancelled` 等状态 |
 | `tool.started` | 工具开始，参数已脱敏和截断 |
 | `tool.progress` | 工具进度 |
 | `tool.completed` | 工具完成，结果已脱敏和截断 |
@@ -228,10 +228,13 @@ Agent 模式必须通过任务接口进入。服务端持久化任务、运行�
 `mode` 可取 `read`、`controlled`、`full`。当前版本只有 `full` 会在 Execute 阶段启用 Docker 终端；扩展工具尚未接入风险分类，因此 `controlled` 暂不开放未分类写工具。任务执行完成、失败或取消后自动恢复为 `read`。
 
 #### `POST /tasks/{task_id}/execute`（SSE）
-只允许执行已批准的计划。请求体可传 `request_id`；不传时由服务端生成。
+只允许执行已批准的计划。请求体可传 `request_id`；不传时由服务端生成。Worker 真正领取任务时会重新校验权限租约，过期租约按 `read` 处理。
+
+#### `GET /tasks/{task_id}/runs/{request_id}/events`（SSE）
+重新订阅已经入队或运行中的 Agent 任务。`content_offset` 查询参数表示前端已经持有的回答字符数，服务端只补发其后的快照内容，并重放尚需去重的状态/工具事件。
 
 #### `POST /tasks/{task_id}/cancel` / `POST /tasks/{task_id}/retry`
-取消当前运行，或按最近一次运行阶段重试。SSE 断开本身不会取消任务。
+取消当前排队或运行中的任务，或按最近一次运行阶段重试。SSE 断开本身不会取消任务。Worker 异常后 Plan 可以自动回队；已经开始的 Execute 不会自动重放，必须显式重试。
 
 #### `DELETE /tasks/{task_id}`
 删除非运行中的任务聚合，包括会话、消息、运行、计划、权限租约、工具事件和产物记录；审计记录保留。

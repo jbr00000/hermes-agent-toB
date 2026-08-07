@@ -14,6 +14,7 @@
 | 能力 | 说明 |
 |---|---|
 | **headless 服务** | FastAPI，前端 BFF：JWT 鉴权、SSE 流式对话、按用户隔离会话/记忆 |
+| **持久 Agent Worker** | Redis 持久队列 + 租约/心跳，MySQL 保存任务运行状态，API 重启不丢任务 |
 | **沙盒代码执行** | agent 生成的代码只在 **Docker 容器**里跑，物理上够不到宿主机（决策 5） |
 | **数据库只读查询** | `db_query` 工具连客户业务库，**只读在 DB GRANT 层强制** |
 | **持久记忆 + 跨会话** | 本地 SQLite，按 user_id 隔离（决策 7，无云记忆） |
@@ -27,13 +28,12 @@
 ```
 前端 ──HTTP/SSE──> server/ (FastAPI, JWT 鉴权)
                       │
-                      ├── AIAgent (run_agent.py)
-                      │     ├── db_query ──> 客户业务库（只读）
-                      │     ├── terminal/execute_code ──> Docker 沙盒
-                      │     └── plan mode / 记忆注入
-                      ├── SessionDB (state.db) ── 按用户的会话历史
-                      ├── memory.db ── 按用户的持久记忆
-                      └── users.db ── 用户 + bcrypt + 角色
+                      ├── MySQL（会话、任务、消息、审计）
+                      ├── Redis（队列、租约、取消、事件、回答快照）
+                      └── worker/ ──> AIAgent (run_agent.py)
+                            ├── db_query ──> 客户业务库（只读）
+                            ├── terminal/execute_code ──> Docker 沙盒
+                            └── plan mode / 记忆注入
 ```
 
 详细模块说明见 [`项目架构详解.md`](docs/项目架构详解.md)；前端对接的 API 见 [`API文档.md`](docs/API文档.md)。
@@ -60,13 +60,16 @@ cp cli-config.yaml.example .hermes-dev/config.yaml   # 调 model 等
 
 ### 3. 跑 headless 服务
 ```bash
-HERMES_HOME=.hermes-dev python -m server     # 启动在 :8000
+HERMES_HOME=.hermes-dev python -m server          # API，启动在 :8000
+HERMES_HOME=.hermes-dev python -m server.worker   # Agent Worker
 ```
 首跑会自动 bootstrap admin 用户；生产/交付环境必须先设置 `HERMES_ADMIN_PASSWORD`。本地临时开发如需使用 `admin/changeme`，显式设置 `HERMES_ALLOW_DEFAULT_ADMIN=1`。
 
 ### 4. 容器化
 ```bash
-docker compose up       # 镜像 hermes-agent-tob:dev，挂载 .hermes-dev 为 /data
+docker compose up -d                         # MySQL + Redis
+docker compose --profile app up -d --build   # 再启动 Server + Worker
+docker compose --profile app --profile agent up -d --build  # 需要 Docker 沙盒执行时
 ```
 
 ## 配置
@@ -76,11 +79,9 @@ docker compose up       # 镜像 hermes-agent-tob:dev，挂载 .hermes-dev 为 /
 | `deployment.yaml` | **交付声明**：客户标识、模型、DB 环境变量名、沙盒策略、MCP server、功能开关 |
 | `.env` | **密钥**：API key、DB URL、沙盒镜像、功能开关 |
 | `config.yaml` | **行为**：model、reasoning_effort、features、terminal |
-| `state.db` | 会话历史（SQLite + FTS5） |
-| `memory.db` | 持久记忆（SQLite） |
-| `users.db` | 用户 |
-| `audit.db` | 审计事件：会话轮次 + 工具调用摘要 |
 | `jwt.key` | JWT 签名密钥 |
+
+业务状态统一保存在 MySQL；Redis 保存任务队列、租约、取消信号、短期事件和回答快照。SQLite 只作为无外部数据库时的测试/本地适配器，不是生产部署方案。
 
 功能开关（默认全关，前端可开）：
 ```yaml
@@ -96,7 +97,7 @@ features:
 - **DB 只读在 GRANT 层**：db_query + 沙盒共用客户的只读凭证，写操作在数据库被拒。
 - **工具级审计**：headless 会话中的工具调用会记录工具名、参数键、SQL 指纹、耗时和状态，不复制完整 SQL 或 secret 值。
 - **按用户隔离**：会话/记忆/审计按 user_id 隔离（10–50 人共享一个部署，不串）。
-- **无云记忆/无遥测**：记忆本地 SQLite，无外发分析。
+- **无云记忆/无遥测**：记忆保存在客户 MySQL，无外发分析。
 - 详见 [`docs/security/network-egress-isolation.md`](docs/security/network-egress-isolation.md)。
 
 ## 文档导航
@@ -108,6 +109,7 @@ features:
 | [`API文档.md`](docs/API文档.md) | 前端对接的 API 接口（含 SSE 格式） |
 | [`B端前端设计方案.md`](docs/B端前端设计方案.md) | to-B Web 工作台前端设计方向（参考 Proma，非 Electron） |
 | [`B端后续开发计划.md`](docs/B端后续开发计划.md) | 去 gateway 后的企业服务层建设路线（不复活消息平台） |
+| [`Cortex Agent后续迭代计划.md`](docs/Cortex%20Agent后续迭代计划.md) | 当前阶段完成情况与后续产品化迭代顺序 |
 | [`CLAUDE.md`](CLAUDE.md) | 给 AI 助手的项目导览 |
 | [`AGENTS.md`](AGENTS.md) | 开发指南 + 硬性约束 + 编码规范 |
 | [`UPSTREAM.md`](UPSTREAM.md) | 硬分叉基线记录 |

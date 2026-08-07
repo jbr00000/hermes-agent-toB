@@ -44,7 +44,7 @@ interface InternalRun {
 
 type AgentApi = Pick<
   typeof api,
-  'streamTaskPlan' | 'streamTaskExecute' | 'cancelTask'
+  'streamTaskPlan' | 'streamTaskExecute' | 'streamTaskEvents' | 'cancelTask'
 >
 
 const ACTIVE_STATUSES = new Set<AgentRunStatus>(['connecting', 'streaming', 'cancelling'])
@@ -167,7 +167,8 @@ export class AgentRunManager {
         current
         && current.snapshot.source === 'restored'
         && current.snapshot.requestId === activeRun.id
-        && current.snapshot.sequence > activeRun.sequence
+        && current.snapshot.sequence >= activeRun.sequence
+        && isAgentRunActive(current.snapshot)
       ) return
       this.restore(task, activeRun)
       return
@@ -243,14 +244,14 @@ export class AgentRunManager {
   private restore(task: AgentTaskDetail, activeRun: ActiveModelRun): void {
     const now = Date.now()
     const startedAt = activeRun.startedAt || activeRun.observedAt - activeRun.elapsedMs
-    const phase = task.status === 'planning' ? 'plan' : 'execute'
+    const phase = activeRun.phase ?? (task.status === 'planning' ? 'plan' : 'execute')
     this.replace(task.id, {
       taskId: task.id,
       sessionId: task.sessionId,
       requestId: activeRun.id,
       phase,
       source: 'restored',
-      status: 'streaming',
+      status: activeRun.status === 'queued' ? 'connecting' : 'streaming',
       taskStatus: task.status,
       permissionMode: phase === 'plan' ? 'read' : task.permission.mode,
       userMessage: null,
@@ -269,6 +270,11 @@ export class AgentRunManager {
       updatedAt: activeRun.snapshotUpdatedAt ?? now,
       error: null,
     })
+    if (!this.controllers.has(activeRun.id)) {
+      const controller = new AbortController()
+      this.controllers.set(activeRun.id, controller)
+      void this.consume(task, activeRun.id, phase, null, controller, true)
+    }
   }
 
   private async consume(
@@ -277,6 +283,7 @@ export class AgentRunManager {
     phase: 'plan' | 'execute',
     message: string | null,
     controller: AbortController,
+    reconnect = false,
   ): Promise<void> {
     let terminalEventReceived = false
     const handlers = {
@@ -341,10 +348,13 @@ export class AgentRunManager {
         if (eventName.startsWith('tool.')) {
           this.update(task.id, (snapshot) => ({
             ...snapshot,
-            toolEvents: [
-              ...snapshot.toolEvents,
-              {
-                id: typeof event.id === 'number' ? event.id : -Date.now(),
+            toolEvents: (() => {
+              const eventId = typeof event.id === 'number' ? event.id : -Date.now()
+              if (snapshot.toolEvents.some((item) => item.id === eventId)) {
+                return snapshot.toolEvents
+              }
+              return [...snapshot.toolEvents, {
+                id: eventId,
                 taskId: task.id,
                 runId: requestId,
                 sequence: typeof event.sequence === 'number'
@@ -357,15 +367,24 @@ export class AgentRunManager {
                   ? event.payload as Record<string, unknown>
                   : {},
                 createdAt: Date.now(),
-              },
-            ],
+              }]
+            })(),
             updatedAt: Date.now(),
           }))
         }
       },
     }
     try {
-      if (phase === 'plan') {
+      if (reconnect) {
+        const contentOffset = this.getSnapshot(task.id)?.assistantMessage.content.length ?? 0
+        await this.agentApi.streamTaskEvents(
+          task.id,
+          requestId,
+          contentOffset,
+          handlers,
+          controller.signal,
+        )
+      } else if (phase === 'plan') {
         await this.agentApi.streamTaskPlan(
           task.id,
           requestId,

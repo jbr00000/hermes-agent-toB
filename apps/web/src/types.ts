@@ -17,6 +17,7 @@ export type PermissionMode = 'read' | 'controlled' | 'full'
 
 export type AgentTaskStatus =
   | 'draft'
+  | 'queued'
   | 'planning'
   | 'awaiting_approval'
   | 'ready'
@@ -47,7 +48,7 @@ export interface TaskRun {
   taskId: string
   phase: 'plan' | 'execute'
   attempt: number
-  status: 'running' | 'completed' | 'failed' | 'cancelled'
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
   error: string | null
   startedAt: number
   completedAt: number | null
@@ -133,7 +134,8 @@ export interface ChatMessage {
 
 export interface ActiveModelRun {
   id: string
-  status: 'running'
+  status: 'queued' | 'running'
+  phase?: 'plan' | 'execute' | null
   startedAt: number
   elapsedMs: number
   observedAt: number

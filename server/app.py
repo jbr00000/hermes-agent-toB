@@ -28,15 +28,32 @@ def create_app() -> FastAPI:
     app.include_router(memory.router)
     app.include_router(features.router)
 
+    @app.get("/health/live")
+    def liveness():
+        return {"status": "ok"}
+
     @app.get("/health")
     def health():
         database_ok = database_health()
-        redis_ok = get_runtime_store().health()
+        runtime_store = get_runtime_store()
+        redis_ok = runtime_store.health()
+        worker_ok = runtime_store.worker_health()
+        worker_required = os.environ.get("HERMES_REQUIRE_AGENT_WORKER", "0") == "1"
+        healthy = database_ok and redis_ok is not False
+        if worker_required:
+            healthy = healthy and worker_ok is True
         return {
-            "status": "ok" if database_ok and redis_ok is not False else "degraded",
+            "status": "ok" if healthy else "degraded",
             "components": {
                 "database": "ok" if database_ok else "error",
                 "redis": "disabled" if redis_ok is None else ("ok" if redis_ok else "error"),
+                "agent_worker": (
+                    "disabled"
+                    if worker_ok is None and not worker_required
+                    else "ok"
+                    if worker_ok
+                    else "missing"
+                ),
             },
         }
 

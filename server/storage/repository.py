@@ -51,7 +51,7 @@ def _conversation_dict(row: Conversation) -> dict[str, Any]:
         "user_id": row.user_id,
         "source": row.source,
         "interaction_type": row.interaction_type,
-        "title": row.title or ("新问答" if row.interaction_type == "chat" else "新智能体任务"),
+        "title": row.title or ("新问答" if row.interaction_type == "chat" else "新任务"),
         "status": row.status,
         "pinned": bool(row.pinned),
         "archived": bool(row.archived),
@@ -88,6 +88,8 @@ def _task_run_dict(row: TaskRun) -> dict[str, Any]:
         "phase": row.phase,
         "attempt": row.attempt,
         "status": row.status,
+        "worker_id": row.worker_id,
+        "heartbeat_at": row.heartbeat_at,
         "error": row.error,
         "started_at": row.started_at,
         "completed_at": row.completed_at,
@@ -418,7 +420,7 @@ class StorageRepository:
 
     def create_agent_task(self, user_id: str, title: str | None = None) -> dict[str, Any]:
         now = time.time()
-        normalized_title = " ".join((title or "").split()).strip()[:100] or "New agent task"
+        normalized_title = " ".join((title or "").split()).strip()[:100] or "新任务"
         conversation_id = str(uuid.uuid4())
         task = AgentTask(
             id=str(uuid.uuid4()),
@@ -522,7 +524,14 @@ class StorageRepository:
             return _task_dict(row)
 
     def create_task_run(
-        self, request_id: str, user_id: str, task_id: str, phase: str
+        self,
+        request_id: str,
+        user_id: str,
+        task_id: str,
+        phase: str,
+        *,
+        status: str = "running",
+        request_payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         now = time.time()
         with session_scope() as session:
@@ -556,14 +565,19 @@ class StorageRepository:
                 task_id=task_id,
                 phase=phase,
                 attempt=attempt,
-                status="running",
+                status=status,
+                request_payload=request_payload,
+                worker_id=None,
+                heartbeat_at=None,
                 error=None,
                 started_at=now,
                 completed_at=None,
             )
             session.add(row)
             task.current_run_id = request_id
-            task.status = "planning" if phase == "plan" else "running"
+            task.status = (
+                "queued" if status == "queued" else "planning" if phase == "plan" else "running"
+            )
             task.updated_at = now
             conversation = session.get(Conversation, task.conversation_id)
             if conversation is not None:
@@ -572,6 +586,198 @@ class StorageRepository:
             session.flush()
             return _task_run_dict(row)
 
+    def enqueue_task_run(
+        self,
+        request_id: str,
+        user_id: str,
+        task_id: str,
+        phase: str,
+        request_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        now = time.time()
+        with session_scope() as session:
+            task = session.scalar(
+                select(AgentTask)
+                .where(
+                    AgentTask.tenant_id == tenant_id(),
+                    AgentTask.user_id == user_id,
+                    AgentTask.id == task_id,
+                )
+                .with_for_update()
+            )
+            if task is None:
+                raise KeyError(task_id)
+            existing = session.get(TaskRun, request_id)
+            if existing is not None:
+                if (
+                    existing.tenant_id == tenant_id()
+                    and existing.user_id == user_id
+                    and existing.task_id == task_id
+                    and existing.status in {"queued", "running"}
+                ):
+                    return _task_run_dict(existing)
+                raise RuntimeError("request_id already exists")
+            if task.current_run_id:
+                raise RuntimeError("task already has an active run")
+            attempt = int(
+                session.scalar(
+                    select(func.max(TaskRun.attempt)).where(
+                        TaskRun.tenant_id == tenant_id(),
+                        TaskRun.task_id == task_id,
+                        TaskRun.phase == phase,
+                    )
+                )
+                or 0
+            ) + 1
+            run = TaskRun(
+                id=request_id,
+                tenant_id=tenant_id(),
+                user_id=user_id,
+                task_id=task_id,
+                phase=phase,
+                attempt=attempt,
+                status="queued",
+                request_payload=request_payload,
+                worker_id=None,
+                heartbeat_at=None,
+                error=None,
+                started_at=now,
+                completed_at=None,
+            )
+            model_run = ModelRun(
+                id=request_id,
+                tenant_id=tenant_id(),
+                user_id=user_id,
+                conversation_id=task.conversation_id,
+                status="queued",
+                started_at=now,
+            )
+            session.add_all([run, model_run])
+            task.current_run_id = request_id
+            task.status = "queued"
+            task.updated_at = now
+            conversation = session.get(Conversation, task.conversation_id)
+            if conversation is not None:
+                conversation.status = "queued"
+                conversation.updated_at = now
+            session.flush()
+            return _task_run_dict(run)
+
+    def start_task_run(self, request_id: str, worker_id: str) -> dict[str, Any] | None:
+        now = time.time()
+        with session_scope() as session:
+            row = session.scalar(
+                select(TaskRun)
+                .where(TaskRun.tenant_id == tenant_id(), TaskRun.id == request_id)
+                .with_for_update()
+            )
+            if row is None or row.status not in {"queued", "running"}:
+                return None
+            row.status = "running"
+            row.worker_id = worker_id
+            row.heartbeat_at = now
+            task = session.get(AgentTask, row.task_id)
+            if task is not None:
+                task.status = "planning" if row.phase == "plan" else "running"
+                task.updated_at = now
+                conversation = session.get(Conversation, task.conversation_id)
+                if conversation is not None:
+                    conversation.status = "running"
+                    conversation.updated_at = now
+            model_run = session.get(ModelRun, request_id)
+            if model_run is not None:
+                model_run.status = "running"
+            session.flush()
+            return _task_run_dict(row)
+
+    def heartbeat_task_run(self, request_id: str, worker_id: str) -> bool:
+        with session_scope() as session:
+            row = session.scalar(
+                select(TaskRun).where(
+                    TaskRun.tenant_id == tenant_id(),
+                    TaskRun.id == request_id,
+                    TaskRun.status == "running",
+                    TaskRun.worker_id == worker_id,
+                )
+            )
+            if row is None:
+                return False
+            row.heartbeat_at = time.time()
+            return True
+
+    def owns_task_run(self, request_id: str, worker_id: str) -> bool:
+        with session_scope() as session:
+            return session.scalar(
+                select(TaskRun.id).where(
+                    TaskRun.tenant_id == tenant_id(),
+                    TaskRun.id == request_id,
+                    TaskRun.status == "running",
+                    TaskRun.worker_id == worker_id,
+                )
+            ) is not None
+
+    def requeue_task_run(self, request_id: str) -> dict[str, Any] | None:
+        now = time.time()
+        with session_scope() as session:
+            row = session.scalar(
+                select(TaskRun)
+                .where(TaskRun.tenant_id == tenant_id(), TaskRun.id == request_id)
+                .with_for_update()
+            )
+            if row is None or row.status not in {"queued", "running"}:
+                return None
+            row.status = "queued"
+            row.worker_id = None
+            row.heartbeat_at = None
+            row.error = None
+            task = session.get(AgentTask, row.task_id)
+            if task is not None:
+                task.current_run_id = request_id
+                task.status = "queued"
+                task.updated_at = now
+                conversation = session.get(Conversation, task.conversation_id)
+                if conversation is not None:
+                    conversation.status = "queued"
+                    conversation.updated_at = now
+            model_run = session.get(ModelRun, request_id)
+            if model_run is not None:
+                model_run.status = "queued"
+                model_run.completed_at = None
+                model_run.error = None
+            session.flush()
+            return _task_run_dict(row)
+
+    def get_task_run(self, request_id: str) -> dict[str, Any] | None:
+        with session_scope() as session:
+            row = session.scalar(
+                select(TaskRun).where(
+                    TaskRun.tenant_id == tenant_id(), TaskRun.id == request_id
+                )
+            )
+            if row is None:
+                return None
+            result = _task_run_dict(row)
+            result["user_id"] = row.user_id
+            result["request_payload"] = row.request_payload or {}
+            return result
+
+    def list_recoverable_task_runs(self) -> list[dict[str, Any]]:
+        with session_scope() as session:
+            rows = session.scalars(
+                select(TaskRun).where(
+                    TaskRun.tenant_id == tenant_id(),
+                    TaskRun.status.in_(("queued", "running")),
+                )
+            ).all()
+            return [
+                {
+                    **_task_run_dict(row),
+                    "user_id": row.user_id,
+                    "request_payload": row.request_payload or {},
+                }
+                for row in rows
+            ]
+
     def finish_task_run(
         self,
         request_id: str,
@@ -579,6 +785,7 @@ class StorageRepository:
         status: str,
         task_status: str,
         error: str | None = None,
+        expected_worker_id: str | None = None,
     ) -> dict[str, Any] | None:
         now = time.time()
         with session_scope() as session:
@@ -589,9 +796,18 @@ class StorageRepository:
             )
             if row is None:
                 return None
+            if expected_worker_id is not None and (
+                row.status != "running" or row.worker_id != expected_worker_id
+            ):
+                return None
             row.status = status
             row.error = error
             row.completed_at = now
+            model_run = session.get(ModelRun, request_id)
+            if model_run is not None and model_run.tenant_id == tenant_id():
+                model_run.status = status
+                model_run.error = error
+                model_run.completed_at = now
             task = session.get(AgentTask, row.task_id)
             if task is not None and task.tenant_id == tenant_id():
                 if task.current_run_id == request_id:
@@ -620,9 +836,29 @@ class StorageRepository:
             ).all()
             return [_task_run_dict(row) for row in rows]
 
-    def create_task_plan(self, user_id: str, task_id: str, content: str) -> dict[str, Any]:
+    def create_task_plan(
+        self,
+        user_id: str,
+        task_id: str,
+        content: str,
+        *,
+        request_id: str | None = None,
+        expected_worker_id: str | None = None,
+    ) -> dict[str, Any] | None:
         now = time.time()
         with session_scope() as session:
+            run = None
+            if request_id is not None:
+                run = session.scalar(
+                    select(TaskRun)
+                    .where(TaskRun.tenant_id == tenant_id(), TaskRun.id == request_id)
+                    .with_for_update()
+                )
+                if run is None or (
+                    expected_worker_id is not None
+                    and (run.status != "running" or run.worker_id != expected_worker_id)
+                ):
+                    return None
             task = session.scalar(
                 select(AgentTask)
                 .where(
@@ -665,6 +901,17 @@ class StorageRepository:
             )
             session.add(row)
             task.status = "awaiting_approval"
+            if run is not None:
+                run.status = "completed"
+                run.error = None
+                run.completed_at = now
+                model_run = session.get(ModelRun, request_id)
+                if model_run is not None and model_run.tenant_id == tenant_id():
+                    model_run.status = "completed"
+                    model_run.error = None
+                    model_run.completed_at = now
+                if task.current_run_id == request_id:
+                    task.current_run_id = None
             task.updated_at = now
             conversation = session.get(Conversation, task.conversation_id)
             if conversation is not None:
@@ -756,14 +1003,18 @@ class StorageRepository:
         now = time.time()
         with session_scope() as session:
             task = session.scalar(
-                select(AgentTask).where(
+                select(AgentTask)
+                .where(
                     AgentTask.tenant_id == tenant_id(),
                     AgentTask.user_id == user_id,
                     AgentTask.id == task_id,
                 )
+                .with_for_update()
             )
             if task is None:
                 raise KeyError(task_id)
+            if task.current_run_id:
+                raise RuntimeError("permission cannot change during a run")
             active = session.scalars(
                 select(PermissionLease).where(
                     PermissionLease.tenant_id == tenant_id(),
@@ -1032,6 +1283,34 @@ class StorageRepository:
                 "sequence_no": sequence,
             }
 
+    def get_message_for_run(self, request_id: str, role: str) -> dict[str, Any] | None:
+        with session_scope() as session:
+            row = session.scalar(
+                select(Message)
+                .join(Conversation, Conversation.id == Message.conversation_id)
+                .where(
+                    Conversation.tenant_id == tenant_id(),
+                    Message.model_run_id == request_id,
+                    Message.role == role,
+                )
+                .order_by(Message.sequence_no)
+                .limit(1)
+            )
+            if row is None:
+                return None
+            return {
+                "id": row.id,
+                "session_id": row.conversation_id,
+                "role": row.role,
+                "content": row.content,
+                "status": row.status,
+                "model_run_id": row.model_run_id,
+                "duration_ms": row.duration_ms,
+                "timestamp": row.created_at,
+                "created_at": row.created_at,
+                "sequence_no": row.sequence_no,
+            }
+
     def get_messages(self, conversation_id: str) -> list[dict[str, Any]]:
         with session_scope() as session:
             rows = session.scalars(
@@ -1169,17 +1448,19 @@ class StorageRepository:
                     ModelRun.tenant_id == tenant_id(),
                     ModelRun.user_id == user_id,
                     ModelRun.conversation_id == conversation_id,
-                    ModelRun.status == "running",
+                    ModelRun.status.in_(("queued", "running")),
                 )
                 .order_by(ModelRun.started_at.desc())
                 .limit(1)
             )
             if row is None:
                 return None
+            task_run = session.get(TaskRun, row.id)
             return {
                 "id": row.id,
                 "conversation_id": row.conversation_id,
                 "status": row.status,
+                "phase": task_run.phase if task_run is not None else None,
                 "provider": row.provider,
                 "model": row.model,
                 "started_at": row.started_at,

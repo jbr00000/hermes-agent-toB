@@ -126,6 +126,7 @@ function typeIcon(type: TabType): LucideIcon {
 function statusText(status: SessionSummary['status']): string {
   return {
     draft: '草稿',
+    queued: '排队中',
     planning: '规划中',
     awaiting_approval: '待审批',
     ready: '待执行',
@@ -139,6 +140,7 @@ function statusText(status: SessionSummary['status']): string {
 function statusTone(status: SessionSummary['status']): string {
   return {
     draft: 'bg-zinc-100 text-zinc-600',
+    queued: 'bg-sky-50 text-info',
     planning: 'bg-emerald-50 text-success',
     awaiting_approval: 'bg-amber-50 text-caution',
     ready: 'bg-sky-50 text-info',
@@ -1565,11 +1567,6 @@ function AgentView({ taskId, title, onDeleted }: { taskId: string; title: string
       <div className="flex min-h-14 items-center justify-between gap-2 border-b border-line px-3 py-2 sm:h-14 sm:px-5 sm:py-0">
         <div className="min-w-0">
           <div className="truncate text-sm font-semibold">{title}</div>
-          <div className="mt-0.5 flex items-center gap-2 text-xs text-zinc-500">
-            <span className="block max-w-[180px] truncate sm:max-w-none">Task {taskId}</span>
-            <span className="h-1 w-1 rounded-full bg-zinc-300" />
-            <span>{statusText(taskStatus)}</span>
-          </div>
         </div>
         <div className="flex items-center gap-2">
           <PermissionSegment

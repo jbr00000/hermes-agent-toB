@@ -4,12 +4,12 @@ from __future__ import annotations
 import uuid
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from server import sessions as session_service
+from server.agent_queue import enqueue_agent_run, stream_agent_run
 from server.deps import get_current_user
-from server.routes import chat as chat_routes
 from server.storage import get_repository, get_runtime_store
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -109,9 +109,12 @@ def update_permission(
         raise HTTPException(status_code=404, detail="task not found")
     if task.get("current_run_id"):
         raise HTTPException(status_code=409, detail="permission cannot change during a run")
-    permission = repository.set_task_permission(
-        user["id"], task_id, req.mode, req.ttl_seconds
-    )
+    try:
+        permission = repository.set_task_permission(
+            user["id"], task_id, req.mode, req.ttl_seconds
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     repository.record_audit_event(
         event_type="task_permission",
         conversation_id=task["session_id"],
@@ -134,18 +137,31 @@ async def plan_task(
     task = get_repository().get_owned_task(user["id"], task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="task not found")
+    request_id = req.request_id or str(uuid.uuid4())
     if task.get("current_run_id"):
+        if task["current_run_id"] == request_id:
+            return stream_agent_run(
+                request,
+                user_id=user["id"],
+                task_id=task_id,
+                request_id=request_id,
+            )
         raise HTTPException(status_code=409, detail="task already has an active run")
-    return await chat_routes.chat(
-        chat_routes.ChatRequest(
-            message=req.message,
-            session_id=task["session_id"],
-            request_id=req.request_id or str(uuid.uuid4()),
-            interaction_type="agent",
-            mode="plan",
-        ),
+    mode_state = session_service.resolve_chat_mode(user["id"], task["session_id"], "plan")
+    enqueue_agent_run(
+        user_id=user["id"],
+        task=task,
+        request_id=request_id,
+        phase="plan",
+        message=req.message,
+        permission_mode="read",
+        plan_state=mode_state["state"],
+    )
+    return stream_agent_run(
         request,
-        user,
+        user_id=user["id"],
+        task_id=task_id,
+        request_id=request_id,
     )
 
 
@@ -181,24 +197,36 @@ async def execute_task(
     task = repository.get_owned_task(user["id"], task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="task not found")
+    request_id = req.request_id or str(uuid.uuid4())
     if task.get("current_run_id"):
+        if task["current_run_id"] == request_id:
+            return stream_agent_run(
+                request,
+                user_id=user["id"],
+                task_id=task_id,
+                request_id=request_id,
+            )
         raise HTTPException(status_code=409, detail="task already has an active run")
     plan = repository.get_latest_task_plan(user["id"], task_id)
     if plan is None or plan.get("status") != "approved":
         raise HTTPException(status_code=409, detail="approved plan required before execute")
-    session_service.enter_execute_mode(user["id"], task["session_id"])
+    mode_state = session_service.enter_execute_mode(user["id"], task["session_id"])
     instruction = (req.message or "Execute the approved plan exactly as approved.").strip()
     message = f"{instruction}\n\nApproved plan:\n{plan['content']}"
-    return await chat_routes.chat(
-        chat_routes.ChatRequest(
-            message=message,
-            session_id=task["session_id"],
-            request_id=req.request_id or str(uuid.uuid4()),
-            interaction_type="agent",
-            mode="execute",
-        ),
+    enqueue_agent_run(
+        user_id=user["id"],
+        task=task,
+        request_id=request_id,
+        phase="execute",
+        message=message,
+        permission_mode=repository.get_task_permission(user["id"], task_id)["mode"],
+        plan_state=mode_state["state"],
+    )
+    return stream_agent_run(
         request,
-        user,
+        user_id=user["id"],
+        task_id=task_id,
+        request_id=request_id,
     )
 
 
@@ -210,7 +238,28 @@ def cancel_task(task_id: str, user: dict = Depends(get_current_user)):
     request_id = task.get("current_run_id")
     if not request_id:
         raise HTTPException(status_code=409, detail="task is not running")
-    return chat_routes.cancel_chat(request_id, user)
+    run = get_repository().get_owned_model_run(user["id"], request_id)
+    if run is None or run["status"] not in {"queued", "running"}:
+        raise HTTPException(status_code=409, detail="task is not running")
+    get_runtime_store().cancel_request(request_id)
+    return {"request_id": request_id, "status": "cancelling"}
+
+
+@router.get("/{task_id}/runs/{request_id}/events")
+def reconnect_task_run(
+    task_id: str,
+    request_id: str,
+    request: Request,
+    content_offset: int = Query(default=0, ge=0, le=10_000_000),
+    user: dict = Depends(get_current_user),
+):
+    return stream_agent_run(
+        request,
+        user_id=user["id"],
+        task_id=task_id,
+        request_id=request_id,
+        content_offset=content_offset,
+    )
 
 
 @router.post("/{task_id}/retry")
@@ -224,7 +273,15 @@ async def retry_task(
     task = repository.get_owned_task(user["id"], task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="task not found")
+    request_id = req.request_id or str(uuid.uuid4())
     if task.get("current_run_id"):
+        if task["current_run_id"] == request_id:
+            return stream_agent_run(
+                request,
+                user_id=user["id"],
+                task_id=task_id,
+                request_id=request_id,
+            )
         raise HTTPException(status_code=409, detail="task already has an active run")
     runs = repository.list_task_runs(user["id"], task_id)
     if not runs:
@@ -236,7 +293,6 @@ async def retry_task(
         (message["content"] for message in reversed(messages) if message["role"] == "user"),
         None,
     )
-    request_id = req.request_id or str(uuid.uuid4())
     if phase == "plan":
         message = (req.message or previous_user_message or "Regenerate the task plan.").strip()
         mode = "plan"
@@ -244,19 +300,31 @@ async def retry_task(
         plan = repository.get_latest_task_plan(user["id"], task_id)
         if plan is None or plan.get("status") != "approved":
             raise HTTPException(status_code=409, detail="approved plan required before retry")
-        session_service.enter_execute_mode(user["id"], task["session_id"])
+        mode_state = session_service.enter_execute_mode(user["id"], task["session_id"])
         instruction = (req.message or "Retry the approved plan from the failed step.").strip()
         message = f"{instruction}\n\nApproved plan:\n{plan['content']}"
         mode = "execute"
-
-    return await chat_routes.chat(
-        chat_routes.ChatRequest(
-            message=message,
-            session_id=task["session_id"],
-            request_id=request_id,
-            interaction_type="agent",
-            mode=mode,
-        ),
+    if mode == "plan":
+        mode_state = session_service.resolve_chat_mode(
+            user["id"], task["session_id"], "plan"
+        )
+    permission_mode = (
+        "read"
+        if mode == "plan"
+        else repository.get_task_permission(user["id"], task_id)["mode"]
+    )
+    enqueue_agent_run(
+        user_id=user["id"],
+        task=task,
+        request_id=request_id,
+        phase=mode,
+        message=message,
+        permission_mode=permission_mode,
+        plan_state=mode_state["state"],
+    )
+    return stream_agent_run(
         request,
-        user,
+        user_id=user["id"],
+        task_id=task_id,
+        request_id=request_id,
     )
