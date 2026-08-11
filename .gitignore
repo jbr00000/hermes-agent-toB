@@ -20,6 +20,7 @@ __pycache__/
 .notebooklm-cli-venv/
 .notebooklm-playwright/
 .playwright-cli/
+.playwright-mcp/
 output/playwright/
 .pip-cache/
 .uv-cache/

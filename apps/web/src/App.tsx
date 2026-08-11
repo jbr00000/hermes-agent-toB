@@ -58,6 +58,10 @@ import {
 } from './chatRunManager'
 import { mockApi } from './mockApi'
 import { documents } from './mockData'
+import { PetAvatar } from './components/pet/PetAvatar'
+import type { PetState } from './components/pet/PetAvatar'
+import { petStateFromAgentRun, petStateFromChatRun } from './components/pet/petState'
+import { PetFloat } from './components/pet/PetFloat'
 import {
   activeTabIdAtom,
   attachedFilesAtom,
@@ -582,7 +586,7 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
           />
           <TabBar tabs={tabs} activeTabId={activeTabId} onActivate={activateTab} onClose={closeTab} />
           <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden xl:grid-cols-[minmax(0,1fr)_340px]">
-            <main className="min-w-0 overflow-hidden border-r border-line bg-panel">
+            <main className="relative min-w-0 overflow-hidden border-r border-line bg-panel">
               {activeTab ? (
                 <TabContent
                   tab={activeTab}
@@ -597,6 +601,7 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
                   createAgentTask()
                 }} />
               )}
+              <PetFloat tab={activeTab} />
             </main>
             <RightPanel activeTab={activeTab} />
           </div>
@@ -944,6 +949,32 @@ function TopBar({
   )
 }
 
+/** 标签上的迷你宠物：有活跃/结果状态时替换默认类型图标（垫纸色小片） */
+function TabPet({ type, refId, fallback }: { type: TabType; refId: string; fallback: React.ReactNode }) {
+  if (type === 'chat') return <ChatTabPet sessionId={refId} fallback={fallback} />
+  if (type === 'agent') return <AgentTabPet taskId={refId} fallback={fallback} />
+  return <>{fallback}</>
+}
+
+function TabPetChip({ state, fallback }: { state: PetState; fallback: React.ReactNode }) {
+  if (state === 'idle') return <>{fallback}</>
+  return (
+    <span className="flex shrink-0 items-center rounded-md border border-[#e9e2d0] bg-[#faf7ef] p-px">
+      <PetAvatar state={state} size={18} />
+    </span>
+  )
+}
+
+function ChatTabPet({ sessionId, fallback }: { sessionId: string; fallback: React.ReactNode }) {
+  const run = useChatRun(sessionId)
+  return <TabPetChip state={petStateFromChatRun(run)} fallback={fallback} />
+}
+
+function AgentTabPet({ taskId, fallback }: { taskId: string; fallback: React.ReactNode }) {
+  const run = useAgentRun(taskId)
+  return <TabPetChip state={petStateFromAgentRun(run)} fallback={fallback} />
+}
+
 function TabBar({ tabs, activeTabId, onActivate, onClose }: { tabs: WorkTab[]; activeTabId: string | null; onActivate: (id: string) => void; onClose: (id: string) => void }) {
   return (
     <div className="thin-scrollbar flex h-11 items-end gap-1 overflow-x-auto border-b border-line bg-[#f9fafb] px-2">
@@ -959,7 +990,7 @@ function TabBar({ tabs, activeTabId, onActivate, onClose }: { tabs: WorkTab[]; a
             )}
             onClick={() => onActivate(tab.id)}
           >
-            <Icon size={14} />
+            <TabPet type={tab.type} refId={tab.refId} fallback={<Icon size={14} />} />
             <span className="truncate">{tab.title}</span>
             <span
               role="button"
@@ -1020,7 +1051,7 @@ function EmptyWorkspace({ onNewTask }: { onNewTask: () => void }) {
   return (
     <div className="flex h-full items-center justify-center">
       <div className="text-center">
-        <Bot className="mx-auto mb-3 text-zinc-300" size={42} />
+        <PetAvatar state="idle" size={104} className="mx-auto mb-3" />
         <div className="text-base font-medium">没有打开的标签</div>
         <button className="mt-4 rounded-md bg-ink px-4 py-2 text-sm text-white" onClick={onNewTask}>新建任务</button>
       </div>
@@ -1320,8 +1351,8 @@ function ChatView({
             <MessageSkeleton />
           ) : displayMessages.length === 0 && !isRunning ? (
             <div className="border-y border-line py-16 text-center">
-              <MessageSquareText className="mx-auto mb-3 text-zinc-300" size={40} />
               <div className="text-sm font-medium">新问答</div>
+              <div className="mt-1 text-xs text-zinc-500">输入问题，小猫陪你一起找答案。</div>
             </div>
           ) : (
             displayMessages.map((message) => <MessageBubble key={message.id} message={message} />)
@@ -1335,7 +1366,8 @@ function ChatView({
       </div>
 
       <div className="border-t border-line bg-[#fbfbfc] px-3 py-3 sm:px-6 sm:py-4">
-        <div className="mx-auto max-w-4xl rounded-md border border-line bg-panel shadow-sm">
+        <div className="mx-auto max-w-4xl">
+          <div className="rounded-md border border-line bg-panel shadow-sm">
           <textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -1367,6 +1399,7 @@ function ChatView({
               {isRunning ? <CircleStop size={15} /> : <Send size={15} />}
               {isRunning ? '停止' : '发送'}
             </button>
+          </div>
           </div>
         </div>
       </div>
@@ -1611,7 +1644,6 @@ function AgentView({ taskId, title, onDeleted }: { taskId: string; title: string
             </div>
           ) : messages.length === 0 ? (
             <div className="border-y border-line py-16 text-center">
-              <Bot className="mx-auto mb-3 text-zinc-300" size={40} />
               <div className="text-sm font-medium">新任务</div>
               <div className="mt-1 text-xs text-zinc-500">输入目标后，Agent 会先生成可审批的执行计划。</div>
             </div>
@@ -1628,7 +1660,8 @@ function AgentView({ taskId, title, onDeleted }: { taskId: string; title: string
       </div>
 
       <div className="border-t border-line bg-[#fbfbfc] px-6 py-4">
-        <div className="mx-auto max-w-4xl rounded-md border border-line bg-panel shadow-sm">
+        <div className="mx-auto max-w-4xl">
+          <div className="rounded-md border border-line bg-panel shadow-sm">
           <textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -1655,6 +1688,7 @@ function AgentView({ taskId, title, onDeleted }: { taskId: string; title: string
               {active ? <CircleStop size={15} /> : <Send size={15} />}
               {active ? '停止' : '生成计划'}
             </button>
+          </div>
           </div>
         </div>
       </div>

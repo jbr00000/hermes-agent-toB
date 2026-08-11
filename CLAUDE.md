@@ -63,7 +63,9 @@ hermes cron ...     # scheduled jobs (delivery is stubbed; cron lands in its own
 ```bash
 cd apps/web && npm install
 cd apps/web && npm run dev      # Vite dev server (ships with a mock API; see docs/B端前端设计方案.md)
+cd apps/web && npm run build    # tsc --noEmit && vite build (typecheck gate)
 ```
+Key `apps/web/src/` pieces: `api.ts` (HTTP/SSE client) · `chatRunManager.tsx` / `agentRunManager.tsx` (class-based run stores behind `useChatRun`/`useAgentRun` via `useSyncExternalStore` — runs survive tab switches) · `state.ts` (jotai atoms) · `db.ts` (Dexie tab persistence) · `mockApi.ts`/`mockData.ts` (mock backend for front-end-only dev) · `components/pet/` (pencil-sketch cat companion: `PetAvatar` poses + `petState` run-state derivation + `PetFloat` draggable overlay).
 
 ### Docker
 ```bash
@@ -76,7 +78,7 @@ docker compose up          # builds hermes-agent-tob:dev, mounts $HERMES_HOME ->
 - **`run_agent.py`** — `AIAgent` class, the core synchronous conversation loop. `run_conversation()` loops: call model → if `tool_calls`, dispatch each via `handle_function_call()` and append tool-result messages → else return final content. Bounded by `max_iterations` (shared with subagents) and `iteration_budget`. One-turn grace call. Messages are OpenAI-format; reasoning content lives in `assistant_msg["reasoning"]`.
 - **`model_tools.py`** — tool orchestration: `discover_builtin_tools()`, `handle_function_call()`. Triggers plugin discovery as an import side effect (see pitfall below).
 - **`toolsets.py`** — the single `TOOLSETS` dict; `_HERMES_CORE_TOOLS` is the default bundle. **A tool is only exposed to an agent if its name appears in a toolset** — auto-discovery imports the module but does NOT wire it in. (`kanban_*` is gated by `check_fn` and stays off by default.)
-- **`server/`** — **the product surface.** FastAPI BFF: `__main__.py` (entry, validates `HERMES_HOME` → loads `.env` → `uvicorn`), `app.py` (factory; bootstraps admin, mounts routes, applies terminal backend), `auth.py`/`deps.py` (users.db + bcrypt + JWT, `get_current_user`/`require_admin`), `sessions.py`/`memory.py`/`audit.py` (per-`user_id` SQLite stores + ownership checks), `agent_factory.py` (builds an `AIAgent` per `/chat` request — prefill history + ephemeral system prompt carrying memory + plan mode), `runtime_config.py` (provider/model/reasoning for the headless path; 4 supported providers: `deepseek`/`zai`/`alibaba`/`custom`), `tool_policy.py` (**plan mode is enforced here at the toolset layer**: `plan` → `db`+`session_search` only; `execute` → adds `terminal`), `deployment_config.py` + `mcp.py` (declarative `deployment.yaml` → MCP servers), `features.py` (`host_terminal` opt-in). Routes under `server/routes/`: `auth`, `chat` (SSE), `sessions`, `memory`, `users` (admin), `features`.
+- **`server/`** — **the product surface.** FastAPI BFF: `__main__.py` (entry, validates `HERMES_HOME` → loads `.env` → `uvicorn`), `app.py` (factory; bootstraps admin, mounts routes, applies terminal backend), `auth.py`/`deps.py` (bcrypt + JWT, `get_current_user`/`require_admin`), `sessions.py`/`memory.py`/`audit.py` (per-`user_id` stores + ownership checks, persisted via `storage/`), `agent_factory.py` (builds an `AIAgent` per `/chat` request — prefill history + ephemeral system prompt carrying memory + plan mode), `runtime_config.py` (provider/model/reasoning for the headless path; 4 supported providers: `deepseek`/`zai`/`alibaba`/`custom`), `tool_policy.py` (**plan mode is enforced here at the toolset layer**: `plan` → `db`+`session_search` only; `execute` → adds `terminal`), `deployment_config.py` + `mcp.py` (declarative `deployment.yaml` → MCP servers), `features.py` (`host_terminal` opt-in). Persistence & async execution: `storage/` (SQLAlchemy layer — `database.py` engine/session, SQLite zero-config default, MySQL via `HERMES_DATABASE_URL` + Alembic `migrations/`; `repository.py` single `StorageRepository` over users/conversations/tasks/messages/audit; `runtime.py` run snapshots/locks/agent-job queue — Redis via `HERMES_REDIS_URL`, in-process fallback otherwise), `agent_queue.py` + `agent_execution.py` + `worker.py` (durable Agent runs: API enqueues, background worker executes, SSE subscribes), `sandbox.py` (tenant-scoped sandbox identity), `tool_events.py` (tool risk levels). Routes under `server/routes/`: `auth`, `chat` (SSE), `sessions`, `memory`, `tasks` (agent tasks), `users` (admin), `features`.
 - **`cli.py`** — `HermesCLI` interactive orchestrator (admin/dev use only; not shipped to end users). Rich for panels, prompt_toolkit for input.
 - **`hermes_cli/main.py`** — `hermes` console-script entry. `_apply_profile_override()` sets `HERMES_HOME` *before any module imports* — this is what makes profiles work. Removed-surface subcommands are neutralized here.
 
@@ -143,7 +145,12 @@ server/                 ★ the to-B product: headless FastAPI BFF (JWT, SSE, mu
 server/agent_factory.py builds an AIAgent per /chat (prefill history + ephemeral system prompt)
 server/tool_policy.py   plan-mode toolset gating (plan=db+session_search; execute=+terminal)
 server/runtime_config.py provider/model/reasoning for headless path (4 providers)
-server/auth.py          users.db + bcrypt + JWT; per-user isolation boundary
+server/auth.py          bcrypt + JWT; per-user isolation boundary
+server/storage/         SQLAlchemy persistence: repository.py (StorageRepository) · database.py
+                        (SQLite default, MySQL via HERMES_DATABASE_URL) · runtime.py (Redis or
+                        in-process run snapshots/locks/job queue) · migrations/ (Alembic)
+server/worker.py        background worker for durable Agent runs (+ agent_queue.py enqueue/SSE,
+                        agent_execution.py run loop, sandbox.py tenant sandbox identity)
 cli.py                  HermesCLI interactive orchestrator (admin/dev only)
 hermes_state.py         SessionDB — SQLite session store with FTS5 search
 hermes_constants.py     get_hermes_home(), display_hermes_home() (profile-aware paths)
@@ -158,5 +165,11 @@ gateway/                soft-disabled — platform adapters deleted, do not exte
 skills/                 built-in skills (agentskills.io compatible)
 plugins/                model-providers (4 kept) · memory ABC (no installed providers) · …
 apps/web/               to-B React/Vite front-end (talks to server/ over HTTP/SSE)
-docs/                   改造计划.md (9 decisions) · 项目架构详解.md · API文档.md · security/ · B端前端设计方案.md
+apps/web/src/api.ts     HTTP/SSE client; mockApi.ts/mockData.ts = mock backend for pure-FE dev
+apps/web/src/chatRunManager.tsx · agentRunManager.tsx  run stores (useChatRun/useAgentRun)
+apps/web/src/components/pet/  pencil-sketch cat companion (PetAvatar/petState/PetFloat)
+compose.env.example     docker-compose env template (DB/Redis URLs + secrets)
+docs/                   改造计划.md (9 decisions) · 项目架构详解.md · API文档.md · security/ ·
+                        B端前端设计方案.md · 前后端对接规划-不含知识库.md · Chat真实接入资源清单.md ·
+                        Chat前后端联调指南.md · session-lifecycle.md · 联网检索接入方案.md
 ```
