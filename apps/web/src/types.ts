@@ -192,3 +192,12 @@ export interface UserRow {
   role: 'admin' | 'user'
   spaces: string[]
 }
+
+export interface AuditEvent {
+  id: number
+  time: string
+  eventType: string
+  username: string
+  subject: string
+  status: string
+}

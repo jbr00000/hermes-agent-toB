@@ -1866,14 +1866,27 @@ class StorageRepository:
             return int(row.id)
 
     def list_audit_events(
-        self, *, conversation_id: str | None = None, user_id: str | None = None
+        self,
+        *,
+        conversation_id: str | None = None,
+        user_id: str | None = None,
+        event_type: str | None = None,
+        limit: int | None = None,
+        descending: bool = False,
     ) -> list[dict[str, Any]]:
         query = select(AuditEvent).where(AuditEvent.tenant_id == tenant_id())
         if conversation_id is not None:
             query = query.where(AuditEvent.conversation_id == conversation_id)
         if user_id is not None:
             query = query.where(AuditEvent.user_id == user_id)
-        query = query.order_by(AuditEvent.created_at, AuditEvent.id)
+        if event_type is not None:
+            query = query.where(AuditEvent.event_type == event_type)
+        if descending:
+            query = query.order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc())
+        else:
+            query = query.order_by(AuditEvent.created_at, AuditEvent.id)
+        if limit is not None:
+            query = query.limit(limit)
         with session_scope() as session:
             rows = session.scalars(query).all()
             return [

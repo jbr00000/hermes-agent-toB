@@ -814,8 +814,25 @@ def _coerce_boolean(value: str):
 def _tool_result_observer_fields(result: Any) -> tuple[str, Optional[str], Optional[str]]:
     try:
         parsed_result = json.loads(result) if isinstance(result, str) else result
-        if isinstance(parsed_result, dict) and parsed_result.get("error"):
-            return "error", "tool_error", str(parsed_result.get("error"))
+        if isinstance(parsed_result, dict):
+            top_error = parsed_result.get("error")
+            if isinstance(top_error, str) and top_error:
+                # "Blocked: …" is the security-denial convention used by
+                # url_safety / website_policy — report it as blocked, not failed.
+                if top_error.startswith("Blocked:"):
+                    return "blocked", "security_block", top_error
+                return "error", "tool_error", top_error
+            # Per-entry result lists (web_extract): when every entry was
+            # security-blocked, the call as a whole is a blocked event.
+            entries = parsed_result.get("results")
+            if isinstance(entries, list) and entries:
+                entry_errors = [
+                    (entry.get("error") or "")
+                    for entry in entries
+                    if isinstance(entry, dict)
+                ]
+                if entry_errors and all(e.startswith("Blocked:") for e in entry_errors):
+                    return "blocked", "security_block", entry_errors[0]
     except Exception:
         pass
     return "ok", None, None

@@ -1,6 +1,7 @@
 import type {
   ActiveModelRun,
   AgentTaskDetail,
+  AuditEvent,
   AuthUser,
   ChatMessage,
   ConversationDetail,
@@ -130,6 +131,23 @@ type BackendTaskSummary = Pick<
   'id' | 'title' | 'status' | 'risk_level' | 'updated_at'
 >
 
+interface BackendAuditEvent {
+  id: number
+  event_type: string
+  session_id: string | null
+  user_id: string | null
+  username: string
+  status: string
+  mode: string | null
+  metadata: {
+    tool_name?: string
+    args?: { keys?: string[]; query?: string; urls?: string[] }
+    duration_ms?: number
+  }
+  error: string | null
+  created_at: number
+}
+
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
     super(message)
@@ -204,6 +222,29 @@ function toConversation(row: BackendSession): ConversationSummary {
     updatedAt: formatTime(row.updated_at),
     period: conversationPeriod(row.updated_at),
     pinned: row.pinned,
+  }
+}
+
+function toAuditEvent(row: BackendAuditEvent): AuditEvent {
+  const metadata = row.metadata ?? {}
+  const toolName = metadata.tool_name
+  const args = metadata.args ?? {}
+  let subject: string
+  if (toolName) {
+    const detail = args.query ?? (args.urls?.length ? args.urls.join('、') : '')
+    subject = detail ? `${toolName} · ${detail}` : toolName
+  } else if (row.error) {
+    subject = row.error
+  } else {
+    subject = row.session_id ? `会话 ${row.session_id.slice(0, 8)}` : '—'
+  }
+  return {
+    id: row.id,
+    time: formatTime(row.created_at),
+    eventType: row.event_type,
+    username: row.username,
+    subject,
+    status: row.status,
   }
 }
 
@@ -619,5 +660,12 @@ export const api = {
       provider: 'deepseek',
       model: 'deepseek-v4-pro',
     }
+  },
+
+  async listAuditEvents(limit = 100): Promise<AuditEvent[]> {
+    const response = await apiFetch(`/audit/events?limit=${limit}`)
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as { events: BackendAuditEvent[] }
+    return body.events.map(toAuditEvent)
   },
 }

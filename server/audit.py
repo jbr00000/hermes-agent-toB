@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import re
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from server.storage import get_repository, init_storage
 
@@ -37,7 +38,36 @@ def record_event(
     )
 
 
-def summarize_tool_args(args: dict[str, Any] | None) -> dict[str, Any]:
+def _redact_url_for_audit(url: str) -> str:
+    """Return *url* safe for the audit trail (credential-like query values masked).
+
+    Web access is audited by design (docs/联网检索接入方案.md §6.3), but a URL
+    can itself carry a secret (signed links, ``?token=…``). Reuse the web
+    stack's own sensitive-param detector so both stay in agreement.
+    """
+    trimmed = url.strip()[:300]
+    try:
+        from tools.url_safety import sensitive_query_param_name
+
+        sensitive_key = sensitive_query_param_name(trimmed)
+    except Exception:
+        sensitive_key = None
+    if not sensitive_key:
+        return trimmed
+    try:
+        parts = urlsplit(trimmed)
+        pairs = [
+            (key, "***" if key == sensitive_key else value)
+            for key, value in parse_qsl(parts.query, keep_blank_values=True)
+        ]
+        return urlunsplit(parts._replace(query=urlencode(pairs, safe="*")))[:300]
+    except ValueError:
+        return trimmed
+
+
+def summarize_tool_args(
+    args: dict[str, Any] | None, tool_name: str | None = None
+) -> dict[str, Any]:
     if not isinstance(args, dict):
         return {"keys": []}
     keys = sorted(str(key) for key in args.keys())
@@ -48,6 +78,17 @@ def summarize_tool_args(args: dict[str, Any] | None) -> dict[str, Any]:
         summary["sql_fingerprint"] = hashlib.sha256(
             normalized.encode("utf-8", errors="replace")
         ).hexdigest()[:16]
+    # Web 检索属于"外部访问"，审计要求可追溯 query/URL（docs/联网检索接入方案.md §6.3）。
+    if tool_name == "web_search":
+        query = args.get("query")
+        if isinstance(query, str) and query.strip():
+            summary["query"] = query.strip()[:200]
+    elif tool_name == "web_extract":
+        urls = args.get("urls")
+        if isinstance(urls, list):
+            summary["urls"] = [
+                _redact_url_for_audit(u) for u in urls[:10] if isinstance(u, str)
+            ]
     return summary
 
 
@@ -88,7 +129,7 @@ def record_tool_call(
         mode=mode,
         metadata={
             "tool_name": tool_name,
-            "args": summarize_tool_args(args),
+            "args": summarize_tool_args(args, tool_name),
             "duration_ms": max(0, int(duration_ms or 0)),
             "task_id": task_id,
             "tool_call_id": tool_call_id,
