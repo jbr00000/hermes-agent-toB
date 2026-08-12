@@ -151,6 +151,153 @@ services:
       - hermes-sandbox-control
     restart: unless-stopped
 
+  # ------------------------------------------------------------------
+  # Web 检索组件（docker compose --profile search up -d）
+  # 只挂 hermes-egress：可出公网、可被 hermes-server/worker 访问，
+  # 但够不到 hermes-data 上的业务库。方案详见 docs/联网检索接入方案.md §4。
+  # 镜像全部按 digest 锁定（2026-08-11 拉取）；升级 = 显式改 digest 的交付动作。
+  # ------------------------------------------------------------------
+  searxng:
+    profiles: ["search"]
+    image: searxng/searxng:latest@sha256:cd22dbf7fac8b25d5e39e65af53a4b47009df5ad3162e270c477fd5b30ce03f2
+    container_name: hermes_tob_searxng
+    environment:
+      SEARXNG_SECRET_KEY: ${SEARXNG_SECRET_KEY:?Set SEARXNG_SECRET_KEY in compose.env}
+      SEARXNG_SETTINGS_PATH: /tmp/searxng/settings.yml
+    # 官方 entrypoint 只在"从零生成 settings.yml"时才替换 secret_key；
+    # 我们自带配置文件，所以先 sed 注入密钥到容器本地副本再执行原入口。
+    # 配置以只读挂载进 /config-ro，渲染产物写容器内 /tmp——
+    # 保证宿主机仓库里的 settings.yml 永远只有占位符，真实密钥不会落进 git。
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - >-
+        mkdir -p /etc/searxng /tmp/searxng
+        && sed "s/__SEARXNG_SECRET_KEY__/$${SEARXNG_SECRET_KEY}/g" /config-ro/settings.yml > /tmp/searxng/settings.yml
+        && exec /usr/local/searxng/entrypoint.sh
+    volumes:
+      # settings.yml 必须显式开启 json format，否则 /search?format=json 返回 403
+      - ./deploy/searxng:/config-ro:ro
+    ports:
+      - "127.0.0.1:${SEARXNG_PORT:-18080}:8080"
+    networks:
+      - hermes-egress
+    restart: unless-stopped
+
+  firecrawl-api:
+    profiles: ["search"]
+    image: ghcr.io/firecrawl/firecrawl:2.10.19-production@sha256:50446cbc0bc700a78cc588c96bd38a97f01cc4299c99b349c7bfa1ba57b6d7ed
+    container_name: hermes_tob_firecrawl_api
+    # harness 在同一容器内拉起 api + worker（官方 self-host 编排）
+    command: ["node", "dist/src/harness.js", "--start-docker"]
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "3002"
+      ENV: local
+      USE_DB_AUTHENTICATION: "false"
+      REDIS_URL: redis://firecrawl-redis:6379
+      REDIS_RATE_LIMIT_URL: redis://firecrawl-redis:6379
+      PLAYWRIGHT_MICROSERVICE_URL: http://firecrawl-playwright:3000/scrape
+      # 用户/库必须保持 postgres/postgres：nuq-postgres 镜像的 pg_cron
+      # 绑定 cron.database_name=postgres，换库名会导致建表脚本整体失败
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${FIRECRAWL_POSTGRES_PASSWORD:?Set FIRECRAWL_POSTGRES_PASSWORD in compose.env}
+      POSTGRES_DB: postgres
+      POSTGRES_HOST: firecrawl-nuq-postgres
+      POSTGRES_PORT: "5432"
+      NUQ_RABBITMQ_URL: amqp://firecrawl:${FIRECRAWL_RABBITMQ_PASSWORD:?Set FIRECRAWL_RABBITMQ_PASSWORD in compose.env}@firecrawl-rabbitmq:5672
+      NUM_WORKERS_PER_QUEUE: "4"
+      MAX_CONCURRENT_JOBS: "5"
+      HARNESS_STARTUP_TIMEOUT_MS: "120000"
+    ports:
+      - "127.0.0.1:${FIRECRAWL_API_PORT:-13002}:3002"
+    depends_on:
+      firecrawl-redis:
+        condition: service_started
+      firecrawl-playwright:
+        condition: service_started
+      firecrawl-nuq-postgres:
+        condition: service_healthy
+      firecrawl-rabbitmq:
+        condition: service_healthy
+    networks:
+      - hermes-egress
+    restart: unless-stopped
+
+  firecrawl-playwright:
+    profiles: ["search"]
+    image: ghcr.io/firecrawl/playwright-service:latest@sha256:468009bae00911d40d7120d58489a1d529362c22c45585cb9076094fe61b0025
+    container_name: hermes_tob_firecrawl_playwright
+    environment:
+      PORT: "3000"
+      MAX_CONCURRENT_PAGES: "5"
+      BLOCK_MEDIA: "true" # 拦图片/字体/媒体请求，省出网带宽；正文抽取不受影响
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp/.cache:noexec,nosuid,size=1g
+    networks:
+      - hermes-egress
+    restart: unless-stopped
+
+  firecrawl-redis:
+    profiles: ["search"]
+    # 与主 redis 同版本镜像；独立实例、无持久化、无密码——只在 hermes-egress
+    # 内网可见、不暴露宿主机端口（主 redis 因映射宿主机端口才设密码）。
+    image: redis:7.2.15-alpine
+    container_name: hermes_tob_firecrawl_redis
+    command: ["redis-server", "--bind", "0.0.0.0"]
+    networks:
+      - hermes-egress
+    restart: unless-stopped
+
+  firecrawl-nuq-postgres:
+    profiles: ["search"]
+    image: ghcr.io/firecrawl/nuq-postgres:latest@sha256:aed86f62858f29bd971abddcdeb301c12888098d2cf5d33c1ba42b053bc460f6
+    container_name: hermes_tob_firecrawl_nuq_postgres
+    environment:
+      # 同上：必须为 postgres/postgres，否则 pg_cron 扩展创建失败、nuq 表缺失
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${FIRECRAWL_POSTGRES_PASSWORD:?Set FIRECRAWL_POSTGRES_PASSWORD in compose.env}
+      POSTGRES_DB: postgres
+    volumes:
+      - hermes-firecrawl-nuq-data:/var/lib/postgresql/data
+    networks:
+      - hermes-egress
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  firecrawl-rabbitmq:
+    profiles: ["search"]
+    image: rabbitmq:3-management@sha256:e582c0bc7766f3342496d8485efb5a1df782b5ce3886ad017e2eaae442311f69
+    container_name: hermes_tob_firecrawl_rabbitmq
+    environment:
+      # 显式建账号：rabbitmq 默认 guest 用户仅允许 localhost 连接
+      RABBITMQ_DEFAULT_USER: firecrawl
+      RABBITMQ_DEFAULT_PASS: ${FIRECRAWL_RABBITMQ_PASSWORD:?Set FIRECRAWL_RABBITMQ_PASSWORD in compose.env}
+    volumes:
+      - hermes-firecrawl-rabbitmq-data:/var/lib/rabbitmq
+    networks:
+      - hermes-egress
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
 networks:
   hermes-data:
     name: hermes_tob_data
@@ -170,3 +317,7 @@ volumes:
     name: hermes_tob_redis_data
   hermes-sandbox-docker-data:
     name: hermes_tob_sandbox_docker_data
+  hermes-firecrawl-nuq-data:
+    name: hermes_tob_firecrawl_nuq_data
+  hermes-firecrawl-rabbitmq-data:
+    name: hermes_tob_firecrawl_rabbitmq_data

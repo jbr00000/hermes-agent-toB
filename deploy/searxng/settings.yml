@@ -1,0 +1,69 @@
+# SearXNG 配置 — Hermes to-B 联网检索组件
+#
+# 基于镜像内置默认配置做覆盖（use_default_settings），只声明需要改动的项。
+# 参考：docs/联网检索接入方案.md §4.5
+#
+# 注意：本文件挂载到容器 /etc/searxng/，secret_key 的 "ultrasecretkey" 占位值
+# 会被 searxng 官方 docker 入口脚本在首次启动时替换为随机值（卷需保持 rw）。
+
+use_default_settings: true
+
+search:
+  # ⚠️ 必须显式包含 json：web_search provider 调 /search?format=json，
+  # SearXNG 默认只开 html，不开 json 会返回 403。
+  formats:
+    - html
+    - json
+
+server:
+  # 占位符：容器启动时由 entrypoint 用 compose 环境变量 SEARXNG_SECRET_KEY 替换
+  # （不要提交真实密钥；也不要写 "ultrasecretkey"，SearXNG 会拒绝启动）
+  secret_key: "__SEARXNG_SECRET_KEY__"
+  limiter: false # 容器只在 hermes-egress 内网暴露，关闭限流插件（limiter 依赖 redis）
+
+ui:
+  static_use_hash: true
+
+outgoing:
+  # 收敛上游引擎超时，避免长尾请求拖住 agent loop
+  request_timeout: 5.0
+  max_request_timeout: 10.0
+
+# 上游引擎裁剪（2026-08 实测）：默认启用的 general 引擎全部偏欧美，
+# 本部署网络不可达（google/brave/duckduckgo/startpage 超时或人机验证），
+# 关闭它们，改用国内可达引擎。客户网络策略变化时在此增删。
+engines:
+  # —— 关闭：不可达的默认引擎 ——
+  - name: duckduckgo
+    disabled: true
+  - name: google cse
+    disabled: true
+  - name: startpage
+    disabled: true
+  - name: brave
+    disabled: true
+  - name: wikipedia
+    disabled: true
+  - name: wikidata
+    disabled: true
+  - name: lingva
+    disabled: true
+  - name: dictzone
+    disabled: true
+  - name: mymemory translated
+    disabled: true
+  - name: currency
+    disabled: true
+  # —— 开启：国内可达引擎 ——
+  # （2026-08 实测：quark 引擎在本版本稳定崩溃，关闭；
+  #   baidu 对容器出口 IP 常弹 CAPTCHA，由 SearXNG 自动熔断，保留观察）
+  - name: baidu
+    disabled: false
+  - name: sogou
+    disabled: false
+  - name: 360search
+    disabled: false
+  - name: quark
+    disabled: true
+  - name: bing
+    disabled: false

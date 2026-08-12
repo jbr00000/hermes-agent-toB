@@ -70,7 +70,9 @@ Key `apps/web/src/` pieces: `api.ts` (HTTP/SSE client) · `chatRunManager.tsx` /
 ### Docker
 ```bash
 docker compose up          # builds hermes-agent-tob:dev, mounts $HERMES_HOME -> /data
+docker compose --env-file .env.compose --profile search up -d   # + SearXNG/Firecrawl web-search stack
 ```
+The web-search stack (`search` profile: searxng + firecrawl api/playwright/redis/nuq-postgres/rabbitmq) lives only on the `hermes-egress` network — it can reach the internet but not the business DB. Images are digest-pinned; see `docs/联网检索接入方案.md` §4 for the upgrade discipline and the pg_cron/SearXNG-secret pitfalls.
 
 ## Architecture — the pieces you must hold together
 
@@ -169,6 +171,7 @@ apps/web/src/api.ts     HTTP/SSE client; mockApi.ts/mockData.ts = mock backend f
 apps/web/src/chatRunManager.tsx · agentRunManager.tsx  run stores (useChatRun/useAgentRun)
 apps/web/src/components/pet/  pencil-sketch cat companion (PetAvatar/petState/PetFloat)
 compose.env.example     docker-compose env template (DB/Redis URLs + secrets)
+deploy/searxng/settings.yml  SearXNG config (json format on, CN engine set, secret placeholder)
 docs/                   改造计划.md (9 decisions) · 项目架构详解.md · API文档.md · security/ ·
                         B端前端设计方案.md · 前后端对接规划-不含知识库.md · Chat真实接入资源清单.md ·
                         Chat前后端联调指南.md · session-lifecycle.md · 联网检索接入方案.md

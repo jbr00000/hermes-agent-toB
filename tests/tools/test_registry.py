@@ -327,6 +327,29 @@ class TestBuiltinDiscovery:
         assert imported == ["tools.alpha"]
         mock_import.assert_called_once_with("tools.alpha")
 
+    def test_bom_prefixed_module_is_still_discovered(self, tmp_path, monkeypatch):
+        """A stray UTF-8 BOM must not exclude a self-registering module.
+
+        Regression: read_text(encoding="utf-8") keeps the BOM, ast.parse then
+        raises SyntaxError, and the module was silently skipped — while the
+        import machinery itself tolerates BOMs, so nothing ever logged an error.
+        """
+        monkeypatch.delenv("HERMES_HEADLESS", raising=False)
+        tools_dir = tmp_path / "tools"
+        tools_dir.mkdir()
+        (tools_dir / "__init__.py").write_text("", encoding="utf-8")
+        (tools_dir / "registry.py").write_text("", encoding="utf-8")
+        (tools_dir / "alpha.py").write_text(
+            "from tools.registry import registry\nregistry.register(name='alpha', toolset='x', schema={}, handler=lambda *_a, **_k: '{}')\n",
+            encoding="utf-8-sig",  # writes a BOM
+        )
+
+        with patch("tools.registry.importlib.import_module") as mock_import:
+            imported = discover_builtin_tools(tools_dir)
+
+        assert imported == ["tools.alpha"]
+        mock_import.assert_called_once_with("tools.alpha")
+
     def test_skips_mcp_tool_even_if_it_registers(self, tmp_path, monkeypatch):
         monkeypatch.delenv("HERMES_HEADLESS", raising=False)
         tools_dir = tmp_path / "tools"

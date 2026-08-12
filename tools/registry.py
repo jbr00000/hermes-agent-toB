@@ -66,7 +66,9 @@ def _module_registers_tools(module_path: Path) -> bool:
     to call ``registry.register()`` inside a function are not picked up.
     """
     try:
-        source = module_path.read_text(encoding="utf-8")
+        # utf-8-sig: a stray BOM breaks ast.parse but not the import machinery,
+        # which would silently exclude the module from discovery.
+        source = module_path.read_text(encoding="utf-8-sig")
         tree = ast.parse(source, filename=str(module_path))
     except (OSError, SyntaxError):
         return False
