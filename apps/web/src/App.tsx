@@ -1,12 +1,12 @@
 import * as React from 'react'
 import { useAtom } from 'jotai'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import ReactMarkdown from 'react-markdown'
 import {
   AlertTriangle,
   Archive,
   Bot,
   Brain,
+  Cat,
   Check,
   ChevronDown,
   CircleStop,
@@ -62,11 +62,13 @@ import { PetAvatar } from './components/pet/PetAvatar'
 import type { PetState } from './components/pet/PetAvatar'
 import { petStateFromAgentRun, petStateFromChatRun } from './components/pet/petState'
 import { PetFloat } from './components/pet/PetFloat'
+import { Markdown } from './components/Markdown'
 import {
   activeTabIdAtom,
   attachedFilesAtom,
   chatAttachedFilesAtom,
   createTab,
+  petVisibleAtom,
   selectedSpaceAtom,
   tabId,
   tabsAtom,
@@ -898,6 +900,7 @@ function TopBar({
   onLogout: () => void
 }) {
   const [selectedSpace, setSelectedSpace] = useAtom(selectedSpaceAtom)
+  const [petVisible, setPetVisible] = useAtom(petVisibleAtom)
   const activeSpace = spaces.find((space) => space.id === selectedSpace) ?? spaces[0]
 
   return (
@@ -937,6 +940,16 @@ function TopBar({
           <UserCog size={14} />
           {user.username}
         </div>
+        <button
+          title={petVisible ? '隐藏小猫' : '显示小猫'}
+          className={cn(
+            'flex h-8 w-8 items-center justify-center rounded-md border border-line hover:bg-field',
+            petVisible ? 'text-ink' : 'text-zinc-400',
+          )}
+          onClick={() => setPetVisible(!petVisible)}
+        >
+          <Cat size={15} />
+        </button>
         <button
           title="退出登录"
           className="flex h-8 w-8 items-center justify-center rounded-md border border-line text-zinc-500 hover:bg-field hover:text-ink"
@@ -1352,7 +1365,7 @@ function ChatView({
           ) : displayMessages.length === 0 && !isRunning ? (
             <div className="border-y border-line py-16 text-center">
               <div className="text-sm font-medium">新问答</div>
-              <div className="mt-1 text-xs text-zinc-500">输入问题，小猫陪你一起找答案。</div>
+              <div className="mt-1 text-xs text-zinc-500">输入问题，我陪你一起找答案。</div>
             </div>
           ) : (
             displayMessages.map((message) => <MessageBubble key={message.id} message={message} />)
@@ -1696,7 +1709,7 @@ function AgentView({ taskId, title, onDeleted }: { taskId: string; title: string
   )
 }
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+const MessageBubble = React.memo(function MessageBubble({ message }: { message: ChatMessage }) {
   const assistant = message.role === 'assistant'
   const system = message.role === 'system'
   const thinking = assistant && message.status === 'streaming'
@@ -1717,9 +1730,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
       )}
       <div className={cn('max-w-[88%] rounded-md border px-3 py-3 text-sm leading-6 sm:max-w-[78%] sm:px-4', assistant || system ? 'border-line bg-panel' : 'border-ink bg-ink text-white')}>
         {assistant || system ? (
-          <div className="break-words [&_a]:text-info [&_a]:underline [&_code]:rounded [&_code]:bg-field [&_code]:px-1 [&_h1]:mb-2 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:mb-2 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:mb-1 [&_h3]:font-semibold [&_li]:ml-5 [&_li]:list-disc [&_ol_li]:list-decimal [&_p+p]:mt-3 [&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-zinc-900 [&_pre]:p-3 [&_pre]:text-zinc-100 [&_pre_code]:bg-transparent [&_ul]:my-2">
-            <ReactMarkdown>{message.content || '...'}</ReactMarkdown>
-          </div>
+          <Markdown content={message.content || '...'} />
         ) : (
           <div className="whitespace-pre-wrap break-words">{message.content || '...'}</div>
         )}
@@ -1736,7 +1747,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
       </div>
     </div>
   )
-}
+})
 
 function ThinkingBubble({ message }: { message: ChatMessage }) {
   const displayTime = message.createdAt || new Date(
@@ -1871,9 +1882,7 @@ function TaskPlanPanel({
       {plan?.content && (
         <details className="mt-3 border-t border-line pt-3" open={awaitingApproval}>
           <summary className="cursor-pointer text-xs font-medium text-zinc-600">查看计划内容</summary>
-          <div className="mt-3 max-h-64 overflow-y-auto text-sm leading-6 text-zinc-700 [&_li]:ml-5 [&_li]:list-disc [&_ol_li]:list-decimal [&_p+p]:mt-2">
-            <ReactMarkdown>{plan.content}</ReactMarkdown>
-          </div>
+          <Markdown content={plan.content} className="mt-3 max-h-64 overflow-y-auto text-zinc-700" />
         </details>
       )}
     </div>
