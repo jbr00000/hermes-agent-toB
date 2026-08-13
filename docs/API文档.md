@@ -322,6 +322,71 @@ Agent 模式必须通过任务接口进入。服务端持久化任务、运行�
 
 ---
 
+### 3.9 知识库 Knowledge
+
+企业统一知识库（构建链路见 [`知识库构建方案.md`](知识库构建方案.md)）。`deployment.yaml` 里 `knowledge.enabled=false`（缺省）时**整组路由 404**，前端据此显示"当前部署未启用知识库"。
+
+文档状态机：`pending → parsing → syncing → ready / failed`。上传是异步的——202 立即返回，前端轮询 `GET /knowledge/documents`（构建中有文档时 3s 一次）直到全部终态。
+
+#### `GET /knowledge/documents?status=&limit=&offset=`
+文档列表 + 汇总。**需登录（普通用户可读）。** `status` 可选过滤（`pending/parsing/syncing/ready/failed`）。
+```json
+// 响应 200
+{ "documents": [
+    { "id": "doc-uuid", "title": "费用测算办法", "file_name": "费用测算办法.pdf",
+      "file_ext": ".pdf", "size_bytes": 831022, "status": "ready",
+      "error": null, "parser": "mineru", "chunk_count": 64, "retry_count": 0,
+      "uploader_id": "...", "created_at": 1783…, "updated_at": 1783…, "finished_at": 1783… }
+  ],
+  "stats": { "documents": 12, "chunks": 860 } }
+```
+
+#### `GET /knowledge/documents/{doc_id}`
+单个文档详情。**需登录。**
+```json
+// 响应 200
+{ "document": { "id": "…", "status": "parsing", … } }
+// 404 文档不存在
+```
+
+#### `GET /knowledge/documents/{doc_id}/chunks`
+分块预览（构建完成后有内容）。**需登录。**
+```json
+// 响应 200
+{ "chunks": [
+    { "id": "chunk-uuid", "doc_id": "…", "doc_name": "费用测算办法",
+      "chunk_title": "第三章 / 费用构成", "content": "……", "doc_pos": 0,
+      "token_num": 387, "is_use": true }
+  ] }
+```
+
+#### `POST /knowledge/documents`（仅 admin，multipart）
+上传并触发异步构建。**需 admin token。** `Content-Type: multipart/form-data`，字段：`file`（文件）、`title`（可选，缺省用文件名去扩展名）。
+
+支持格式：`.pdf .doc .docx .ppt .pptx .xls .xlsx .txt .md`；大小上限 `knowledge.max_file_mb`（默认 100MB）。
+```json
+// 响应 202
+{ "document": { "id": "doc-uuid", "status": "pending", … }, "job_id": "job-uuid" }
+// 400 格式不支持/空文件；413 超大小；503 队列不可用（无 Redis 且未开内嵌 worker）
+```
+
+#### `DELETE /knowledge/documents/{doc_id}`（仅 admin）
+删除文档：清 ES/Milvus 投影 → 删本地文件 → 删 MySQL 行。
+```json
+// 响应 200
+{ "deleted": "doc-uuid" }
+```
+
+#### `POST /knowledge/documents/{doc_id}/retry`（仅 admin）
+重新构建。仅 `failed`/`ready` 状态可重试。
+```json
+// 响应 202
+{ "document_id": "doc-uuid", "job_id": "job-uuid" }
+// 409 构建中不可重试；410 原始文件已丢失（需重新上传）
+```
+
+---
+
 ## 4. SSE 流式消费示例（前端 JS）
 
 ```javascript

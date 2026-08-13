@@ -25,3 +25,21 @@ mcp_servers:
 
 features:
   host_terminal: false
+
+# 企业统一知识库（文档上传→解析→分块→向量化入库，见 docs/知识库构建方案.md）
+# 缺省 enabled=false：路由 404、worker 不启动。MinerU 与 embedding 均为客户
+# 内网自部署服务；密钥（embedding api key / ES 密码）只放 $HERMES_HOME/.env。
+knowledge:
+  enabled: false
+  mineru_url: http://gpu-server:18888        # 客户 GPU 服务器上的 MinerU API
+  es_url: http://elasticsearch:19200         # compose knowledge profile 内网地址
+  milvus_uri: http://milvus:19530
+  embedding:
+    base_url: http://llm-gw.internal/v1      # OpenAI 兼容端点
+    model: bge-m3
+    dim: 1024
+    api_key_env: KNOWLEDGE_EMBEDDING_API_KEY # key 本体在 .env
+    batch_size: 32
+  chunk_size: 400
+  chunk_overlap: 64
+  max_file_mb: 100

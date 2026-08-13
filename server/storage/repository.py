@@ -17,6 +17,9 @@ from .models import (
     Artifact,
     AuthSession,
     Conversation,
+    KnowledgeChunk,
+    KnowledgeDocument,
+    KnowledgeJob,
     MemoryCandidate,
     MemoryItem,
     Message,
@@ -137,6 +140,57 @@ def _tool_event_dict(row: ToolEvent) -> dict[str, Any]:
         "risk_level": row.risk_level,
         "status": row.status,
         "payload": row.payload or {},
+        "created_at": row.created_at,
+    }
+
+
+def _knowledge_document_dict(row: KnowledgeDocument) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "uploader_id": row.uploader_id,
+        "title": row.title,
+        "file_name": row.file_name,
+        "file_ext": row.file_ext,
+        "size_bytes": row.size_bytes,
+        "file_path": row.file_path,
+        "status": row.status,
+        "error": row.error,
+        "parser": row.parser,
+        "chunk_count": row.chunk_count,
+        "retry_count": row.retry_count,
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+        "finished_at": row.finished_at,
+    }
+
+
+def _knowledge_chunk_dict(row: KnowledgeChunk) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "doc_id": row.doc_id,
+        "doc_name": row.doc_name,
+        "chunk_title": row.chunk_title,
+        "content": row.content,
+        "doc_pos": row.doc_pos,
+        "token_num": row.token_num,
+        "is_use": bool(row.is_use),
+        "created_at": row.created_at,
+    }
+
+
+def _knowledge_job_dict(row: KnowledgeJob) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "doc_id": row.doc_id,
+        "user_id": row.user_id,
+        "status": row.status,
+        "attempt": row.attempt,
+        "worker_id": row.worker_id,
+        "heartbeat_at": row.heartbeat_at,
+        "error": row.error,
+        "payload": row.payload or {},
+        "started_at": row.started_at,
+        "finished_at": row.finished_at,
         "created_at": row.created_at,
     }
 
@@ -1903,3 +1957,226 @@ class StorageRepository:
                 }
                 for row in rows
             ]
+
+    # ---- knowledge base (enterprise library) ----
+
+    def create_knowledge_document(
+        self,
+        *,
+        uploader_id: str,
+        title: str,
+        file_name: str,
+        file_ext: str,
+        size_bytes: int,
+        file_path: str,
+    ) -> dict[str, Any]:
+        now = time.time()
+        row = KnowledgeDocument(
+            id=str(uuid.uuid4()),
+            tenant_id=tenant_id(),
+            uploader_id=uploader_id,
+            title=title,
+            file_name=file_name,
+            file_ext=file_ext,
+            size_bytes=size_bytes,
+            file_path=file_path,
+            status="pending",
+            chunk_count=0,
+            retry_count=0,
+            created_at=now,
+            updated_at=now,
+        )
+        with session_scope() as session:
+            session.add(row)
+        return _knowledge_document_dict(row)
+
+    def get_knowledge_document(self, doc_id: str) -> dict[str, Any] | None:
+        with session_scope() as session:
+            row = session.scalar(
+                select(KnowledgeDocument).where(
+                    KnowledgeDocument.tenant_id == tenant_id(),
+                    KnowledgeDocument.id == doc_id,
+                )
+            )
+            return _knowledge_document_dict(row) if row is not None else None
+
+    def list_knowledge_documents(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        query = select(KnowledgeDocument).where(KnowledgeDocument.tenant_id == tenant_id())
+        if status is not None:
+            query = query.where(KnowledgeDocument.status == status)
+        query = query.order_by(
+            KnowledgeDocument.updated_at.desc(), KnowledgeDocument.id.desc()
+        ).limit(limit).offset(offset)
+        with session_scope() as session:
+            rows = session.scalars(query).all()
+            return [_knowledge_document_dict(row) for row in rows]
+
+    def knowledge_stats(self) -> dict[str, int]:
+        with session_scope() as session:
+            docs, chunks = session.execute(
+                select(
+                    func.count(KnowledgeDocument.id),
+                    func.coalesce(func.sum(KnowledgeDocument.chunk_count), 0),
+                ).where(KnowledgeDocument.tenant_id == tenant_id())
+            ).one()
+            return {"documents": int(docs), "chunks": int(chunks)}
+
+    def update_knowledge_document(self, doc_id: str, **changes: Any) -> dict[str, Any] | None:
+        allowed = {
+            "title",
+            "status",
+            "error",
+            "parser",
+            "chunk_count",
+            "retry_count",
+            "finished_at",
+        }
+        with session_scope() as session:
+            row = session.scalar(
+                select(KnowledgeDocument).where(
+                    KnowledgeDocument.tenant_id == tenant_id(),
+                    KnowledgeDocument.id == doc_id,
+                )
+            )
+            if row is None:
+                return None
+            for key, value in changes.items():
+                if key in allowed:
+                    setattr(row, key, value)
+            row.updated_at = time.time()
+            session.flush()
+            return _knowledge_document_dict(row)
+
+    def delete_knowledge_document(self, doc_id: str) -> bool:
+        """Delete a document and its chunks (the DB side; ES/Milvus/disk are the caller's job)."""
+        with session_scope() as session:
+            session.execute(
+                delete(KnowledgeChunk).where(
+                    KnowledgeChunk.tenant_id == tenant_id(),
+                    KnowledgeChunk.doc_id == doc_id,
+                )
+            )
+            session.execute(
+                delete(KnowledgeJob).where(
+                    KnowledgeJob.tenant_id == tenant_id(),
+                    KnowledgeJob.doc_id == doc_id,
+                )
+            )
+            result = session.execute(
+                delete(KnowledgeDocument).where(
+                    KnowledgeDocument.tenant_id == tenant_id(),
+                    KnowledgeDocument.id == doc_id,
+                )
+            )
+            return bool(result.rowcount)
+
+    def replace_knowledge_chunks(
+        self, doc_id: str, doc_name: str, chunks: list[dict[str, Any]]
+    ) -> int:
+        """Atomically replace all chunks of a document (idempotent re-parse)."""
+        now = time.time()
+        with session_scope() as session:
+            session.execute(
+                delete(KnowledgeChunk).where(
+                    KnowledgeChunk.tenant_id == tenant_id(),
+                    KnowledgeChunk.doc_id == doc_id,
+                )
+            )
+            for chunk in chunks:
+                session.add(
+                    KnowledgeChunk(
+                        id=str(chunk.get("id") or uuid.uuid4()),
+                        tenant_id=tenant_id(),
+                        doc_id=doc_id,
+                        doc_name=doc_name,
+                        chunk_title=chunk.get("chunk_title"),
+                        content=str(chunk["content"]),
+                        doc_pos=int(chunk["doc_pos"]),
+                        token_num=int(chunk.get("token_num") or 0),
+                        is_use=bool(chunk.get("is_use", True)),
+                        created_at=now,
+                    )
+                )
+        return len(chunks)
+
+    def list_knowledge_chunks(self, doc_id: str) -> list[dict[str, Any]]:
+        with session_scope() as session:
+            rows = session.scalars(
+                select(KnowledgeChunk)
+                .where(
+                    KnowledgeChunk.tenant_id == tenant_id(),
+                    KnowledgeChunk.doc_id == doc_id,
+                )
+                .order_by(KnowledgeChunk.doc_pos)
+            ).all()
+            return [_knowledge_chunk_dict(row) for row in rows]
+
+    def create_knowledge_job(
+        self, *, doc_id: str, user_id: str, payload: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        row = KnowledgeJob(
+            id=str(uuid.uuid4()),
+            tenant_id=tenant_id(),
+            doc_id=doc_id,
+            user_id=user_id,
+            status="queued",
+            attempt=0,
+            payload=payload or {},
+            created_at=time.time(),
+        )
+        with session_scope() as session:
+            session.add(row)
+        return _knowledge_job_dict(row)
+
+    def get_knowledge_job(self, job_id: str) -> dict[str, Any] | None:
+        with session_scope() as session:
+            row = session.scalar(
+                select(KnowledgeJob).where(
+                    KnowledgeJob.tenant_id == tenant_id(),
+                    KnowledgeJob.id == job_id,
+                )
+            )
+            return _knowledge_job_dict(row) if row is not None else None
+
+    def update_knowledge_job(self, job_id: str, **changes: Any) -> dict[str, Any] | None:
+        allowed = {
+            "status",
+            "attempt",
+            "worker_id",
+            "heartbeat_at",
+            "error",
+            "started_at",
+            "finished_at",
+        }
+        with session_scope() as session:
+            row = session.scalar(
+                select(KnowledgeJob).where(
+                    KnowledgeJob.tenant_id == tenant_id(),
+                    KnowledgeJob.id == job_id,
+                )
+            )
+            if row is None:
+                return None
+            for key, value in changes.items():
+                if key in allowed:
+                    setattr(row, key, value)
+            session.flush()
+            return _knowledge_job_dict(row)
+
+    def list_stale_running_knowledge_jobs(self, stale_before: float) -> list[dict[str, Any]]:
+        """Running jobs whose heartbeat is older than ``stale_before`` (worker recovery)."""
+        with session_scope() as session:
+            rows = session.scalars(
+                select(KnowledgeJob).where(
+                    KnowledgeJob.tenant_id == tenant_id(),
+                    KnowledgeJob.status == "running",
+                    KnowledgeJob.heartbeat_at < stale_before,
+                )
+            ).all()
+            return [_knowledge_job_dict(row) for row in rows]

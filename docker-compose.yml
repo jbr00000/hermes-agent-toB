@@ -340,6 +340,147 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  # ------------------------------------------------------------------
+  # 知识库构建栈（docker compose --profile knowledge up -d）
+  # ES（BM25 全文）+ Milvus（向量）+ Milvus 内部依赖 etcd/minio + 知识库 worker。
+  # 全部只挂 hermes-data：不映射宿主机端口、不出网，仅 hermes-server/worker
+  # 可达（天然无端口冲突；es_url 用容器内网 http.port=19200）。
+  # 注意：minio/etcd 是 Milvus standalone 的内部组件，与知识库文档存储无关
+  # ——文档原文存宿主机卷 ./.hermes-dev/knowledge/files/。
+  # MinerU 与 embedding 端点是客户自备服务，不在本栈内。
+  # 镜像全部按 digest 锁定（2026-08-13 拉取）；升级 = 显式改 digest 的交付动作。
+  # ------------------------------------------------------------------
+  elasticsearch:
+    profiles: ["knowledge"]
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.18.4@sha256:e8726a9a59f5776274181bc398f799db9249f1a7f483ea684201c9832e933c57
+    container_name: hermes_tob_elasticsearch
+    environment:
+      discovery.type: single-node
+      # 仅容器内网可达（不映射宿主机）；与客户可能已有的 ES :9200 错开
+      http.port: "19200"
+      # 内网无暴露，默认关安全层；客户要求开启时在 .env 配
+      # KNOWLEDGE_ES_PASSWORD 并改用 elastic 账号（见 server/knowledge/es_client.py）
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "-Xms1g -Xmx1g"
+      TZ: UTC
+    mem_limit: 2g
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - hermes-es-data:/usr/share/elasticsearch/data
+    networks:
+      - hermes-data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:19200/_cluster/health?wait_for_status=yellow&timeout=3s >/dev/null"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 40s
+    restart: unless-stopped
+
+  etcd:
+    profiles: ["knowledge"]
+    image: quay.io/coreos/etcd:v3.5.21@sha256:a3ccd299377af4b9968d8cbaaf9722fe354297f11908f74a846075e1e5f4ee89
+    container_name: hermes_tob_etcd
+    environment:
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: "1000"
+      ETCD_QUOTA_BACKEND_BYTES: "4294967296"
+      ETCD_SNAPSHOT_COUNT: "50000"
+      TZ: UTC
+    command:
+      - etcd
+      - -advertise-client-urls=http://etcd:2379
+      - -listen-client-urls=http://0.0.0.0:2379
+      - --data-dir=/etcd
+    volumes:
+      - hermes-etcd-data:/etcd
+    networks:
+      - hermes-data
+    healthcheck:
+      test: ["CMD-SHELL", "ETCDCTL_API=3 etcdctl endpoint health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  minio:
+    profiles: ["knowledge"]
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    container_name: hermes_tob_minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?Set MINIO_ROOT_USER in compose.env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in compose.env}
+      TZ: UTC
+    command: ["minio", "server", "/minio_data"]
+    volumes:
+      - hermes-minio-data:/minio_data
+    networks:
+      - hermes-data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:9000/minio/health/live >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  milvus:
+    profiles: ["knowledge"]
+    image: milvusdb/milvus:v2.5.16@sha256:c3e6773fa7553edd1922b0cd7af90838eebba3751219aebd52a65fafa1c8e739
+    container_name: hermes_tob_milvus
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      # Milvus defaults to minioadmin:minioadmin — must mirror minio's root credentials
+      MINIO_ACCESS_KEY_ID: ${MINIO_ROOT_USER:?Set MINIO_ROOT_USER in compose.env}
+      MINIO_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in compose.env}
+      TZ: UTC
+    command: ["milvus", "run", "standalone"]
+    depends_on:
+      etcd:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    volumes:
+      - hermes-milvus-data:/var/lib/milvus
+    networks:
+      - hermes-data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:9091/healthz >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+    restart: unless-stopped
+
+  hermes-knowledge-worker:
+    profiles: ["knowledge"]
+    image: hermes-agent-tob:dev
+    container_name: hermes_tob_knowledge_worker
+    # alembic 幂等：与 hermes-server 并发执行时一方失败会随 restart 重试收敛。
+    # 注意：知识库 HTTP API 在 hermes-server（profile app）里，完整使用需
+    # `--profile app --profile knowledge` 同启；本服务独立可跑仅验证构建链路。
+    command: ["sh", "-c", "alembic upgrade head && python -m server.knowledge.worker"]
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./.hermes-dev:/data  # 与 server 共享：knowledge/files/ 文档原文
+    environment:
+      HERMES_HEADLESS: "1"
+      HERMES_DATABASE_URL: mysql+pymysql://${HERMES_MYSQL_USER:-hermes_app}:${HERMES_MYSQL_PASSWORD}@mysql:3306/${HERMES_MYSQL_DATABASE:-hermes_tob}?charset=utf8mb4
+      HERMES_REDIS_URL: redis://:${HERMES_REDIS_PASSWORD}@redis:6379/0
+    networks:
+      # hermes-data 有出站 NAT：可达客户内网的 MinerU / embedding 端点
+      - hermes-data
+    restart: unless-stopped
+
 networks:
   hermes-data:
     name: hermes_tob_data
@@ -370,3 +511,11 @@ volumes:
     name: hermes_tob_firecrawl_nuq_data
   hermes-firecrawl-rabbitmq-data:
     name: hermes_tob_firecrawl_rabbitmq_data
+  hermes-es-data:
+    name: hermes_tob_es_data
+  hermes-etcd-data:
+    name: hermes_tob_etcd_data
+  hermes-minio-data:
+    name: hermes_tob_minio_data
+  hermes-milvus-data:
+    name: hermes_tob_milvus_data

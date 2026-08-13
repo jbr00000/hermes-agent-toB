@@ -57,12 +57,14 @@ import {
   useChatRunManager,
 } from './chatRunManager'
 import { mockApi } from './mockApi'
-import { documents } from './mockData'
 import { PetAvatar } from './components/pet/PetAvatar'
 import type { PetState } from './components/pet/PetAvatar'
 import { petStateFromAgentRun, petStateFromChatRun } from './components/pet/petState'
 import { PetFloat } from './components/pet/PetFloat'
 import { Markdown } from './components/Markdown'
+import { Badge, DataTable, formatBytes, InfoRow, PageHeader, Td, Th } from './components/ui'
+import { KnowledgeBaseView } from './components/knowledge/KnowledgeBaseView'
+import { DocumentDetailView } from './components/knowledge/DocumentDetailView'
 import {
   activeTabIdAtom,
   attachedFilesAtom,
@@ -98,12 +100,6 @@ const CORTEX_MARK_URL = '/assets/cortex-logo-mark.svg'
 
 function cn(...classes: Array<string | false | null | undefined>): string {
   return classes.filter(Boolean).join(' ')
-}
-
-function formatBytes(size: number): string {
-  if (size < 1024) return `${size} B`
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
-  return `${(size / 1024 / 1024).toFixed(1)} MB`
 }
 
 function typeIcon(type: TabType): LucideIcon {
@@ -154,24 +150,6 @@ function statusTone(status: SessionSummary['status']): string {
     completed: 'bg-zinc-100 text-zinc-600',
     failed: 'bg-red-50 text-danger',
     cancelled: 'bg-zinc-100 text-zinc-600',
-  }[status]
-}
-
-function docStatusText(status: KnowledgeDocument['status']): string {
-  return {
-    ready: '可引用',
-    parsing: '解析中',
-    review: '待审核',
-    failed: '失败',
-  }[status]
-}
-
-function docStatusTone(status: KnowledgeDocument['status']): string {
-  return {
-    ready: 'bg-emerald-50 text-success',
-    parsing: 'bg-sky-50 text-info',
-    review: 'bg-amber-50 text-caution',
-    failed: 'bg-red-50 text-danger',
   }[status]
 }
 
@@ -569,7 +547,6 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
         <Sidebar
           sessions={sessionsQuery.data ?? []}
           conversations={conversationsQuery.data ?? []}
-          spaces={spacesQuery.data ?? []}
           mode={workspaceMode}
           activeTab={activeTab}
           onOpenTab={openTab}
@@ -592,6 +569,7 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
               {activeTab ? (
                 <TabContent
                   tab={activeTab}
+                  isAdmin={user.role === 'admin'}
                   onOpenTab={openTab}
                   onConversationUpdated={updateConversationTab}
                   onConversationArchived={(sessionId) => closeTab(tabId(user.id, 'chat', sessionId))}
@@ -624,7 +602,6 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
 function Sidebar({
   sessions,
   conversations,
-  spaces,
   mode,
   activeTab,
   onOpenTab,
@@ -636,7 +613,6 @@ function Sidebar({
 }: {
   sessions: SessionSummary[]
   conversations: ConversationSummary[]
-  spaces: KnowledgeSpace[]
   mode: WorkspaceMode
   activeTab: WorkTab | null
   onOpenTab: (type: TabType, refId: string, title: string) => void
@@ -807,19 +783,6 @@ function Sidebar({
           <NavButton active={activeTab?.type === 'users'} icon={Users} label="用户与权限" onClick={() => openTab('users', 'main', '用户与权限')} />
           <NavButton active={activeTab?.type === 'security'} icon={ShieldCheck} label="能力与安全" onClick={() => openTab('security', 'main', '能力与安全')} />
           <NavButton active={activeTab?.type === 'audit'} icon={ClipboardList} label="审计中心" onClick={() => openTab('audit', 'main', '审计中心')} />
-        </NavGroup>
-
-        <NavGroup title="业务空间">
-          {spaces.map((space) => (
-            <button
-              key={space.id}
-              className="flex w-full items-center justify-between rounded-md px-2.5 py-2 text-left text-sm text-zinc-700 transition hover:bg-field"
-              onClick={() => openTab('knowledgeBase', space.id, space.name)}
-            >
-              <span className="truncate">{space.name}</span>
-              <span className="ml-2 rounded bg-zinc-100 px-1.5 py-0.5 text-[11px] text-zinc-500">{space.documents}</span>
-            </button>
-          ))}
         </NavGroup>
 
       </div>
@@ -1025,6 +988,7 @@ function TabBar({ tabs, activeTabId, onActivate, onClose }: { tabs: WorkTab[]; a
 
 function TabContent({
   tab,
+  isAdmin,
   onOpenTab,
   onConversationUpdated,
   onConversationArchived,
@@ -1032,6 +996,7 @@ function TabContent({
   onTaskDeleted,
 }: {
   tab: WorkTab
+  isAdmin: boolean
   onOpenTab: (type: TabType, refId: string, title: string) => void
   onConversationUpdated: (sessionId: string, title: string) => void
   onConversationArchived: (sessionId: string) => void
@@ -1051,8 +1016,8 @@ function TabContent({
       />
     )
   }
-  if (tab.type === 'knowledgeBase') return <KnowledgeBaseView selectedRef={tab.refId} onOpenTab={onOpenTab} />
-  if (tab.type === 'document') return <DocumentView documentId={tab.refId} />
+  if (tab.type === 'knowledgeBase') return <KnowledgeBaseView isAdmin={isAdmin} onOpenTab={onOpenTab} />
+  if (tab.type === 'document') return <DocumentDetailView documentId={tab.refId} />
   if (tab.type === 'memory') return <MemoryView />
   if (tab.type === 'users') return <UsersView />
   if (tab.type === 'security') return <SecurityView />
@@ -1963,145 +1928,6 @@ function IconButton({ label, icon: Icon, onClick }: { label: string; icon: Lucid
   )
 }
 
-function KnowledgeBaseView({ selectedRef, onOpenTab }: { selectedRef: string; onOpenTab: (type: TabType, refId: string, title: string) => void }) {
-  const [selectedSpace, setSelectedSpace] = useAtom(selectedSpaceAtom)
-  const spacesQuery = useQuery({ queryKey: ['spaces'], queryFn: mockApi.listSpaces })
-  const docsQuery = useQuery({ queryKey: ['documents'], queryFn: mockApi.listDocuments })
-  const spaces = spacesQuery.data ?? []
-  const effectiveSpace = selectedRef !== 'main' ? selectedRef : selectedSpace
-  const docs = (docsQuery.data ?? []).filter((doc) => doc.spaceId === effectiveSpace)
-
-  React.useEffect(() => {
-    if (selectedRef !== 'main') setSelectedSpace(selectedRef)
-  }, [selectedRef, setSelectedSpace])
-
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <PageHeader icon={Database} title="知识库" subtitle="业务空间、文档解析、引用范围与权限覆盖" />
-      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[260px_minmax(0,1fr)]">
-        <aside className="border-r border-line bg-[#fbfbfc] p-3">
-          <div className="space-y-1">
-            {spaces.map((space) => (
-              <button
-                key={space.id}
-                className={cn('w-full rounded-md px-3 py-2 text-left text-sm transition hover:bg-field', effectiveSpace === space.id && 'bg-field')}
-                onClick={() => setSelectedSpace(space.id)}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="font-medium">{space.name}</span>
-                  <span className="text-[11px] text-zinc-500">{space.role}</span>
-                </div>
-                <div className="mt-1 text-xs text-zinc-500">{space.libraries} 个知识库 · {space.documents} 个文档</div>
-              </button>
-            ))}
-          </div>
-        </aside>
-        <section className="thin-scrollbar min-w-0 overflow-y-auto p-5">
-          <div className="mb-4 flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="text-sm font-semibold">文档列表</div>
-              <div className="text-xs text-zinc-500">默认继承空间权限，敏感文档可单独覆盖</div>
-            </div>
-            <button className="flex h-8 shrink-0 items-center gap-2 whitespace-nowrap rounded-md bg-ink px-3 text-sm text-white">
-              <Plus size={15} />
-              上传到待处理区
-            </button>
-          </div>
-          <DataTable>
-            <colgroup>
-              <col className="w-[34%]" />
-              <col className="w-[18%]" />
-              <col className="w-[10%]" />
-              <col className="w-[13%]" />
-              <col className="w-[9%]" />
-              <col className="w-[16%]" />
-            </colgroup>
-            <thead>
-              <tr>
-                <Th>文档</Th>
-                <Th>知识库</Th>
-                <Th>状态</Th>
-                <Th>权限</Th>
-                <Th>分段</Th>
-                <Th>更新</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {docs.map((doc) => (
-                <tr key={doc.id} className="border-b border-line last:border-0 hover:bg-[#fafafa]">
-                  <Td className="overflow-hidden">
-                    <button
-                      title={doc.title}
-                      className="flex w-full min-w-0 max-w-full items-center gap-2 overflow-hidden text-left font-medium hover:text-info"
-                      onClick={() => onOpenTab('document', doc.id, doc.title)}
-                    >
-                      <FileText size={15} className="shrink-0 text-zinc-400" />
-                      <span className="min-w-0 flex-1 truncate">{doc.title}</span>
-                    </button>
-                  </Td>
-                  <Td className="overflow-hidden">
-                    <span className="block truncate" title={doc.library}>{doc.library}</span>
-                  </Td>
-                  <Td><Badge className={docStatusTone(doc.status)}>{docStatusText(doc.status)}</Badge></Td>
-                  <Td>{doc.permission === 'override' ? <Badge className="bg-amber-50 text-caution">单独授权</Badge> : <Badge className="bg-zinc-100 text-zinc-600">继承</Badge>}</Td>
-                  <Td>{doc.chunks}</Td>
-                  <Td>{doc.updatedAt}</Td>
-                </tr>
-              ))}
-            </tbody>
-          </DataTable>
-        </section>
-      </div>
-    </div>
-  )
-}
-
-function DocumentView({ documentId }: { documentId: string }) {
-  const doc = documents.find((item) => item.id === documentId) ?? documents[0]
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <PageHeader icon={FileText} title={doc.title} subtitle={`${doc.library} · ${doc.owner}`} />
-      <div className="thin-scrollbar grid min-h-0 flex-1 grid-cols-1 overflow-y-auto xl:grid-cols-[minmax(0,1fr)_320px]">
-        <section className="p-6">
-          <div className="border-y border-line py-4">
-            <div className="mb-3 flex items-center justify-between">
-              <div className="text-sm font-semibold">解析摘要</div>
-              <Badge className={docStatusTone(doc.status)}>{docStatusText(doc.status)}</Badge>
-            </div>
-            <p className="max-w-3xl text-sm leading-7 text-zinc-600">
-              该文档已被切分为 {doc.chunks} 个可检索片段，包含费用构成、人员投入、阶段拆分、测算公式和风险说明。敏感文档已开启权限覆盖，Agent 只能在授权范围内引用。
-            </p>
-          </div>
-          <div className="mt-6">
-            <div className="mb-3 text-sm font-semibold">片段预览</div>
-            <div className="divide-y divide-line border-y border-line">
-              {['软件开发费用由需求分析、设计、编码、测试、交付运维五部分组成。', '人员投入按角色、级别、月投入比例进行折算。', '风险预备费建议按项目复杂度和需求稳定性分档。'].map((item, index) => (
-                <div key={item} className="grid grid-cols-[70px_minmax(0,1fr)] gap-4 py-3 text-sm">
-                  <span className="text-xs text-zinc-400">Chunk {index + 1}</span>
-                  <span className="text-zinc-700">{item}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
-        <aside className="border-t border-line bg-[#fbfbfc] p-5 xl:border-l xl:border-t-0">
-          <div className="mb-4 text-sm font-semibold">权限</div>
-          <div className="space-y-3 text-sm">
-            <InfoRow label="当前策略" value={doc.permission === 'override' ? '文档级覆盖' : '继承空间'} />
-            <InfoRow label="可读角色" value="普通成员以上" />
-            <InfoRow label="可维护角色" value="知识库贡献者" />
-            <InfoRow label="管理角色" value="知识库管理员" />
-          </div>
-          <button className="mt-5 flex h-8 items-center gap-2 rounded-md border border-line px-3 text-sm hover:bg-field">
-            <ShieldCheck size={15} />
-            权限覆盖
-          </button>
-        </aside>
-      </div>
-    </div>
-  )
-}
-
 function MemoryView() {
   const query = useQuery({ queryKey: ['memoryCandidates'], queryFn: mockApi.listMemoryCandidates })
   const [items, setItems] = React.useState<MemoryCandidate[]>([])
@@ -2295,8 +2121,13 @@ function RightPanel({ activeTab }: { activeTab: WorkTab | null }) {
     queryFn: () => api.getTask(taskId),
     enabled: Boolean(taskId),
   })
-  const docsQuery = useQuery({ queryKey: ['documents'], queryFn: mockApi.listDocuments })
-  const referencedDocs = (docsQuery.data ?? []).slice(0, 3)
+  const docsQuery = useQuery({
+    queryKey: ['knowledgeDocuments', 'ready'],
+    queryFn: () => api.listKnowledgeDocuments('ready'),
+    enabled: activeTab?.type === 'chat',
+    retry: false,
+  })
+  const referencedDocs = (docsQuery.data?.documents ?? []).slice(0, 3)
   const task = taskQuery.data
   const permissionMode = run?.permissionMode ?? task?.permission.mode ?? 'read'
   const taskStatus = run?.taskStatus ?? task?.status ?? 'draft'
@@ -2424,12 +2255,15 @@ function ChatRightPanel({ referencedDocs }: { referencedDocs: KnowledgeDocument[
 
         <PanelSection title="知识来源" icon={Database}>
           <div className="divide-y divide-line border-y border-line">
+            {referencedDocs.length === 0 && (
+              <div className="py-3 text-xs text-zinc-500">企业知识库暂无可检索文档</div>
+            )}
             {referencedDocs.map((doc) => (
               <div key={doc.id} className="py-2.5 text-sm">
                 <div className="truncate font-medium">{doc.title}</div>
                 <div className="mt-1 flex items-center justify-between text-xs text-zinc-500">
-                  <span>{doc.library}</span>
-                  <span>{doc.chunks} 个片段</span>
+                  <span className="truncate">{doc.fileName}</span>
+                  <span className="shrink-0">{doc.chunkCount} 个片段</span>
                 </div>
               </div>
             ))}
@@ -2463,61 +2297,12 @@ function StepLine({ label, done }: { label: string; done?: boolean }) {
   )
 }
 
-function PageHeader({ icon: Icon, title, subtitle }: { icon: LucideIcon; title: string; subtitle: string }) {
-  return (
-    <header className="flex h-16 items-center justify-between border-b border-line px-6">
-      <div className="flex min-w-0 items-center gap-3">
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-field text-zinc-700">
-          <Icon size={18} />
-        </div>
-        <div className="min-w-0">
-          <div className="truncate text-base font-semibold">{title}</div>
-          <div className="truncate text-xs text-zinc-500">{subtitle}</div>
-        </div>
-      </div>
-      <button className="flex h-8 items-center gap-2 rounded-md border border-line px-3 text-sm hover:bg-field">
-        <History size={15} />
-        历史
-      </button>
-    </header>
-  )
-}
-
-function DataTable({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="thin-scrollbar overflow-x-auto border-y border-line">
-      <table className="w-full min-w-[760px] table-fixed text-left text-sm">{children}</table>
-    </div>
-  )
-}
-
-function Th({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <th className={cn('border-b border-line bg-[#fafafa] px-3 py-2 text-xs font-semibold text-zinc-500', className)}>{children}</th>
-}
-
-function Td({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <td className={cn('min-w-0 px-3 py-3 align-middle text-sm text-zinc-700', className)}>{children}</td>
-}
-
-function Badge({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <span className={cn('inline-flex h-6 items-center rounded px-2 text-xs font-medium', className)}>{children}</span>
-}
-
 function PlainPanel({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="border-y border-line py-4">
       <div className="mb-3 text-sm font-semibold">{title}</div>
       <div className="space-y-3">{children}</div>
     </section>
-  )
-}
-
-function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="flex items-center justify-between gap-4 text-sm">
-      <span className="text-zinc-500">{label}</span>
-      <span className="min-w-0 truncate font-medium">{value}</span>
-    </div>
   )
 }
 

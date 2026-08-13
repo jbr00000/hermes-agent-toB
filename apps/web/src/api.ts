@@ -6,6 +6,9 @@ import type {
   ChatMessage,
   ConversationDetail,
   ConversationSummary,
+  KnowledgeChunk,
+  KnowledgeDocument,
+  KnowledgeStats,
   PermissionMode,
   SessionSummary,
   TaskPermission,
@@ -148,6 +151,34 @@ interface BackendAuditEvent {
   created_at: number
 }
 
+interface BackendKnowledgeDocument {
+  id: string
+  uploader_id: string
+  title: string
+  file_name: string
+  file_ext: string
+  size_bytes: number
+  status: KnowledgeDocument['status']
+  error: string | null
+  parser: KnowledgeDocument['parser']
+  chunk_count: number
+  retry_count: number
+  created_at: number
+  updated_at: number
+  finished_at: number | null
+}
+
+interface BackendKnowledgeChunk {
+  id: string
+  doc_id: string
+  doc_name: string
+  chunk_title: string | null
+  content: string
+  doc_pos: number
+  token_num: number
+  is_use: boolean
+}
+
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
     super(message)
@@ -185,7 +216,7 @@ async function refreshSession(): Promise<AuthUser | null> {
 async function apiFetch(path: string, init: RequestInit = {}, retry = true): Promise<Response> {
   const headers = new Headers(init.headers)
   if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`)
-  if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
+  if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers,
@@ -367,6 +398,38 @@ function toTaskSummary(row: BackendTaskSummary): SessionSummary {
     status: row.status,
     updatedAt: formatTime(row.updated_at),
     risk: row.risk_level,
+  }
+}
+
+function toKnowledgeDocument(row: BackendKnowledgeDocument): KnowledgeDocument {
+  return {
+    id: row.id,
+    title: row.title,
+    fileName: row.file_name,
+    fileExt: row.file_ext,
+    sizeBytes: row.size_bytes,
+    status: row.status,
+    error: row.error,
+    parser: row.parser,
+    chunkCount: row.chunk_count,
+    retryCount: row.retry_count,
+    uploaderId: row.uploader_id,
+    createdAt: row.created_at * 1000,
+    updatedAt: row.updated_at * 1000,
+    finishedAt: row.finished_at === null ? null : row.finished_at * 1000,
+  }
+}
+
+function toKnowledgeChunk(row: BackendKnowledgeChunk): KnowledgeChunk {
+  return {
+    id: row.id,
+    docId: row.doc_id,
+    docName: row.doc_name,
+    chunkTitle: row.chunk_title ?? '',
+    content: row.content,
+    docPos: row.doc_pos,
+    tokenNum: row.token_num,
+    isUse: row.is_use,
   }
 }
 
@@ -667,5 +730,58 @@ export const api = {
     if (!response.ok) throw await parseError(response)
     const body = await response.json() as { events: BackendAuditEvent[] }
     return body.events.map(toAuditEvent)
+  },
+
+  // ---------------------------------------------------------- 知识库（企业统一库）
+
+  async listKnowledgeDocuments(
+    status?: KnowledgeDocument['status'],
+  ): Promise<{ documents: KnowledgeDocument[]; stats: KnowledgeStats }> {
+    const query = status ? `?status=${status}` : ''
+    const response = await apiFetch(`/knowledge/documents${query}`)
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as {
+      documents: BackendKnowledgeDocument[]
+      stats: KnowledgeStats
+    }
+    return { documents: body.documents.map(toKnowledgeDocument), stats: body.stats }
+  },
+
+  async getKnowledgeDocument(docId: string): Promise<KnowledgeDocument> {
+    const response = await apiFetch(`/knowledge/documents/${encodeURIComponent(docId)}`)
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as { document: BackendKnowledgeDocument }
+    return toKnowledgeDocument(body.document)
+  },
+
+  async listKnowledgeChunks(docId: string): Promise<KnowledgeChunk[]> {
+    const response = await apiFetch(`/knowledge/documents/${encodeURIComponent(docId)}/chunks`)
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as { chunks: BackendKnowledgeChunk[] }
+    return body.chunks.map(toKnowledgeChunk)
+  },
+
+  async uploadKnowledgeDocument(file: File, title?: string): Promise<KnowledgeDocument> {
+    const form = new FormData()
+    form.append('file', file)
+    if (title?.trim()) form.append('title', title.trim())
+    const response = await apiFetch('/knowledge/documents', { method: 'POST', body: form })
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as { document: BackendKnowledgeDocument; job_id: string }
+    return toKnowledgeDocument(body.document)
+  },
+
+  async deleteKnowledgeDocument(docId: string): Promise<void> {
+    const response = await apiFetch(`/knowledge/documents/${encodeURIComponent(docId)}`, {
+      method: 'DELETE',
+    })
+    if (!response.ok) throw await parseError(response)
+  },
+
+  async retryKnowledgeDocument(docId: string): Promise<void> {
+    const response = await apiFetch(`/knowledge/documents/${encodeURIComponent(docId)}/retry`, {
+      method: 'POST',
+    })
+    if (!response.ok) throw await parseError(response)
   },
 }

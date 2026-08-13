@@ -30,6 +30,10 @@ class RuntimeStore:
         self._local_agent_meta: dict[str, dict[str, Any]] = {}
         self._local_agent_pending: deque[str] = deque()
         self._local_agent_processing: dict[str, dict[str, Any]] = {}
+        self._local_knowledge_jobs: dict[str, dict[str, Any]] = {}
+        self._local_knowledge_meta: dict[str, dict[str, Any]] = {}
+        self._local_knowledge_pending: deque[str] = deque()
+        self._local_knowledge_processing: dict[str, dict[str, Any]] = {}
         self._local_events: dict[str, list[dict[str, Any]]] = {}
         self._local_workers: dict[str, float] = {}
 
@@ -558,6 +562,298 @@ class RuntimeStore:
             }
         with self._local_guard:
             meta = self._local_agent_meta.get(request_id)
+            return dict(meta) if meta is not None else None
+
+    # ------------------------------------------------------ knowledge queue
+    # 与 agent 队列同构，Redis key 以 "knowledge" 命名空间隔离（knowledge: 前缀）。
+    # job 形如 {"job_id", "doc_id", "user_id", "queued_at"}。
+
+    def enqueue_knowledge_job(self, job: dict[str, Any]) -> bool:
+        job_id = str(job["job_id"])
+        payload_key = self._key("knowledge", "job", job_id, "payload")
+        meta_key = self._key("knowledge", "job", job_id, "meta")
+        pending_key = self._key("knowledge", "queue", "pending")
+        payload = json.dumps(job, ensure_ascii=False)
+        now = time.time()
+        if self._redis is not None:
+            script = (
+                "if redis.call('exists', KEYS[1]) == 1 then return 0 end; "
+                "redis.call('set', KEYS[1], ARGV[1]); "
+                "redis.call('hset', KEYS[2], 'state', 'queued', 'attempt', '0', "
+                "'worker_id', '', 'lease_until', '0', 'updated_at', ARGV[2]); "
+                "redis.call('lpush', KEYS[3], ARGV[3]); return 1"
+            )
+            try:
+                return bool(
+                    self._redis.eval(
+                        script, 3, payload_key, meta_key, pending_key,
+                        payload, str(now), job_id,
+                    )
+                )
+            except RedisError as exc:
+                raise RuntimeError("Redis knowledge queue is unavailable") from exc
+        with self._local_condition:
+            if job_id in self._local_knowledge_jobs:
+                return False
+            self._local_knowledge_jobs[job_id] = dict(job)
+            self._local_knowledge_meta[job_id] = {
+                "state": "queued",
+                "attempt": 0,
+                "worker_id": "",
+                "lease_until": 0.0,
+                "updated_at": now,
+            }
+            self._local_knowledge_pending.appendleft(job_id)
+            self._local_condition.notify()
+            return True
+
+    def claim_knowledge_job(
+        self,
+        worker_id: str,
+        *,
+        timeout_seconds: int = 2,
+        lease_seconds: int = 60,
+    ) -> dict[str, Any] | None:
+        pending_key = self._key("knowledge", "queue", "pending")
+        processing_key = self._key("knowledge", "queue", "processing")
+        if self._redis is not None:
+            try:
+                job_id = self._redis.brpoplpush(
+                    pending_key, processing_key, timeout=max(0, timeout_seconds)
+                )
+                if not job_id:
+                    return None
+                payload = self._redis.get(
+                    self._key("knowledge", "job", job_id, "payload")
+                )
+                if not payload:
+                    self._redis.lrem(processing_key, 0, job_id)
+                    return None
+                meta_key = self._key("knowledge", "job", job_id, "meta")
+                attempt = int(self._redis.hincrby(meta_key, "attempt", 1))
+                now = time.time()
+                self._redis.hset(
+                    meta_key,
+                    mapping={
+                        "state": "processing",
+                        "worker_id": worker_id,
+                        "lease_until": str(now + lease_seconds),
+                        "updated_at": str(now),
+                    },
+                )
+                job = json.loads(payload)
+                job["delivery_attempt"] = attempt
+                return job
+            except (RedisError, json.JSONDecodeError) as exc:
+                raise RuntimeError("Redis knowledge queue claim failed") from exc
+        deadline = time.monotonic() + max(0, timeout_seconds)
+        with self._local_condition:
+            while not self._local_knowledge_pending:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                self._local_condition.wait(remaining)
+            job_id = self._local_knowledge_pending.pop()
+            meta = self._local_knowledge_meta[job_id]
+            meta.update(
+                state="processing",
+                attempt=int(meta.get("attempt") or 0) + 1,
+                worker_id=worker_id,
+                lease_until=time.time() + lease_seconds,
+                updated_at=time.time(),
+            )
+            self._local_knowledge_processing[job_id] = dict(meta)
+            return {
+                **self._local_knowledge_jobs[job_id],
+                "delivery_attempt": meta["attempt"],
+            }
+
+    def heartbeat_knowledge_job(
+        self,
+        job_id: str,
+        worker_id: str,
+        *,
+        lease_seconds: int = 60,
+    ) -> bool | None:
+        meta_key = self._key("knowledge", "job", job_id, "meta")
+        now = time.time()
+        if self._redis is not None:
+            script = (
+                "if redis.call('hget', KEYS[1], 'state') == 'processing' and "
+                "redis.call('hget', KEYS[1], 'worker_id') == ARGV[1] then "
+                "redis.call('hset', KEYS[1], 'lease_until', ARGV[2], 'updated_at', ARGV[3]); "
+                "return 1 else return 0 end"
+            )
+            try:
+                return bool(
+                    self._redis.eval(
+                        script, 1, meta_key, worker_id,
+                        str(now + lease_seconds), str(now),
+                    )
+                )
+            except RedisError as exc:
+                logger.warning("Redis knowledge lease heartbeat failed: %s", exc)
+                return None
+        with self._local_guard:
+            meta = self._local_knowledge_processing.get(job_id)
+            if not meta or meta.get("worker_id") != worker_id:
+                return False
+            meta["lease_until"] = now + lease_seconds
+            meta["updated_at"] = now
+            self._local_knowledge_meta[job_id].update(meta)
+            return True
+
+    def finish_knowledge_job(
+        self,
+        job_id: str,
+        worker_id: str,
+        *,
+        status: str,
+        ttl_seconds: int = 86400,
+        allow_stale: bool = False,
+    ) -> bool:
+        processing_key = self._key("knowledge", "queue", "processing")
+        meta_key = self._key("knowledge", "job", job_id, "meta")
+        payload_key = self._key("knowledge", "job", job_id, "payload")
+        now = time.time()
+        if self._redis is not None:
+            script = (
+                "local state = redis.call('hget', KEYS[1], 'state'); "
+                "local owner = redis.call('hget', KEYS[1], 'worker_id') or ''; "
+                "if (state == 'processing' and owner == ARGV[1]) or "
+                "(ARGV[6] == '1' and state == 'stale') then "
+                "redis.call('lrem', KEYS[2], 0, ARGV[2]); "
+                "redis.call('hset', KEYS[1], 'state', ARGV[3], 'worker_id', ARGV[1], "
+                "'lease_until', '0', 'updated_at', ARGV[4]); "
+                "redis.call('expire', KEYS[1], ARGV[5]); "
+                "redis.call('expire', KEYS[3], ARGV[5]); return 1 else return 0 end"
+            )
+            try:
+                return bool(
+                    self._redis.eval(
+                        script, 3, meta_key, processing_key, payload_key,
+                        worker_id, job_id, status, str(now), str(ttl_seconds),
+                        "1" if allow_stale else "0",
+                    )
+                )
+            except RedisError as exc:
+                logger.warning("Redis knowledge queue acknowledgement failed: %s", exc)
+                return False
+        with self._local_condition:
+            meta = self._local_knowledge_meta.get(job_id)
+            if meta is None:
+                return False
+            owned = meta.get("state") == "processing" and meta.get("worker_id") == worker_id
+            stale = allow_stale and meta.get("state") == "stale"
+            if not (owned or stale):
+                return False
+            self._local_knowledge_processing.pop(job_id, None)
+            meta.update(state=status, worker_id=worker_id, lease_until=0.0, updated_at=now)
+            return True
+
+    def take_expired_knowledge_jobs(self, *, now: float | None = None) -> list[dict[str, Any]]:
+        cutoff = now or time.time()
+        processing_key = self._key("knowledge", "queue", "processing")
+        if self._redis is not None:
+            try:
+                job_ids = self._redis.lrange(processing_key, 0, -1)
+            except RedisError as exc:
+                raise RuntimeError("Redis knowledge recovery scan failed") from exc
+            stale: list[dict[str, Any]] = []
+            script = (
+                "local lease = tonumber(redis.call('hget', KEYS[1], 'lease_until') or '0'); "
+                "local state = redis.call('hget', KEYS[1], 'state'); "
+                "if state == 'queued' or (state == 'processing' and lease <= tonumber(ARGV[1])) then "
+                "redis.call('lrem', KEYS[2], 0, ARGV[2]); "
+                "redis.call('hset', KEYS[1], 'state', 'stale', 'worker_id', '', 'updated_at', ARGV[1]); "
+                "return 1 else return 0 end"
+            )
+            for job_id in job_ids:
+                meta_key = self._key("knowledge", "job", job_id, "meta")
+                try:
+                    claimed = self._redis.eval(
+                        script, 2, meta_key, processing_key, str(cutoff), job_id
+                    )
+                    if not claimed:
+                        continue
+                    payload = self._redis.get(
+                        self._key("knowledge", "job", job_id, "payload")
+                    )
+                    if payload:
+                        job = json.loads(payload)
+                        if isinstance(job, dict):
+                            stale.append(job)
+                except (RedisError, json.JSONDecodeError) as exc:
+                    logger.warning("Redis knowledge stale job recovery failed: %s", exc)
+            return stale
+        stale = []
+        with self._local_condition:
+            for job_id, meta in list(self._local_knowledge_processing.items()):
+                if float(meta.get("lease_until") or 0) > cutoff:
+                    continue
+                self._local_knowledge_processing.pop(job_id, None)
+                self._local_knowledge_meta[job_id].update(
+                    state="stale", worker_id="", updated_at=cutoff
+                )
+                stale.append(dict(self._local_knowledge_jobs[job_id]))
+        return stale
+
+    def requeue_knowledge_job(self, job: dict[str, Any]) -> bool:
+        job_id = str(job["job_id"])
+        pending_key = self._key("knowledge", "queue", "pending")
+        meta_key = self._key("knowledge", "job", job_id, "meta")
+        if self._redis is not None:
+            payload_key = self._key("knowledge", "job", job_id, "payload")
+            script = (
+                "if redis.call('exists', KEYS[1]) == 0 then return -1 end; "
+                "if redis.call('hget', KEYS[2], 'state') == 'queued' then return 0 end; "
+                "redis.call('hset', KEYS[2], 'state', 'queued', 'worker_id', '', "
+                "'lease_until', '0', 'updated_at', ARGV[1]); "
+                "redis.call('lpush', KEYS[3], ARGV[2]); return 1"
+            )
+            try:
+                result = int(
+                    self._redis.eval(
+                        script, 3, payload_key, meta_key, pending_key,
+                        str(time.time()), job_id,
+                    )
+                )
+                if result == -1:
+                    return self.enqueue_knowledge_job(job)
+                return result == 1
+            except RedisError as exc:
+                raise RuntimeError("Redis knowledge requeue failed") from exc
+        with self._local_condition:
+            if job_id not in self._local_knowledge_jobs:
+                self._local_knowledge_jobs[job_id] = dict(job)
+            meta = self._local_knowledge_meta.setdefault(job_id, {"attempt": 0})
+            if meta.get("state") == "queued":
+                return False
+            meta.update(
+                state="queued", worker_id="", lease_until=0.0, updated_at=time.time()
+            )
+            self._local_knowledge_pending.appendleft(job_id)
+            self._local_condition.notify()
+            return True
+
+    def knowledge_job_state(self, job_id: str) -> dict[str, Any] | None:
+        meta_key = self._key("knowledge", "job", job_id, "meta")
+        if self._redis is not None:
+            try:
+                meta = self._redis.hgetall(meta_key)
+            except RedisError as exc:
+                logger.warning("Redis knowledge job state read failed: %s", exc)
+                return {"state": "unavailable"}
+            if not meta:
+                return None
+            return {
+                **meta,
+                "attempt": int(meta.get("attempt") or 0),
+                "lease_until": float(meta.get("lease_until") or 0),
+                "updated_at": float(meta.get("updated_at") or 0),
+            }
+        with self._local_guard:
+            meta = self._local_knowledge_meta.get(job_id)
             return dict(meta) if meta is not None else None
 
     def touch_worker(self, worker_id: str, *, ttl_seconds: int = 15) -> None:

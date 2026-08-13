@@ -117,6 +117,12 @@ dependencies = [
   # without an explicit dependency here (and in the `web` extra below).
   "python-multipart>=0.0.9,<1",
   "ptyprocess>=0.7.0,<1; sys_platform != 'win32'",
+  # Enterprise knowledge base (server/knowledge/): chunk token counting,
+  # vector store client, and xlsx parsing. pymilvus stays on the 2.5 line to
+  # match the Milvus v2.5.x standalone server in the compose knowledge profile.
+  "tiktoken==0.13.0",
+  "pymilvus==2.5.18",
+  "openpyxl==3.1.5",
   "pywinpty>=2.0.0,<3; sys_platform == 'win32'",
   # Image resize recovery for the vision tools. Pillow shrinks oversized images
   # (>5 MB or >8000px) at embed time; without it the byte AND pixel-dimension

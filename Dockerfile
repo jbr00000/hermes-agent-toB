@@ -17,6 +17,14 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends docker.io ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# 知识库构建：doc/docx/ppt/pptx/xls 由 knowledge worker 用 soffice headless
+# 转 PDF 后送 MinerU 解析（见 server/knowledge/parser_client.py）。
+# 只装三个组件 + headless 依赖（约 +500MB）；版本随 base 镜像的 apt 源锁定。
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libreoffice-writer libreoffice-impress libreoffice-calc \
+    && rm -rf /var/lib/apt/lists/*
+
 # Node 24 + agent-browser（browser_* 工具的驱动；版本精确锁定，
 # 升级 = 显式改版本的交付动作）。npm 走 npmmirror 国内源。
 COPY --from=node /usr/local /usr/local

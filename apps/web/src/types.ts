@@ -167,15 +167,39 @@ export interface KnowledgeSpace {
   documents: number
 }
 
+export type KnowledgeDocumentStatus = 'pending' | 'parsing' | 'syncing' | 'ready' | 'failed'
+
+/** 对齐 server/routes/knowledge.py 的 document 序列化（企业统一知识库） */
 export interface KnowledgeDocument {
   id: string
   title: string
-  spaceId: string
-  library: string
-  status: 'ready' | 'parsing' | 'review' | 'failed'
-  permission: 'inherited' | 'override'
-  owner: string
-  updatedAt: string
+  fileName: string
+  fileExt: string
+  sizeBytes: number
+  status: KnowledgeDocumentStatus
+  error: string | null
+  parser: 'mineru' | 'local' | null
+  chunkCount: number
+  retryCount: number
+  uploaderId: string
+  createdAt: number
+  updatedAt: number
+  finishedAt: number | null
+}
+
+export interface KnowledgeChunk {
+  id: string
+  docId: string
+  docName: string
+  chunkTitle: string
+  content: string
+  docPos: number
+  tokenNum: number
+  isUse: boolean
+}
+
+export interface KnowledgeStats {
+  documents: number
   chunks: number
 }
 

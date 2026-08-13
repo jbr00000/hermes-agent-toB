@@ -285,3 +285,77 @@ class AuditEvent(Base):
     event_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[float] = mapped_column(Double, nullable=False)
+
+
+class KnowledgeDocument(Base):
+    """One uploaded file in the enterprise knowledge base.
+
+    Status machine: pending → parsing → syncing → ready / failed.
+    MySQL is the source of truth; ES/Milvus are projections rebuilt from chunks.
+    """
+
+    __tablename__ = "knowledge_documents"
+    __table_args__ = (
+        Index("idx_knowledge_docs_tenant_updated", "tenant_id", "updated_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    uploader_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    file_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    file_ext: Mapped[str] = mapped_column(String(16), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    file_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    error: Mapped[str | None] = mapped_column(Text)
+    parser: Mapped[str | None] = mapped_column(String(16))
+    chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[float] = mapped_column(Double, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Double, nullable=False)
+    finished_at: Mapped[float | None] = mapped_column(Double)
+
+
+class KnowledgeChunk(Base):
+    """One searchable chunk; id doubles as the ES/Milvus primary key."""
+
+    __tablename__ = "knowledge_chunks"
+    __table_args__ = (
+        UniqueConstraint("doc_id", "doc_pos", name="uq_knowledge_chunks_doc_pos"),
+        Index("idx_knowledge_chunks_tenant_doc", "tenant_id", "doc_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    doc_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    doc_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    chunk_title: Mapped[str | None] = mapped_column(String(512))
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    doc_pos: Mapped[int] = mapped_column(Integer, nullable=False)
+    token_num: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    is_use: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[float] = mapped_column(Double, nullable=False)
+
+
+class KnowledgeJob(Base):
+    """Durable build job for one document; consumed by the knowledge worker."""
+
+    __tablename__ = "knowledge_jobs"
+    __table_args__ = (
+        Index("idx_knowledge_jobs_tenant_doc_created", "tenant_id", "doc_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    doc_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="queued")
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    worker_id: Mapped[str | None] = mapped_column(String(128))
+    heartbeat_at: Mapped[float | None] = mapped_column(Double)
+    error: Mapped[str | None] = mapped_column(Text)
+    payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    started_at: Mapped[float | None] = mapped_column(Double)
+    finished_at: Mapped[float | None] = mapped_column(Double)
+    created_at: Mapped[float] = mapped_column(Double, nullable=False)

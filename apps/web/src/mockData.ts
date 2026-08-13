@@ -1,4 +1,4 @@
-import type { ChatMessage, ConversationSummary, KnowledgeDocument, KnowledgeSpace, MemoryCandidate, SessionSummary, UserRow } from './types'
+import type { ChatMessage, ConversationSummary, KnowledgeSpace, MemoryCandidate, SessionSummary, UserRow } from './types'
 
 export const spaces: KnowledgeSpace[] = [
   { id: 'rail', name: '轨道公司', role: 'space_admin', libraries: 4, documents: 128 },
@@ -40,13 +40,6 @@ export const messages: Record<string, ChatMessage[]> = {
     { id: 'cm-4', role: 'assistant', content: '主要约束包括天窗时间、线路占用、人员资质、工器具状态、作业冲突和应急预案。回答引用了“轨道公司”业务空间内已授权的制度文档。', createdAt: '09:27' },
   ],
 }
-
-export const documents: KnowledgeDocument[] = [
-  { id: 'd-001', title: '智库平台-软件开发费用测算V0.2.xlsx', spaceId: 'rail', library: '项目测算库', status: 'ready', permission: 'override', owner: 'alice', updatedAt: '今天 09:21', chunks: 64 },
-  { id: 'd-002', title: '轨道公司智能管控平台建设方案.docx', spaceId: 'rail', library: '项目资料库', status: 'parsing', permission: 'inherited', owner: 'bob', updatedAt: '今天 08:55', chunks: 0 },
-  { id: 'd-003', title: '软件开发人员投入基准.xlsx', spaceId: 'cost', library: '费用测算库', status: 'ready', permission: 'inherited', owner: 'carol', updatedAt: '昨天 18:02', chunks: 38 },
-  { id: 'd-004', title: '合同验收条款风险清单.pdf', spaceId: 'contract', library: '合同风险库', status: 'review', permission: 'override', owner: 'admin', updatedAt: '周五 16:12', chunks: 41 },
-]
 
 export const memoryCandidates: MemoryCandidate[] = [
   { id: 'c-01', content: '费用测算任务默认优先输出“测算口径、费用构成、风险项、待确认问题”四段。', source: '智库平台费用测算文档总结', status: 'pending' },

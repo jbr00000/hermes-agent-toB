@@ -34,6 +34,36 @@ class SandboxDeploymentConfig:
 
 
 @dataclass(frozen=True)
+class KnowledgeEmbeddingConfig:
+    """Customer-hosted OpenAI-compatible embedding endpoint (no outbound SaaS)."""
+
+    base_url: str = ""
+    model: str = ""
+    dim: int = 1024
+    api_key_env: str = "KNOWLEDGE_EMBEDDING_API_KEY"
+    batch_size: int = 32
+
+
+@dataclass(frozen=True)
+class KnowledgeDeploymentConfig:
+    """Enterprise knowledge-base construction (parse → chunk → embed → ES/Milvus).
+
+    Disabled by default: without a ``knowledge:`` section the routes 404 and no
+    worker is started. MinerU and the embedding endpoint are customer-hosted
+    services reached over the customer network; secrets stay in .env.
+    """
+
+    enabled: bool = False
+    mineru_url: str = ""
+    es_url: str = ""
+    milvus_uri: str = ""
+    embedding: KnowledgeEmbeddingConfig = field(default_factory=KnowledgeEmbeddingConfig)
+    chunk_size: int = 400
+    chunk_overlap: int = 64
+    max_file_mb: int = 100
+
+
+@dataclass(frozen=True)
 class DeploymentConfig:
     customer_id: str | None = None
     model: dict[str, Any] = field(default_factory=dict)
@@ -41,6 +71,7 @@ class DeploymentConfig:
     sandbox: SandboxDeploymentConfig = field(default_factory=SandboxDeploymentConfig)
     mcp_servers: list[dict[str, Any]] = field(default_factory=list)
     features: dict[str, bool] = field(default_factory=lambda: {"host_terminal": False})
+    knowledge: KnowledgeDeploymentConfig = field(default_factory=KnowledgeDeploymentConfig)
 
 
 def _config_path() -> Path:
@@ -89,6 +120,8 @@ def load_deployment_config(path: str | os.PathLike[str] | None = None) -> Deploy
 
     database = _as_dict(raw.get("database"))
     sandbox = _as_dict(raw.get("sandbox"))
+    knowledge = _as_dict(raw.get("knowledge"))
+    embedding = _as_dict(knowledge.get("embedding"))
     features = {"host_terminal": False}
     for key, value in _as_dict(raw.get("features")).items():
         if key in features:
@@ -117,4 +150,20 @@ def load_deployment_config(path: str | os.PathLike[str] | None = None) -> Deploy
         ),
         mcp_servers=_as_list_of_dicts(raw.get("mcp_servers")),
         features=features,
+        knowledge=KnowledgeDeploymentConfig(
+            enabled=bool(knowledge.get("enabled", False)),
+            mineru_url=str(knowledge.get("mineru_url") or ""),
+            es_url=str(knowledge.get("es_url") or ""),
+            milvus_uri=str(knowledge.get("milvus_uri") or ""),
+            embedding=KnowledgeEmbeddingConfig(
+                base_url=str(embedding.get("base_url") or ""),
+                model=str(embedding.get("model") or ""),
+                dim=_positive_int(embedding.get("dim"), 1024),
+                api_key_env=str(embedding.get("api_key_env") or "KNOWLEDGE_EMBEDDING_API_KEY"),
+                batch_size=_positive_int(embedding.get("batch_size"), 32),
+            ),
+            chunk_size=_positive_int(knowledge.get("chunk_size"), 400),
+            chunk_overlap=_positive_int(knowledge.get("chunk_overlap"), 64),
+            max_file_mb=_positive_int(knowledge.get("max_file_mb"), 100),
+        ),
     )

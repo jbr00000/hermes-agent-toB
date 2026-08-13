@@ -71,8 +71,10 @@ Key `apps/web/src/` pieces: `api.ts` (HTTP/SSE client) · `chatRunManager.tsx` /
 ```bash
 docker compose up          # builds hermes-agent-tob:dev, mounts $HERMES_HOME -> /data
 docker compose --env-file .env.compose --profile search up -d   # + SearXNG/Firecrawl web-search stack
+docker compose --env-file .env.compose --profile app --profile knowledge up -d   # + knowledge stack (ES/Milvus/worker)
 ```
 The web-search stack (`search` profile: searxng + firecrawl api/playwright/redis/nuq-postgres/rabbitmq) lives only on the `hermes-egress` network — it can reach the internet but not the business DB. Images are digest-pinned; see `docs/联网检索接入方案.md` §4 for the upgrade discipline and the pg_cron/SearXNG-secret pitfalls.
+The knowledge stack (`knowledge` profile: elasticsearch + milvus + etcd + minio + hermes-knowledge-worker) lives only on `hermes-data` with no host port mappings; `minio` is Milvus-internal object storage, NOT document storage (uploads land in `$HERMES_HOME/knowledge/files/`). See `docs/知识库构建方案.md`.
 
 ## Architecture — the pieces you must hold together
 
@@ -153,6 +155,10 @@ server/storage/         SQLAlchemy persistence: repository.py (StorageRepository
                         in-process run snapshots/locks/job queue) · migrations/ (Alembic)
 server/worker.py        background worker for durable Agent runs (+ agent_queue.py enqueue/SSE,
                         agent_execution.py run loop, sandbox.py tenant sandbox identity)
+server/knowledge/       enterprise knowledge-base build pipeline: parser_client.py (MinerU /
+                        LibreOffice / openpyxl routing) · chunker.py (tiktoken structural chunks)
+                        · pipeline.py · queue.py · worker.py · sync_service.py (MySQL source of
+                        truth → ES/Milvus idempotent delete-then-write) · es/milvus/embedder clients
 cli.py                  HermesCLI interactive orchestrator (admin/dev only)
 hermes_state.py         SessionDB — SQLite session store with FTS5 search
 hermes_constants.py     get_hermes_home(), display_hermes_home() (profile-aware paths)
@@ -174,5 +180,6 @@ compose.env.example     docker-compose env template (DB/Redis URLs + secrets)
 deploy/searxng/settings.yml  SearXNG config (json format on, CN engine set, secret placeholder)
 docs/                   改造计划.md (9 decisions) · 项目架构详解.md · API文档.md · security/ ·
                         B端前端设计方案.md · 前后端对接规划-不含知识库.md · Chat真实接入资源清单.md ·
-                        Chat前后端联调指南.md · session-lifecycle.md · 联网检索接入方案.md
+                        Chat前后端联调指南.md · session-lifecycle.md · 联网检索接入方案.md ·
+                        知识库构建方案.md
 ```
