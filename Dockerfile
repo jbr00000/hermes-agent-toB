@@ -6,6 +6,9 @@
 # CN-network friendly: base image from a domestic registry mirror + pip from
 # the Aliyun PyPI mirror. For a non-CN build, swap FROM to
 # `python:3.12-slim` and drop the `-i ...` pip flag.
+# node stage: P3 浏览器兜底需要 agent-browser CLI（Node >=24），从官方
+# node 镜像复制二进制，避免在构建期下载 node 发行包（CDN 不稳定）。
+FROM docker.m.daocloud.io/library/node:24-slim AS node
 FROM docker.m.daocloud.io/library/python:3.12-slim
 
 WORKDIR /app
@@ -13,6 +16,12 @@ WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends docker.io ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+# Node 24 + agent-browser（browser_* 工具的驱动；版本精确锁定，
+# 升级 = 显式改版本的交付动作）。npm 走 npmmirror 国内源。
+COPY --from=node /usr/local /usr/local
+RUN npm install -g agent-browser@0.34.0 --registry=https://registry.npmmirror.com \
+    && npm cache clean --force
 
 # Install the project via the Aliyun mirror. Headless server deps are declared
 # in pyproject.toml so local installs and Docker builds stay aligned.

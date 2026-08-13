@@ -79,6 +79,8 @@ def summarize_tool_args(
             normalized.encode("utf-8", errors="replace")
         ).hexdigest()[:16]
     # Web 检索属于"外部访问"，审计要求可追溯 query/URL（docs/联网检索接入方案.md §6.3）。
+    # browser_navigate 同理（P3 浏览器兜底：操作了哪个系统必须可查）；
+    # browser_type 等敏感参数维持默认——只记 keys，不落值（可能含密码）。
     if tool_name == "web_search":
         query = args.get("query")
         if isinstance(query, str) and query.strip():
@@ -89,6 +91,10 @@ def summarize_tool_args(
             summary["urls"] = [
                 _redact_url_for_audit(u) for u in urls[:10] if isinstance(u, str)
             ]
+    elif tool_name == "browser_navigate":
+        url = args.get("url")
+        if isinstance(url, str) and url.strip():
+            summary["url"] = _redact_url_for_audit(url)
     return summary
 
 

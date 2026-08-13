@@ -7,12 +7,18 @@ deployment must not be able to flip the agent into host shell execution from
 deployment.yaml/config.yaml/env alone; that would grant the agent host server
 privileges. It requires an explicit break-glass process env,
 ``HERMES_ALLOW_HOST_TERMINAL=1``, and otherwise resolves to false.
+
+``browser_automation`` (P3 兜底, docs/联网检索接入方案.md §8) enables the
+browser_* toolset for full-permission agent tasks. It does NOT need the
+break-glass env: unlike host_terminal it grants no host privilege — the
+browser runs in a dedicated container, and intranet targets are bounded by
+the ``browser.allowed_targets`` whitelist in config.yaml.
 """
 from __future__ import annotations
 
 import os
 
-_DEFAULTS = {"host_terminal": False}
+_DEFAULTS = {"host_terminal": False, "browser_automation": False}
 
 
 def _truthy(value: str | None) -> bool:

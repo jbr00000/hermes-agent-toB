@@ -141,7 +141,7 @@ interface BackendAuditEvent {
   mode: string | null
   metadata: {
     tool_name?: string
-    args?: { keys?: string[]; query?: string; urls?: string[] }
+    args?: { keys?: string[]; query?: string; url?: string; urls?: string[] }
     duration_ms?: number
   }
   error: string | null
@@ -231,7 +231,7 @@ function toAuditEvent(row: BackendAuditEvent): AuditEvent {
   const args = metadata.args ?? {}
   let subject: string
   if (toolName) {
-    const detail = args.query ?? (args.urls?.length ? args.urls.join('、') : '')
+    const detail = args.query ?? args.url ?? (args.urls?.length ? args.urls.join('、') : '')
     subject = detail ? `${toolName} · ${detail}` : toolName
   } else if (row.error) {
     subject = row.error

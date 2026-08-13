@@ -298,6 +298,48 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  # ------------------------------------------------------------------
+  # P3 浏览器兜底（docker compose --profile browser up -d）
+  # 专用无头 Chromium，hermes-server/worker 通过 CDP 连接
+  # （config.yaml: browser.cdp_url: http://172.31.0.20:9222）。
+  # 只挂 hermes-egress：可出公网、可被 server/worker 访问，
+  # 够不到 hermes-data 上的业务库。可导航目标再由
+  # config.yaml 的 browser.allowed_targets 白名单收口。
+  #
+  # 为什么用固定 IP 而不是服务名：Chromium 的 /json/* 发现接口
+  # 拒绝非 localhost/非 IP 字面量的 Host 头（反 DNS rebinding），
+  # http://browser:9222 会被拒，IP 字面量正常；返回的
+  # webSocketDebuggerUrl 回显请求 Host，同网段内容器可达。
+  # 改动子网/地址时必须同步修改 config.yaml 的 browser.cdp_url。
+  # ------------------------------------------------------------------
+  browser:
+    profiles: ["browser"]
+    image: chromedp/headless-shell:stable@sha256:2d349b544a1ea6b5b5fd7c0fe99215ff662339c57407ee2e8c0a11af93516b04
+    container_name: hermes_tob_browser
+    # 镜像入口 run.sh 已带 --no-sandbox / swiftshader / CDP :9223，
+    # 并由 socat 转发 0.0.0.0:9222 -> 127.0.0.1:9223，无需额外 command
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:noexec,nosuid,size=512m
+    ports:
+      # 仅供宿主机 dev 调试（本机 python -m server 场景）：
+      # config.yaml 写 browser.cdp_url: http://127.0.0.1:19222
+      - "127.0.0.1:${BROWSER_CDP_PORT:-19222}:9222"
+    networks:
+      hermes-egress:
+        ipv4_address: 172.31.0.20
+    healthcheck:
+      # 镜像无 curl/wget；用 bash /dev/tcp 探测 CDP 端口可连即可
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/9223'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
 networks:
   hermes-data:
     name: hermes_tob_data
@@ -305,6 +347,13 @@ networks:
   hermes-egress:
     name: hermes_tob_egress
     driver: bridge
+    # browser 服务需要固定 IP（见上），故显式声明子网。
+    # 已有部署首次应用需重建该网络（上面只有无状态的 search/browser 组件）：
+    #   docker compose --profile search --profile browser down
+    #   docker network rm hermes_tob_egress && docker compose ... up -d
+    ipam:
+      config:
+        - subnet: 172.31.0.0/24
   hermes-sandbox-control:
     name: hermes_tob_sandbox_control
     driver: bridge

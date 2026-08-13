@@ -61,6 +61,8 @@ import sys
 import tempfile
 import threading
 import time
+import ipaddress
+import urllib.parse
 import requests
 from typing import Dict, Any, Optional, List, Tuple, Union
 from pathlib import Path
@@ -1363,6 +1365,77 @@ def _allow_private_urls() -> bool:
     except Exception as e:
         logger.debug("Could not read allow_private_urls from config: %s", e)
     return _cached_allow_private_urls
+
+
+_allowed_targets_resolved = False
+_cached_allowed_targets: tuple = ()
+
+
+def _get_allowed_targets() -> tuple:
+    """Return the ``browser.allowed_targets`` whitelist (cached for the process).
+
+    P3 浏览器兜底 (docs/联网检索接入方案.md §8): browser automation exists to
+    *operate* customer systems, which are typically intranet — exactly the
+    addresses the SSRF guard blocks. This whitelist names the specific
+    hosts/networks the agent may navigate to despite being private/internal.
+    It does NOT lift the cloud-metadata floor (169.254.169.254 & friends stay
+    blocked) and does NOT affect web_extract or any other tool.
+
+    Entry forms: exact host (``oa.example.com`` / ``10.0.1.5``), domain
+    suffix (``.internal.corp`` — also matches the bare domain), or CIDR
+    (``10.0.1.0/24``, matches IP-literal hosts).
+    """
+    global _allowed_targets_resolved, _cached_allowed_targets
+    if _allowed_targets_resolved:
+        return _cached_allowed_targets
+    _allowed_targets_resolved = True
+    _cached_allowed_targets = ()
+    try:
+        from hermes_cli.config import read_raw_config
+        cfg = read_raw_config()
+        browser_cfg = cfg.get("browser", {})
+        if isinstance(browser_cfg, dict):
+            raw = browser_cfg.get("allowed_targets")
+            if isinstance(raw, list):
+                _cached_allowed_targets = tuple(
+                    str(entry).strip().lower()
+                    for entry in raw
+                    if str(entry).strip()
+                )
+    except Exception as e:
+        logger.debug("Could not read browser.allowed_targets from config: %s", e)
+    return _cached_allowed_targets
+
+
+def _allowed_browser_target(url: str) -> bool:
+    """Return True when *url*'s host is named by browser.allowed_targets."""
+    targets = _get_allowed_targets()
+    if not targets:
+        return False
+    try:
+        host = (urllib.parse.urlsplit(url).hostname or "").lower().rstrip(".")
+    except ValueError:
+        return False
+    if not host:
+        return False
+    try:
+        host_ip = ipaddress.ip_address(host)
+    except ValueError:
+        host_ip = None
+    for entry in targets:
+        if "/" in entry:
+            if host_ip is not None:
+                try:
+                    if host_ip in ipaddress.ip_network(entry, strict=False):
+                        return True
+                except ValueError:
+                    continue
+        elif entry.startswith("."):
+            if host.endswith(entry) or host == entry[1:]:
+                return True
+        elif host == entry:
+            return True
+    return False
 
 
 def _socket_safe_tmpdir() -> str:
@@ -2767,11 +2840,14 @@ def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
         not _is_local_backend()
         and not auto_local_this_nav
         and not _allow_private_urls()
+        and not _allowed_browser_target(url)
         and not _is_safe_url(url)
     ):
         return json.dumps({
             "success": False,
-            "error": "Blocked: URL targets a private or internal address",
+            "error": "Blocked: URL targets a private or internal address. "
+                     "If operating this intranet system is intentional, add its host "
+                     "to browser.allowed_targets in config.yaml.",
         })
 
     # Website policy check — block before navigating
@@ -2843,7 +2919,9 @@ def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
             not _is_local_backend()
             and not auto_local_this_nav
             and not _allow_private_urls()
-            and final_url and final_url != url and not _is_safe_url(final_url)
+            and final_url and final_url != url
+            and not _allowed_browser_target(final_url)
+            and not _is_safe_url(final_url)
         ):
             # Navigate away to a blank page to prevent snapshot leaks
             _run_browser_command(nav_session_key, "open", ["about:blank"], timeout=10)
@@ -2970,7 +3048,11 @@ def browser_snapshot(
                         _url_result.get("data", {}).get("result", "")
                         .strip().strip('"').strip("'")
                     )
-                    if _current_url and not _is_safe_url(_current_url):
+                    if (
+                        _current_url
+                        and not _allowed_browser_target(_current_url)
+                        and not _is_safe_url(_current_url)
+                    ):
                         return json.dumps({
                             "success": False,
                             "error": (
@@ -3379,7 +3461,9 @@ def _expression_targets_private_url(expression: str) -> Optional[str]:
         return None
     for match in _JS_URL_LITERAL_RE.findall(expression):
         candidate = match.rstrip(".,;")
-        if _is_always_blocked_url(candidate) or not _is_safe_url(candidate):
+        if _is_always_blocked_url(candidate) or (
+            not _allowed_browser_target(candidate) and not _is_safe_url(candidate)
+        ):
             return candidate
     return None
 
@@ -3404,7 +3488,11 @@ def _current_page_private_url(effective_task_id: str) -> Optional[str]:
                 .strip().strip('"').strip("'")
             )
             if current_url and (
-                _is_always_blocked_url(current_url) or not _is_safe_url(current_url)
+                _is_always_blocked_url(current_url)
+                or (
+                    not _allowed_browser_target(current_url)
+                    and not _is_safe_url(current_url)
+                )
             ):
                 return current_url
     except Exception as exc:
@@ -3938,7 +4026,11 @@ def browser_vision(question: str, annotate: bool = False, task_id: Optional[str]
                     _url_result.get("data", {}).get("result", "")
                     .strip().strip('"').strip("'")
                 )
-                if _current_url and not _is_safe_url(_current_url):
+                if (
+                    _current_url
+                    and not _allowed_browser_target(_current_url)
+                    and not _is_safe_url(_current_url)
+                ):
                     return json.dumps({
                         "success": False,
                         "error": (

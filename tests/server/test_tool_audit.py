@@ -121,6 +121,24 @@ def test_summarize_tool_args_records_web_query_and_redacted_urls() -> None:
     assert "query" not in other
 
 
+def test_summarize_tool_args_browser_navigate_records_url_but_type_stays_keys_only() -> None:
+    from server.audit import summarize_tool_args
+
+    # browser_navigate 的 URL 必须留痕（操作了哪个系统），凭证参数脱敏
+    nav = summarize_tool_args(
+        {"url": "http://oa.internal.corp/leave?token=abc123"}, "browser_navigate"
+    )
+    assert nav["url"] == "http://oa.internal.corp/leave?token=***"
+    assert "abc123" not in json.dumps(nav, ensure_ascii=False)
+
+    # browser_type 可能输入密码——维持默认只记 keys，不落值
+    typed = summarize_tool_args(
+        {"ref": "@e5", "text": "my-password-123"}, "browser_type"
+    )
+    assert typed == {"keys": ["ref", "text"]}
+    assert "my-password-123" not in json.dumps(typed, ensure_ascii=False)
+
+
 def test_observer_marks_security_blocks_as_blocked() -> None:
     from model_tools import _tool_result_observer_fields
 
