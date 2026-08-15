@@ -29,6 +29,11 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(128), nullable=False)
     role: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+    # Per-user feature flags (agent/chat/knowledge/memory); NULL = all enabled.
+    features: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    # True after account creation / admin password reset — the user must pick a
+    # new password before the workbench unlocks.
+    must_change_password: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[float] = mapped_column(Double, nullable=False)
     updated_at: Mapped[float] = mapped_column(Double, nullable=False)
 
@@ -192,6 +197,32 @@ class PermissionLease(Base):
     created_at: Mapped[float] = mapped_column(Double, nullable=False)
     expires_at: Mapped[float] = mapped_column(Double, nullable=False)
     revoked_at: Mapped[float | None] = mapped_column(Double)
+
+
+class ToolApproval(Base):
+    """controlled 权限档的运行中途审批：一条 terminal/process 命令一行。
+
+    Status machine: pending → approved | denied | expired（超时/取消/运行结束）。
+    command_preview 仅任务属主可见（可能含路径等敏感信息）；审计只落指纹。
+    """
+
+    __tablename__ = "tool_approvals"
+    __table_args__ = (
+        Index("idx_tool_approvals_task_status", "tenant_id", "task_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    task_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    run_request_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    tool_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    command_preview: Mapped[str] = mapped_column(String(512), nullable=False)
+    args_fingerprint: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    decided_by: Mapped[str | None] = mapped_column(String(36))
+    created_at: Mapped[float] = mapped_column(Double, nullable=False)
+    decided_at: Mapped[float | None] = mapped_column(Double)
 
 
 class ToolEvent(Base):

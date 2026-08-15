@@ -84,6 +84,19 @@ class KnowledgeDeploymentConfig:
     max_file_mb: int = 100
 
 
+@dataclass(frozen=True)
+class DataPermissionsConfig:
+    """Table-level data permissions for db_query, keyed by role.
+
+    ``roles`` maps a role name (e.g. ``"user"``) to the whitelist of table
+    names that role may touch (lowercased at load; entries may carry a
+    ``db.table`` qualifier). A role absent from the map is unrestricted.
+    Disabled by default: without a ``data_permissions:`` section every role
+    keeps full read access to the business DB.
+    """
+
+    enabled: bool = False
+    roles: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -95,6 +108,7 @@ class DeploymentConfig:
     mcp_servers: list[dict[str, Any]] = field(default_factory=list)
     features: dict[str, bool] = field(default_factory=lambda: {"host_terminal": False})
     knowledge: KnowledgeDeploymentConfig = field(default_factory=KnowledgeDeploymentConfig)
+    data_permissions: DataPermissionsConfig = field(default_factory=DataPermissionsConfig)
 
 
 def _config_path() -> Path:
@@ -140,6 +154,15 @@ def _chunk_mode(value: Any) -> str:
     return mode if mode in ("structural", "semantic") else "structural"
 
 
+def _data_permission_roles(value: Any) -> dict[str, list[str]]:
+    """{role: [table, ...]}；表名统一小写，非字符串项丢弃。"""
+    roles: dict[str, list[str]] = {}
+    for role, tables in _as_dict(value).items():
+        if not isinstance(tables, list):
+            continue
+        normalized = [str(table).strip().lower() for table in tables if str(table).strip()]
+        roles[str(role).strip().lower()] = normalized
+    return roles
 
 
 def _unit_float(value: Any, default: float) -> float:
@@ -165,6 +188,7 @@ def load_deployment_config(path: str | os.PathLike[str] | None = None) -> Deploy
     database = _as_dict(raw.get("database"))
     sandbox = _as_dict(raw.get("sandbox"))
     knowledge = _as_dict(raw.get("knowledge"))
+    data_permissions = _as_dict(raw.get("data_permissions"))
     embedding = _as_dict(knowledge.get("embedding"))
     semantic = _as_dict(knowledge.get("semantic"))
     features = {"host_terminal": False}
@@ -226,5 +250,9 @@ def load_deployment_config(path: str | os.PathLike[str] | None = None) -> Deploy
             chunk_overlap=_positive_int(knowledge.get("chunk_overlap"), 64),
             min_chunk_tokens=_positive_int(knowledge.get("min_chunk_tokens"), 50),
             max_file_mb=_positive_int(knowledge.get("max_file_mb"), 100),
+        ),
+        data_permissions=DataPermissionsConfig(
+            enabled=bool(data_permissions.get("enabled", False)),
+            roles=_data_permission_roles(data_permissions.get("roles")),
         ),
     )

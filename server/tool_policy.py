@@ -27,6 +27,10 @@ def resolve_toolsets(
     reachable (no BROWSER_CDP_URL / browser.cdp_url and no local
     agent-browser), check_fn hides the tools — adding "browser" here is a
     no-op in that case.
+
+    "controlled" 受控写入：agent 拿到 terminal 工具集，但每条 terminal/process
+    命令在执行前都要经 server.tool_gate 的 pre_tool_call 钩子等待用户在
+    Web 上批准（运行中途 human-in-the-loop）。browser 仍属 full 专属。
     """
     normalized_mode = (mode or "execute").strip().lower()
     if normalized_mode in {"chat", "plan"}:
@@ -36,4 +40,6 @@ def resolve_toolsets(
         if (features or {}).get("browser_automation"):
             toolsets.append("browser")
         return toolsets
+    if permission_mode == "controlled":
+        return ["db", "terminal", "web"]
     return ["db", "web"]

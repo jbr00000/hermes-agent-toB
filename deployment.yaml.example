@@ -58,3 +58,15 @@ knowledge:
   #   min_sentences_per_chunk: 1    # 两个切点的最小句距
   #   min_characters_per_sentence: 24
   max_file_mb: 100
+
+# 表级数据权限（db_query）：按角色配置可查询的业务表白名单。
+# 未列出的角色不限制；列出的角色只能查白名单内的表（大小写不敏感，
+# 支持 db.table 限定名）；越权 SQL 会被拦截并记入审计（只留指纹）。
+# 注意边界：full 权限用户的沙盒代码与 db_query 共用只读凭证，理论上可绕过；
+# chat/plan（db+web 工具集）路径是密封的。
+data_permissions:
+  enabled: false
+  roles:
+    user:
+      - orders
+      - customers

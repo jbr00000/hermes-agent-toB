@@ -4,7 +4,6 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle,
   Archive,
-  Bot,
   Brain,
   Cat,
   Check,
@@ -35,6 +34,7 @@ import {
   Search,
   Send,
   ShieldCheck,
+  SquareTerminal,
   Table2,
   Trash2,
   UserCog,
@@ -43,7 +43,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { db } from './db'
-import { api, ApiError } from './api'
+import { api, ApiError, setCurrentUserUpdater } from './api'
 import {
   isAgentRunActive,
   mergeAgentMessages,
@@ -66,6 +66,8 @@ import { Badge, DataTable, formatBytes, InfoRow, PageHeader, Td, Th } from './co
 import { KnowledgeBaseView } from './components/knowledge/KnowledgeBaseView'
 import { KnowledgeBaseListView } from './components/knowledge/KnowledgeBaseListView'
 import { DocumentDetailView } from './components/knowledge/DocumentDetailView'
+import { UserAdminView } from './components/users/UserAdminView'
+import LoginBackdrop from './components/LoginBackdrop'
 import {
   activeTabIdAtom,
   attachedFilesAtom,
@@ -90,8 +92,8 @@ import type {
   SessionSummary,
   TabType,
   TaskPlan,
+  ToolApproval,
   ToolEvent,
-  UserRow,
   WorkspaceMode,
   WorkTab,
 } from './types'
@@ -103,10 +105,35 @@ function cn(...classes: Array<string | false | null | undefined>): string {
   return classes.filter(Boolean).join(' ')
 }
 
-function typeIcon(type: TabType): LucideIcon {
+type AppIcon = React.ComponentType<{ size?: number | string; className?: string }>
+
+// Agent 模式专属图标：虚线航迹 + 纸飞机——"把任务派出去"，与纸面风格统一。
+// 笔画参数对齐 lucide（24 视窗 / round caps / currentColor），可与 lucide 图标互换使用。
+function AgentMark({ size = 24, className }: { size?: number | string; className?: string }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.9}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M3.5 20.5c2.8-.8 5.3-3.3 6.6-6.9" strokeDasharray="0.1 3.1" />
+      <path d="M21 3 15.3 14.5 12.9 11.1 9.5 8.7 21 3z" />
+      <path d="M21 3 12.9 11.1" />
+    </svg>
+  )
+}
+
+function typeIcon(type: TabType): AppIcon {
   switch (type) {
     case 'agent':
-      return Bot
+      return AgentMark
     case 'chat':
       return MessageSquareText
     case 'knowledgeBase':
@@ -173,8 +200,17 @@ export default function App(): React.ReactElement {
       .finally(() => setRestoring(false))
   }, [])
 
+  // 403 自愈：任何请求被权限拦截时，api 层后台重拉 /auth/me 并回调这里刷新用户。
+  React.useEffect(() => {
+    setCurrentUserUpdater(setUser)
+    return () => setCurrentUserUpdater(null)
+  }, [])
+
   if (restoring) return <AppLoading />
   if (!user) return <LoginView onLogin={setUser} />
+  if (user.mustChangePassword) {
+    return <ForcePasswordChangeView username={user.username} onChanged={setUser} />
+  }
   return (
     <WorkspaceApp
       user={user}
@@ -206,6 +242,7 @@ function AppLoading(): React.ReactElement {
 function LoginView({ onLogin }: { onLogin: (user: AuthUser) => void }): React.ReactElement {
   const [username, setUsername] = React.useState('admin')
   const [password, setPassword] = React.useState('')
+  const [remember, setRemember] = React.useState(false)
   const [submitting, setSubmitting] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
 
@@ -215,7 +252,7 @@ function LoginView({ onLogin }: { onLogin: (user: AuthUser) => void }): React.Re
     setSubmitting(true)
     setError(null)
     try {
-      onLogin(await api.login(username.trim(), password))
+      onLogin(await api.login(username.trim(), password, remember))
     } catch (loginError) {
       setError(loginError instanceof Error ? loginError.message : '登录失败')
     } finally {
@@ -224,18 +261,20 @@ function LoginView({ onLogin }: { onLogin: (user: AuthUser) => void }): React.Re
   }
 
   return (
-    <div className="min-h-[100dvh] overflow-y-auto bg-shell px-4 py-8 text-ink sm:px-6">
-      <div className="mx-auto flex min-h-[calc(100dvh-4rem)] w-full max-w-[400px] flex-col justify-center">
+    <div className="relative min-h-[100dvh] overflow-hidden bg-shell text-ink">
+      <LoginBackdrop />
+      <div className="relative z-10 min-h-[100dvh] overflow-y-auto px-4 py-8 sm:px-6">
+        <div className="mx-auto flex min-h-[calc(100dvh-4rem)] w-full max-w-[400px] flex-col justify-center">
         <div className="mb-5 flex items-center gap-3 px-1">
           <div className="flex h-10 w-10 items-center justify-center rounded-md bg-[#237a57] text-white shadow-sm">
             <img src={CORTEX_MARK_URL} alt="" className="h-8 w-8" />
           </div>
           <div>
-            <div className="text-lg font-semibold">Cortex Agent</div>
-            <div className="text-xs text-zinc-500">企业智能体工作台</div>
+            <div className="text-lg font-semibold text-white">Cortex Agent</div>
+            <div className="text-xs text-zinc-400">企业智能体工作台</div>
           </div>
         </div>
-        <form className="rounded-md border border-line bg-panel p-5 shadow-sm sm:p-7" onSubmit={submit}>
+        <form className="rounded-md border border-white/80 bg-panel/95 p-5 shadow-[0_18px_50px_rgba(0,0,0,0.45)] backdrop-blur-[2px] sm:p-7" onSubmit={submit}>
           <div className="mb-5">
             <div className="text-base font-semibold">登录</div>
             <div className="mt-1 text-sm text-zinc-500">使用企业账号进入工作台</div>
@@ -259,6 +298,15 @@ function LoginView({ onLogin }: { onLogin: (user: AuthUser) => void }): React.Re
               className="h-10 w-full rounded-md border border-line bg-panel px-3 text-sm outline-none transition focus:border-zinc-500 focus:ring-2 focus:ring-zinc-200"
             />
           </label>
+          <label className="mt-3 flex items-center gap-2 text-sm text-zinc-700">
+            <input
+              type="checkbox"
+              checked={remember}
+              onChange={(event) => setRemember(event.target.checked)}
+              className="h-4 w-4 accent-[#3d735a]"
+            />
+            保持登录（30 天内免登录）
+          </label>
           {error && <div className="mt-4 bg-red-50 px-3 py-2 text-sm text-danger" role="alert">{error}</div>}
           <button
             type="submit"
@@ -269,6 +317,107 @@ function LoginView({ onLogin }: { onLogin: (user: AuthUser) => void }): React.Re
             {submitting ? '正在登录' : '登录'}
           </button>
         </form>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ForcePasswordChangeView({
+  username,
+  onChanged,
+}: {
+  username: string
+  onChanged: (user: AuthUser) => void
+}): React.ReactElement {
+  const [oldPassword, setOldPassword] = React.useState('')
+  const [newPassword, setNewPassword] = React.useState('')
+  const [confirmPassword, setConfirmPassword] = React.useState('')
+  const [submitting, setSubmitting] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!oldPassword || !newPassword) return
+    if (newPassword !== confirmPassword) {
+      setError('两次输入的新密码不一致')
+      return
+    }
+    setSubmitting(true)
+    setError(null)
+    try {
+      onChanged(await api.changePassword(oldPassword, newPassword))
+    } catch (changeError) {
+      setError(changeError instanceof Error ? changeError.message : '修改密码失败')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const inputClass = 'h-10 w-full rounded-md border border-line bg-panel px-3 text-sm outline-none transition focus:border-zinc-500 focus:ring-2 focus:ring-zinc-200'
+
+  return (
+    <div className="relative min-h-[100dvh] overflow-hidden bg-shell text-ink">
+      <LoginBackdrop />
+      <div className="relative z-10 min-h-[100dvh] overflow-y-auto px-4 py-8 sm:px-6">
+        <div className="mx-auto flex min-h-[calc(100dvh-4rem)] w-full max-w-[400px] flex-col justify-center">
+        <div className="mb-5 flex items-center gap-3 px-1">
+          <div className="flex h-10 w-10 items-center justify-center rounded-md bg-[#237a57] text-white shadow-sm">
+            <img src={CORTEX_MARK_URL} alt="" className="h-8 w-8" />
+          </div>
+          <div>
+            <div className="text-lg font-semibold text-white">Cortex Agent</div>
+            <div className="text-xs text-zinc-400">企业智能体工作台</div>
+          </div>
+        </div>
+        <form className="rounded-md border border-white/80 bg-panel/95 p-5 shadow-[0_18px_50px_rgba(0,0,0,0.45)] backdrop-blur-[2px] sm:p-7" onSubmit={submit}>
+          <div className="mb-5">
+            <div className="text-base font-semibold">设置新密码</div>
+            <div className="mt-1 text-sm text-zinc-500">
+              账号 {username} 使用的是初始密码，请先设置新密码（至少 8 位）
+            </div>
+          </div>
+          <label className="mb-4 block">
+            <span className="mb-1.5 block text-xs font-medium text-zinc-600">当前密码</span>
+            <input
+              type="password"
+              autoComplete="current-password"
+              value={oldPassword}
+              onChange={(event) => setOldPassword(event.target.value)}
+              className={inputClass}
+            />
+          </label>
+          <label className="mb-4 block">
+            <span className="mb-1.5 block text-xs font-medium text-zinc-600">新密码</span>
+            <input
+              type="password"
+              autoComplete="new-password"
+              value={newPassword}
+              onChange={(event) => setNewPassword(event.target.value)}
+              className={inputClass}
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1.5 block text-xs font-medium text-zinc-600">确认新密码</span>
+            <input
+              type="password"
+              autoComplete="new-password"
+              value={confirmPassword}
+              onChange={(event) => setConfirmPassword(event.target.value)}
+              className={inputClass}
+            />
+          </label>
+          {error && <div className="mt-4 bg-red-50 px-3 py-2 text-sm text-danger" role="alert">{error}</div>}
+          <button
+            type="submit"
+            disabled={submitting || !oldPassword || !newPassword || !confirmPassword}
+            className="mt-5 flex h-10 w-full items-center justify-center gap-2 rounded-md bg-ink text-sm font-medium text-white transition active:scale-[0.98] disabled:bg-zinc-300 disabled:active:scale-100"
+          >
+            <LockKeyhole size={15} />
+            {submitting ? '正在提交' : '确认修改'}
+          </button>
+        </form>
+        </div>
       </div>
     </div>
   )
@@ -290,6 +439,13 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
   const sessionsQuery = useQuery({ queryKey: ['tasks'], queryFn: api.listTasks })
   const conversationsQuery = useQuery({ queryKey: ['conversations'], queryFn: api.listConversations })
   const spacesQuery = useQuery({ queryKey: ['spaces'], queryFn: mockApi.listSpaces })
+
+  // 当前工作模式对应的功能被管理员关闭时，自动切到仍可用的模式
+  React.useEffect(() => {
+    if (user.features[workspaceMode]) return
+    const fallback: WorkspaceMode | null = user.features.agent ? 'agent' : user.features.chat ? 'chat' : null
+    if (fallback) setWorkspaceMode(fallback)
+  }, [setWorkspaceMode, user.features, workspaceMode])
 
   React.useEffect(() => {
     if (restoredRef.current) return
@@ -547,6 +703,7 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
     <div className="h-[100dvh] overflow-hidden bg-shell text-ink">
       <div className="grid h-full grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)]">
         <Sidebar
+          user={user}
           sessions={sessionsQuery.data ?? []}
           conversations={conversationsQuery.data ?? []}
           mode={workspaceMode}
@@ -571,7 +728,7 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
               {activeTab ? (
                 <TabContent
                   tab={activeTab}
-                  isAdmin={user.role === 'admin'}
+                  user={user}
                   onOpenTab={openTab}
                   onConversationUpdated={updateConversationTab}
                   onConversationArchived={(sessionId) => closeTab(tabId(user.id, 'chat', sessionId))}
@@ -580,7 +737,8 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
                 />
               ) : (
                 <EmptyWorkspace onNewTask={() => {
-                  createAgentTask()
+                  if (workspaceMode === 'chat') void createConversation()
+                  else void createAgentTask()
                 }} />
               )}
               <PetFloat tab={activeTab} />
@@ -590,7 +748,7 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
         </div>
       </div>
       {notice && (
-        <div className="fixed bottom-5 left-1/2 z-50 -translate-x-1/2 rounded-md border border-line bg-panel px-4 py-2 text-sm shadow-panel">
+        <div className="fixed bottom-5 left-1/2 z-50 -translate-x-1/2 rounded-md border border-line bg-panel px-4 py-2 text-sm shadow-card">
           <span>{notice}</span>
           <button className="ml-3 text-zinc-500 hover:text-ink" onClick={() => setNotice(null)}>
             关闭
@@ -602,6 +760,7 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
 }
 
 function Sidebar({
+  user,
   sessions,
   conversations,
   mode,
@@ -613,6 +772,7 @@ function Sidebar({
   mobileOpen,
   onClose,
 }: {
+  user: AuthUser
   sessions: SessionSummary[]
   conversations: ConversationSummary[]
   mode: WorkspaceMode
@@ -692,9 +852,9 @@ function Sidebar({
 
         <div className="mt-3 grid grid-cols-2 gap-1 rounded-md bg-[#edf1ee] p-1" aria-label="工作模式">
           {([
-            { value: 'agent' as const, label: 'Agent', icon: Bot, title: '任务执行' },
+            { value: 'agent' as const, label: 'Agent', icon: AgentMark, title: '任务执行' },
             { value: 'chat' as const, label: 'Chat', icon: MessageSquareText, title: '智能问答' },
-          ]).map((item) => {
+          ]).filter((item) => user.features[item.value]).map((item) => {
             const Icon = item.icon
             const active = mode === item.value
             return (
@@ -776,15 +936,25 @@ function Sidebar({
           </>
         )}
 
-        <NavGroup title="业务资源">
-          <NavButton active={activeTab?.type === 'knowledgeBase' || activeTab?.type === 'knowledgeBaseDetail' || activeTab?.type === 'document'} icon={Database} label="知识库" onClick={() => openTab('knowledgeBase', 'main', '知识库')} />
-          <NavButton active={activeTab?.type === 'memory'} icon={Brain} label="记忆中心" onClick={() => openTab('memory', 'main', '记忆中心')} />
-        </NavGroup>
+        {(user.features.knowledge || user.features.memory) && (
+          <NavGroup title="业务资源">
+            {user.features.knowledge && (
+              <NavButton active={activeTab?.type === 'knowledgeBase' || activeTab?.type === 'knowledgeBaseDetail' || activeTab?.type === 'document'} icon={Database} label="知识库" onClick={() => openTab('knowledgeBase', 'main', '知识库')} />
+            )}
+            {user.features.memory && (
+              <NavButton active={activeTab?.type === 'memory'} icon={Brain} label="记忆中心" onClick={() => openTab('memory', 'main', '记忆中心')} />
+            )}
+          </NavGroup>
+        )}
 
         <NavGroup title="系统管理">
-          <NavButton active={activeTab?.type === 'users'} icon={Users} label="用户与权限" onClick={() => openTab('users', 'main', '用户与权限')} />
+          {user.role === 'superadmin' && (
+            <NavButton active={activeTab?.type === 'users'} icon={Users} label="用户与权限" onClick={() => openTab('users', 'main', '用户与权限')} />
+          )}
           <NavButton active={activeTab?.type === 'security'} icon={ShieldCheck} label="能力与安全" onClick={() => openTab('security', 'main', '能力与安全')} />
-          <NavButton active={activeTab?.type === 'audit'} icon={ClipboardList} label="审计中心" onClick={() => openTab('audit', 'main', '审计中心')} />
+          {(user.role === 'admin' || user.role === 'superadmin') && (
+            <NavButton active={activeTab?.type === 'audit'} icon={ClipboardList} label="审计中心" onClick={() => openTab('audit', 'main', '审计中心')} />
+          )}
         </NavGroup>
 
       </div>
@@ -990,7 +1160,7 @@ function TabBar({ tabs, activeTabId, onActivate, onClose }: { tabs: WorkTab[]; a
 
 function TabContent({
   tab,
-  isAdmin,
+  user,
   onOpenTab,
   onConversationUpdated,
   onConversationArchived,
@@ -998,15 +1168,20 @@ function TabContent({
   onTaskDeleted,
 }: {
   tab: WorkTab
-  isAdmin: boolean
+  user: AuthUser
   onOpenTab: (type: TabType, refId: string, title: string) => void
   onConversationUpdated: (sessionId: string, title: string) => void
   onConversationArchived: (sessionId: string) => void
   onCreateAgentTask: (title?: string) => void
   onTaskDeleted: (taskId: string) => void
 }) {
-  if (tab.type === 'agent') return <AgentView taskId={tab.refId} title={tab.title} onDeleted={onTaskDeleted} />
+  const isAdmin = user.role === 'admin' || user.role === 'superadmin'
+  if (tab.type === 'agent') {
+    if (!user.features.agent) return <NoAccess feature="Agent 任务" />
+    return <AgentView key={tab.refId} taskId={tab.refId} title={tab.title} onDeleted={onTaskDeleted} />
+  }
   if (tab.type === 'chat') {
+    if (!user.features.chat) return <NoAccess feature="Chat 问数" />
     return (
       <ChatView
         key={tab.refId}
@@ -1018,14 +1193,43 @@ function TabContent({
       />
     )
   }
-  if (tab.type === 'knowledgeBase') return <KnowledgeBaseListView isAdmin={isAdmin} onOpenTab={onOpenTab} />
-  if (tab.type === 'knowledgeBaseDetail') return <KnowledgeBaseView kbId={tab.refId} isAdmin={isAdmin} onOpenTab={onOpenTab} />
-  if (tab.type === 'document') return <DocumentDetailView documentId={tab.refId} onOpenTab={onOpenTab} />
-  if (tab.type === 'memory') return <MemoryView />
-  if (tab.type === 'users') return <UsersView />
+  if (tab.type === 'knowledgeBase') {
+    if (!user.features.knowledge) return <NoAccess feature="知识库" />
+    return <KnowledgeBaseListView isAdmin={isAdmin} onOpenTab={onOpenTab} />
+  }
+  if (tab.type === 'knowledgeBaseDetail') {
+    if (!user.features.knowledge) return <NoAccess feature="知识库" />
+    return <KnowledgeBaseView kbId={tab.refId} isAdmin={isAdmin} onOpenTab={onOpenTab} />
+  }
+  if (tab.type === 'document') {
+    if (!user.features.knowledge) return <NoAccess feature="知识库" />
+    return <DocumentDetailView documentId={tab.refId} onOpenTab={onOpenTab} />
+  }
+  if (tab.type === 'memory') {
+    if (!user.features.memory) return <NoAccess feature="记忆中心" />
+    return <MemoryView />
+  }
+  if (tab.type === 'users') {
+    if (user.role !== 'superadmin') return <NoAccess feature="用户与权限" />
+    return <UserAdminView currentUser={user} />
+  }
   if (tab.type === 'security') return <SecurityView />
-  if (tab.type === 'audit') return <AuditView />
+  if (tab.type === 'audit') {
+    if (!isAdmin) return <NoAccess feature="审计中心" />
+    return <AuditView />
+  }
   return null
+}
+
+function NoAccess({ feature }: { feature: string }) {
+  return (
+    <div className="flex h-full items-center justify-center">
+      <div className="text-center">
+        <div className="text-base font-medium">无权访问{feature}</div>
+        <div className="mt-1 text-sm text-zinc-500">该功能未对你的账号开放，请联系超级管理员。</div>
+      </div>
+    </div>
+  )
 }
 
 function EmptyWorkspace({ onNewTask }: { onNewTask: () => void }) {
@@ -1277,7 +1481,7 @@ function ChatView({
           <div className="relative">
             <IconButton label="更多" icon={MoreHorizontal} onClick={() => setMenuOpen((open) => !open)} />
             {menuOpen && (
-              <div className="absolute right-0 top-10 z-20 w-40 rounded-md border border-line bg-panel p-1 shadow-panel">
+              <div className="absolute right-0 top-10 z-20 w-40 rounded-md border border-line bg-panel p-1 shadow-card">
                 <button
                   className="flex h-9 w-full items-center gap-2 rounded px-2.5 text-left text-sm hover:bg-field"
                   onClick={() => {
@@ -1393,7 +1597,7 @@ function ChatView({
           }}
         >
           <div
-            className="w-full max-w-sm rounded-md border border-line bg-panel p-5 shadow-panel"
+            className="w-full max-w-sm rounded-md border border-line bg-panel p-5 shadow-card"
             role="alertdialog"
             aria-modal="true"
             aria-labelledby="delete-conversation-title"
@@ -1465,6 +1669,10 @@ function AgentView({ taskId, title, onDeleted }: { taskId: string; title: string
     const ids = new Set(persisted.map((event) => event.id))
     return [...persisted, ...live.filter((event) => !ids.has(event.id))]
   }, [run?.toolEvents, task?.events])
+  const pendingApprovals = React.useMemo(
+    () => (run?.toolApprovals ?? []).filter((approval) => approval.status === 'pending'),
+    [run?.toolApprovals],
+  )
   const approvedPlan = task?.plan?.status === 'approved'
   const canPlan = !active && Boolean(task) && !approvedPlan && taskStatus !== 'completed'
 
@@ -1487,7 +1695,7 @@ function AgentView({ taskId, title, onDeleted }: { taskId: string; title: string
   React.useLayoutEffect(() => {
     const element = scrollRef.current
     if (element && active) element.scrollTop = element.scrollHeight
-  }, [active, messages.length, run?.assistantMessage.content, toolEvents.length])
+  }, [active, messages.length, run?.assistantMessage.content, toolEvents.length, pendingApprovals.length])
 
   const sendPlanRequest = React.useCallback(() => {
     const text = draft.trim()
@@ -1558,6 +1766,7 @@ function AgentView({ taskId, title, onDeleted }: { taskId: string; title: string
       void queryClient.invalidateQueries({ queryKey: ['tasks'] })
     } catch (error) {
       setActionError(error instanceof Error ? error.message : '删除任务失败')
+    } finally {
       setActionPending(false)
     }
   }, [active, onDeleted, queryClient, taskId])
@@ -1632,6 +1841,16 @@ function AgentView({ taskId, title, onDeleted }: { taskId: string; title: string
             messages.map((message) => <MessageBubble key={message.id} message={message} />)
           )}
           <ToolEventTimeline events={toolEvents} activeRunId={run?.requestId ?? task?.currentRunId ?? null} />
+          {pendingApprovals.length > 0 && (
+            <ToolApprovalPanel
+              approvals={pendingApprovals}
+              onDecide={(approvalId, decision) => {
+                void agentRunManager.decideApproval(taskId, approvalId, decision).catch((error) => {
+                  setActionError(error instanceof Error ? error.message : '审批操作失败')
+                })
+              }}
+            />
+          )}
           {actionError && (
             <div className="border-l-2 border-danger bg-red-50 px-3 py-2 text-sm text-danger">
               {actionError}
@@ -1889,6 +2108,51 @@ function ToolEventTimeline({ events, activeRunId }: { events: ToolEvent[]; activ
   )
 }
 
+function ToolApprovalPanel({
+  approvals,
+  onDecide,
+}: {
+  approvals: ToolApproval[]
+  onDecide: (approvalId: string, decision: 'allow' | 'deny' | 'allow_all') => void
+}) {
+  return (
+    <div className="space-y-2">
+      {approvals.map((approval) => (
+        <div key={approval.id} className="rounded-md border border-amber-300 bg-amber-50 p-3">
+          <div className="flex items-center gap-2 text-sm font-medium text-ink">
+            <SquareTerminal size={14} className="text-amber-600" />
+            <span>等待批准执行命令</span>
+            <span className="rounded bg-panel px-1.5 py-0.5 text-xs text-zinc-500">{approval.toolName}</span>
+          </div>
+          <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-all rounded-md border border-line bg-panel p-2 font-mono text-xs text-ink">
+            {approval.commandPreview || '(无命令预览)'}
+          </pre>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button
+              className="h-7 rounded-md bg-ink px-3 text-xs text-white hover:opacity-90"
+              onClick={() => onDecide(approval.id, 'allow')}
+            >
+              允许
+            </button>
+            <button
+              className="h-7 rounded-md border border-line px-3 text-xs text-danger hover:bg-red-50"
+              onClick={() => onDecide(approval.id, 'deny')}
+            >
+              拒绝
+            </button>
+            <button
+              className="h-7 rounded-md border border-line px-3 text-xs text-zinc-600 hover:bg-field"
+              onClick={() => onDecide(approval.id, 'allow_all')}
+            >
+              本次运行全部允许
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function PermissionSegment({ value, onChange, compact = false, disabled = false }: { value: PermissionMode; onChange: (mode: PermissionMode) => void; compact?: boolean; disabled?: boolean }) {
   const items: Array<{ value: PermissionMode; label: string; icon: LucideIcon }> = [
     { value: 'read', label: '只读', icon: LockKeyhole },
@@ -1975,64 +2239,6 @@ function MemoryView() {
   )
 }
 
-function UsersView() {
-  const query = useQuery({ queryKey: ['users'], queryFn: mockApi.listUsers })
-  const [users, setUsers] = React.useState<UserRow[]>([])
-
-  React.useEffect(() => {
-    setUsers(query.data ?? [])
-  }, [query.data])
-
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <PageHeader icon={Users} title="用户与权限" subtitle="系统角色、空间成员与知识库角色" />
-      <section className="thin-scrollbar min-h-0 flex-1 overflow-y-auto p-6">
-        <div className="mb-4 flex justify-end">
-          <button className="flex h-8 items-center gap-2 rounded-md bg-ink px-3 text-sm text-white">
-            <Plus size={15} />
-            创建用户
-          </button>
-        </div>
-        <DataTable>
-          <thead>
-            <tr>
-              <Th>用户</Th>
-              <Th>系统角色</Th>
-              <Th>业务空间</Th>
-              <Th>状态</Th>
-            </tr>
-          </thead>
-          <tbody>
-            {users.map((user) => (
-              <tr key={user.id} className="border-b border-line last:border-0">
-                <Td>
-                  <div className="font-medium">{user.username}</div>
-                  <div className="text-xs text-zinc-500">{user.id}</div>
-                </Td>
-                <Td>
-                  <select
-                    className="h-8 rounded-md border border-line bg-panel px-2 text-sm"
-                    value={user.role}
-                    onChange={(event) => {
-                      const role = event.target.value as UserRow['role']
-                      setUsers((current) => current.map((item) => item.id === user.id ? { ...item, role } : item))
-                    }}
-                  >
-                    <option value="admin">admin</option>
-                    <option value="user">user</option>
-                  </select>
-                </Td>
-                <Td>{user.spaces.join('、')}</Td>
-                <Td><Badge className="bg-emerald-50 text-success">启用</Badge></Td>
-              </tr>
-            ))}
-          </tbody>
-        </DataTable>
-      </section>
-    </div>
-  )
-}
-
 function SecurityView() {
   const query = useQuery({ queryKey: ['features'], queryFn: api.getFeatures })
   const features = query.data
@@ -2049,9 +2255,24 @@ function SecurityView() {
           </PlainPanel>
           <PlainPanel title="权限模式策略">
             <PolicyRow icon={LockKeyhole} title="只读模式" text="问答、检索、读取授权文件、生成计划" />
-            <PolicyRow icon={FileCheck2} title="受控写入" text="导出结果文件、个人记忆、上传待处理文档" />
+            <PolicyRow icon={FileCheck2} title="受控写入" text="终端命令需逐条经你批准后执行" />
             <PolicyRow icon={KeyRound} title="完全访问" text="共享知识库修改、数据库写入、终端命令" />
           </PlainPanel>
+          {features?.dataPermissions.enabled && (
+            <PlainPanel title="数据权限">
+              <InfoRow
+                label="可访问的表"
+                value={
+                  features.dataPermissions.allowedTables && features.dataPermissions.allowedTables.length > 0
+                    ? features.dataPermissions.allowedTables.join('、')
+                    : '无（全部禁止）'
+                }
+              />
+              <div className="mt-2 text-xs text-zinc-500">
+                当前角色只能查询以上业务表；越权 SQL 会被拦截并记入审计。
+              </div>
+            </PlainPanel>
+          )}
         </div>
         <div className="mt-6 border-y border-line py-4">
           <div className="mb-3 text-sm font-semibold">高风险操作</div>

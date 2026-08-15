@@ -8,9 +8,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from server import memory
-from server.deps import get_current_user
+from server.deps import get_current_user, require_feature
 
-router = APIRouter(prefix="/memory", tags=["memory"])
+router = APIRouter(
+    prefix="/memory",
+    tags=["memory"],
+    dependencies=[Depends(require_feature("memory"))],
+)
 
 
 class MemoryIn(BaseModel):

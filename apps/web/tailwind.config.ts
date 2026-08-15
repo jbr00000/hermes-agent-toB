@@ -19,7 +19,8 @@ export default {
         info: '#2f6f8f',
       },
       boxShadow: {
-        panel: '0 10px 28px rgba(31, 35, 40, 0.08)',
+        // 命名避开 colors 的同名键（colors.panel 会生成同名 shadowColor 规则并覆盖阴影颜色）
+        card: '0 10px 28px rgba(31, 35, 40, 0.08)',
       },
     },
   },

@@ -7,6 +7,7 @@ import type {
   AgentTaskStatus,
   ChatMessage,
   PermissionMode,
+  ToolApproval,
   ToolEvent,
 } from './types'
 
@@ -30,6 +31,7 @@ export interface AgentRunSnapshot {
   userMessage: ChatMessage | null
   assistantMessage: ChatMessage
   toolEvents: ToolEvent[]
+  toolApprovals: ToolApproval[]
   sequence: number
   startedAt: number
   updatedAt: number
@@ -44,10 +46,33 @@ interface InternalRun {
 
 type AgentApi = Pick<
   typeof api,
-  'streamTaskPlan' | 'streamTaskExecute' | 'streamTaskEvents' | 'cancelTask'
+  | 'streamTaskPlan'
+  | 'streamTaskExecute'
+  | 'streamTaskEvents'
+  | 'cancelTask'
+  | 'listToolApprovals'
+  | 'decideToolApproval'
 >
 
 const ACTIVE_STATUSES = new Set<AgentRunStatus>(['connecting', 'streaming', 'cancelling'])
+
+/** tool.approval_required 的 SSE 负载是后端的 snake_case 审批行。 */
+function approvalFromEvent(event: Record<string, unknown>): ToolApproval | null {
+  if (typeof event.id !== 'string' || typeof event.tool_name !== 'string') return null
+  const status = typeof event.status === 'string' ? event.status : 'pending'
+  return {
+    id: event.id,
+    taskId: typeof event.task_id === 'string' ? event.task_id : '',
+    runRequestId: typeof event.run_request_id === 'string' ? event.run_request_id : '',
+    toolName: event.tool_name,
+    commandPreview: typeof event.command_preview === 'string' ? event.command_preview : '',
+    status: (['pending', 'approved', 'denied', 'expired'].includes(status)
+      ? status
+      : 'pending') as ToolApproval['status'],
+    createdAt: typeof event.created_at === 'number' ? event.created_at * 1000 : Date.now(),
+    decidedAt: typeof event.decided_at === 'number' ? event.decided_at * 1000 : null,
+  }
+}
 
 export function isAgentRunActive(run: AgentRunSnapshot | null): boolean {
   return run !== null && ACTIVE_STATUSES.has(run.status)
@@ -153,6 +178,21 @@ export class AgentRunManager {
     }
   }
 
+  async decideApproval(
+    taskId: string,
+    approvalId: string,
+    decision: 'allow' | 'deny' | 'allow_all',
+  ): Promise<void> {
+    const decided = await this.agentApi.decideToolApproval(taskId, approvalId, decision)
+    this.update(taskId, (snapshot) => ({
+      ...snapshot,
+      toolApprovals: snapshot.toolApprovals.map((item) => (
+        item.id === approvalId ? { ...item, status: decided.status, decidedAt: decided.decidedAt } : item
+      )),
+      updatedAt: Date.now(),
+    }))
+  }
+
   reconcileServerState(task: AgentTaskDetail): void {
     const activeRun = task.activeRun
     const current = this.runs.get(task.id)
@@ -214,6 +254,7 @@ export class AgentRunManager {
         thinkingStartedAt: now,
       },
       toolEvents: [],
+      toolApprovals: [],
       sequence: 0,
       startedAt: now,
       updatedAt: now,
@@ -265,11 +306,28 @@ export class AgentRunManager {
         thinkingStartedAt: startedAt,
       },
       toolEvents: task.events.filter((event) => event.runId === activeRun.id),
+      toolApprovals: [],
       sequence: activeRun.sequence,
       startedAt,
       updatedAt: activeRun.snapshotUpdatedAt ?? now,
       error: null,
     })
+    // 重连时用数据库里的 pending 审批重建 ground truth（SSE 重放可能漏/重）。
+    void this.agentApi.listToolApprovals(task.id, 'pending').then((approvals) => {
+      const pending = approvals.filter((approval) => approval.runRequestId === activeRun.id)
+      if (!pending.length) return
+      this.update(task.id, (snapshot) => {
+        if (snapshot.requestId !== activeRun.id || !isAgentRunActive(snapshot)) return snapshot
+        const known = new Set(snapshot.toolApprovals.map((approval) => approval.id))
+        const fresh = pending.filter((approval) => !known.has(approval.id))
+        if (!fresh.length) return snapshot
+        return {
+          ...snapshot,
+          toolApprovals: [...snapshot.toolApprovals, ...fresh],
+          updatedAt: Date.now(),
+        }
+      })
+    }).catch(() => undefined)
     if (!this.controllers.has(activeRun.id)) {
       const controller = new AbortController()
       this.controllers.set(activeRun.id, controller)
@@ -344,6 +402,38 @@ export class AgentRunManager {
               : snapshot.permissionMode,
             updatedAt: Date.now(),
           }))
+        }
+        // 审批事件必须在 tool.* 通用分支之前处理（名字同样以 tool. 开头，
+        // 但它们不是 ToolEvent，且 SSE 重放会重复送达——按审批 id 去重）。
+        if (eventName === 'tool.approval_required') {
+          const approval = approvalFromEvent(event)
+          if (!approval) return
+          this.update(task.id, (snapshot) => {
+            if (snapshot.toolApprovals.some((item) => item.id === approval.id)) {
+              return snapshot
+            }
+            return {
+              ...snapshot,
+              toolApprovals: [...snapshot.toolApprovals, approval],
+              updatedAt: Date.now(),
+            }
+          })
+          return
+        }
+        if (eventName === 'tool.approval_resolved') {
+          const approvalId = typeof event.approval_id === 'string' ? event.approval_id : null
+          const status = typeof event.status === 'string' ? event.status : null
+          if (!approvalId || !status) return
+          this.update(task.id, (snapshot) => ({
+            ...snapshot,
+            toolApprovals: snapshot.toolApprovals.map((item) => (
+              item.id === approvalId
+                ? { ...item, status: status as ToolApproval['status'], decidedAt: Date.now() }
+                : item
+            )),
+            updatedAt: Date.now(),
+          }))
+          return
         }
         if (eventName.startsWith('tool.')) {
           this.update(task.id, (snapshot) => ({

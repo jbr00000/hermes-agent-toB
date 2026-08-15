@@ -1,5 +1,6 @@
 import type {
   ActiveModelRun,
+  AdminUserRow,
   AgentTaskDetail,
   AuditEvent,
   AuthUser,
@@ -15,18 +16,45 @@ import type {
   TaskPermission,
   TaskPlan,
   TaskRun,
+  ToolApproval,
   ToolEvent,
+  UserFeatures,
+  UserRole,
 } from './types'
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') ?? '/api'
 
 let accessToken: string | null = null
 let refreshPromise: Promise<AuthUser | null> | null = null
+let currentUserUpdater: ((user: AuthUser) => void) | null = null
+
+/** 403 自愈钩子：App 挂载时注册 setUser，后台重拉 /auth/me 后刷新前端权限视图。 */
+export function setCurrentUserUpdater(updater: ((user: AuthUser) => void) | null): void {
+  currentUserUpdater = updater
+}
+
+interface BackendAuthUser {
+  id: string
+  username: string
+  role: UserRole
+  features: UserFeatures
+  must_change_password?: boolean
+}
+
+function toAuthUser(row: BackendAuthUser): AuthUser {
+  return {
+    id: row.id,
+    username: row.username,
+    role: row.role,
+    features: row.features,
+    mustChangePassword: row.must_change_password === true,
+  }
+}
 
 interface AuthResponse {
   access_token: string
   token_type: string
-  user: AuthUser
+  user: BackendAuthUser
 }
 
 interface BackendSession {
@@ -100,6 +128,20 @@ interface BackendToolEvent {
   status: string
   payload: Record<string, unknown>
   created_at: number
+}
+
+interface BackendToolApproval {
+  id: string
+  task_id: string
+  run_request_id: string
+  user_id: string
+  tool_name: string
+  command_preview: string
+  args_fingerprint: string
+  status: ToolApproval['status']
+  decided_by: string | null
+  created_at: number
+  decided_at: number | null
 }
 
 interface BackendTask {
@@ -193,6 +235,15 @@ interface BackendKnowledgeChunk {
   is_use: boolean
 }
 
+interface BackendAdminUser {
+  id: string
+  username: string
+  role: UserRole
+  status: 'active' | 'disabled'
+  features: UserFeatures
+  created_at: number
+}
+
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
     super(message)
@@ -220,7 +271,7 @@ async function refreshSession(): Promise<AuthUser | null> {
     }
     const body = await response.json() as AuthResponse
     accessToken = body.access_token
-    return body.user
+    return toAuthUser(body.user)
   }).finally(() => {
     refreshPromise = null
   })
@@ -238,6 +289,18 @@ async function apiFetch(path: string, init: RequestInit = {}, retry = true): Pro
   })
   if (response.status === 401 && retry && await refreshSession()) {
     return apiFetch(path, init, false)
+  }
+  // 403 = 登录有效但权限被管理员收回/调整。后台重拉 /auth/me 自愈前端视图
+  // （fire-and-forget，不阻塞原请求的错误传播；retry=false 防递归）。
+  if (response.status === 403 && currentUserUpdater) {
+    const updater = currentUserUpdater
+    void apiFetch('/auth/me', {}, false)
+      .then(async (meResponse) => {
+        if (!meResponse.ok) return
+        const body = await meResponse.json() as { user: BackendAuthUser }
+        updater(toAuthUser(body.user))
+      })
+      .catch(() => undefined)
   }
   return response
 }
@@ -267,6 +330,17 @@ function toConversation(row: BackendSession): ConversationSummary {
     updatedAt: formatTime(row.updated_at),
     period: conversationPeriod(row.updated_at),
     pinned: row.pinned,
+  }
+}
+
+function toAdminUserRow(row: BackendAdminUser): AdminUserRow {
+  return {
+    id: row.id,
+    username: row.username,
+    role: row.role,
+    status: row.status,
+    features: row.features,
+    createdAt: row.created_at,
   }
 }
 
@@ -367,6 +441,19 @@ function toToolEvent(row: BackendToolEvent): ToolEvent {
     status: row.status,
     payload: row.payload,
     createdAt: row.created_at * 1000,
+  }
+}
+
+function toToolApproval(row: BackendToolApproval): ToolApproval {
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    runRequestId: row.run_request_id,
+    toolName: row.tool_name,
+    commandPreview: row.command_preview,
+    status: row.status,
+    createdAt: row.created_at * 1000,
+    decidedAt: row.decided_at === null ? null : row.decided_at * 1000,
   }
 }
 
@@ -530,20 +617,36 @@ export const api = {
     const body = await response.json() as (AuthResponse & { authenticated: true }) | { authenticated: false }
     if (!body.authenticated) return null
     accessToken = body.access_token
-    return body.user
+    return toAuthUser(body.user)
   },
 
-  async login(username: string, password: string): Promise<AuthUser> {
+  async login(username: string, password: string, remember = false): Promise<AuthUser> {
     const response = await fetch(`${API_BASE}/auth/login`, {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, remember }),
     })
     if (!response.ok) throw await parseError(response)
     const body = await response.json() as AuthResponse
     accessToken = body.access_token
-    return body.user
+    return toAuthUser(body.user)
+  },
+
+  async changePassword(oldPassword: string, newPassword: string): Promise<AuthUser> {
+    const response = await fetch(`${API_BASE}/auth/change-password`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      },
+      body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
+    })
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as AuthResponse
+    accessToken = body.access_token
+    return toAuthUser(body.user)
   },
 
   async logout(): Promise<void> {
@@ -713,6 +816,30 @@ export const api = {
     if (!response.ok) throw await parseError(response)
   },
 
+  async listToolApprovals(taskId: string, status?: ToolApproval['status']): Promise<ToolApproval[]> {
+    const query = status ? `?status=${status}` : ''
+    const response = await apiFetch(
+      `/tasks/${encodeURIComponent(taskId)}/tool-approvals${query}`,
+    )
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as { approvals: BackendToolApproval[] }
+    return body.approvals.map(toToolApproval)
+  },
+
+  async decideToolApproval(
+    taskId: string,
+    approvalId: string,
+    decision: 'allow' | 'deny' | 'allow_all',
+  ): Promise<ToolApproval> {
+    const response = await apiFetch(
+      `/tasks/${encodeURIComponent(taskId)}/tool-approvals/${encodeURIComponent(approvalId)}`,
+      { method: 'POST', body: JSON.stringify({ decision }) },
+    )
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as { approval: BackendToolApproval }
+    return toToolApproval(body.approval)
+  },
+
   async streamChat(
     sessionId: string,
     requestId: string,
@@ -744,12 +871,19 @@ export const api = {
   async getFeatures() {
     const response = await apiFetch('/features')
     if (!response.ok) throw await parseError(response)
-    const body = await response.json() as { features: { host_terminal?: boolean } }
+    const body = await response.json() as {
+      features: { host_terminal?: boolean }
+      data_permissions?: { enabled?: boolean; allowed_tables?: string[] | null }
+    }
     return {
       host_terminal: Boolean(body.features.host_terminal),
       sandbox: 'docker',
       provider: 'deepseek',
       model: 'deepseek-v4-pro',
+      dataPermissions: {
+        enabled: Boolean(body.data_permissions?.enabled),
+        allowedTables: body.data_permissions?.allowed_tables ?? null,
+      },
     }
   },
 
@@ -865,6 +999,71 @@ export const api = {
   async retryKnowledgeDocument(docId: string): Promise<void> {
     const response = await apiFetch(`/knowledge/documents/${encodeURIComponent(docId)}/retry`, {
       method: 'POST',
+    })
+    if (!response.ok) throw await parseError(response)
+  },
+
+  // ---------------------------------------------------------- 用户管理（superadmin）
+
+  async listUsers(): Promise<AdminUserRow[]> {
+    const response = await apiFetch('/users')
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as { users: BackendAdminUser[] }
+    return body.users.map(toAdminUserRow)
+  },
+
+  async createUser(input: {
+    username: string
+    password: string
+    role: UserRole
+    features?: Partial<UserFeatures>
+  }): Promise<AdminUserRow> {
+    const response = await apiFetch('/users', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as { user: BackendAdminUser }
+    return toAdminUserRow(body.user)
+  },
+
+  async updateUserRole(userId: string, role: UserRole): Promise<void> {
+    const response = await apiFetch(`/users/${encodeURIComponent(userId)}/role`, {
+      method: 'PUT',
+      body: JSON.stringify({ role }),
+    })
+    if (!response.ok) throw await parseError(response)
+  },
+
+  async resetUserPassword(userId: string, password: string): Promise<void> {
+    const response = await apiFetch(`/users/${encodeURIComponent(userId)}/password`, {
+      method: 'PUT',
+      body: JSON.stringify({ password }),
+    })
+    if (!response.ok) throw await parseError(response)
+  },
+
+  async updateUserStatus(userId: string, status: 'active' | 'disabled'): Promise<void> {
+    const response = await apiFetch(`/users/${encodeURIComponent(userId)}/status`, {
+      method: 'PUT',
+      body: JSON.stringify({ status }),
+    })
+    if (!response.ok) throw await parseError(response)
+  },
+
+  async updateUserFeatures(userId: string, features: Partial<UserFeatures>): Promise<UserFeatures> {
+    const response = await apiFetch(`/users/${encodeURIComponent(userId)}/features`, {
+      method: 'PUT',
+      body: JSON.stringify(features),
+    })
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as { features: UserFeatures }
+    return body.features
+  },
+
+  async deleteUser(userId: string): Promise<void> {
+    const response = await apiFetch(`/users/${encodeURIComponent(userId)}`, {
+      method: 'DELETE',
     })
     if (!response.ok) throw await parseError(response)
   },

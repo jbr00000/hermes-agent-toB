@@ -27,12 +27,13 @@ def test_execute_mode_requires_full_permission_for_sandbox_terminal() -> None:
     ) == ["db", "terminal", "web"]
 
 
-def test_controlled_permission_does_not_enable_unclassified_write_tools() -> None:
+def test_controlled_permission_enables_terminal_behind_the_approval_gate() -> None:
+    """controlled 拿到 terminal 工具集；每条命令由 tool_gate 审批钩子逐条把关。"""
     assert resolve_toolsets(
         mode="execute",
         features={},
         permission_mode="controlled",
-    ) == ["db", "web"]
+    ) == ["db", "terminal", "web"]
 
 
 def test_browser_toolset_requires_flag_and_full_permission() -> None:
@@ -41,12 +42,12 @@ def test_browser_toolset_requires_flag_and_full_permission() -> None:
     assert resolve_toolsets(
         mode="execute", features={}, permission_mode="full"
     ) == ["db", "terminal", "web"]
-    # flag 开 + controlled → 无 browser
+    # flag 开 + controlled → 无 browser（浏览器仍属 full 专属）
     assert resolve_toolsets(
         mode="execute",
         features={"browser_automation": True},
         permission_mode="controlled",
-    ) == ["db", "web"]
+    ) == ["db", "terminal", "web"]
     # flag 开 + full → browser 放行
     assert resolve_toolsets(
         mode="execute",

@@ -1,4 +1,4 @@
-import { conversations, memoryCandidates, messages, sessions, spaces, users } from './mockData'
+import { conversations, memoryCandidates, messages, sessions, spaces } from './mockData'
 
 const wait = (ms = 180) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -23,10 +23,6 @@ export const mockApi = {
     await wait()
     return memoryCandidates
   },
-  async listUsers() {
-    await wait()
-    return users
-  },
   async getFeatures() {
     await wait()
     return {
@@ -34,6 +30,7 @@ export const mockApi = {
       sandbox: 'docker',
       provider: 'deepseek',
       model: 'deepseek-v4-pro',
+      dataPermissions: { enabled: false, allowedTables: null },
     }
   },
 }

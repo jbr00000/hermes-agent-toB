@@ -121,3 +121,43 @@ knowledge:
     assert config.knowledge.chunk_overlap == 64  # 未配置走默认
     assert config.knowledge.min_chunk_tokens == 80
     assert config.knowledge.max_file_mb == 50
+
+
+def test_data_permissions_defaults_disabled(monkeypatch, tmp_path) -> None:
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.delenv("HERMES_DEPLOYMENT_CONFIG", raising=False)
+
+    from server.deployment_config import load_deployment_config
+
+    config = load_deployment_config()
+
+    assert config.data_permissions.enabled is False
+    assert config.data_permissions.roles == {}
+
+
+def test_data_permissions_from_yaml_normalizes_case(monkeypatch, tmp_path) -> None:
+    path = tmp_path / "deployment.yaml"
+    path.write_text(
+        """
+data_permissions:
+  enabled: true
+  roles:
+    User:
+      - Orders
+      - sales.Customers
+    admin: not-a-list
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HERMES_DEPLOYMENT_CONFIG", str(path))
+
+    from server.deployment_config import load_deployment_config
+
+    config = load_deployment_config()
+
+    assert config.data_permissions.enabled is True
+    assert config.data_permissions.roles["user"] == ["orders", "sales.customers"]
+    # 非列表值整条丢弃（角色缺席 = 不限制，与文档约定一致）。
+    assert "admin" not in config.data_permissions.roles

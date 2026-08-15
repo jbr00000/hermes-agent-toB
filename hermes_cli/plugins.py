@@ -1943,6 +1943,18 @@ def invoke_hook(hook_name: str, **kwargs: Any) -> List[Any]:
     return get_plugin_manager().invoke_hook(hook_name, **kwargs)
 
 
+def register_hook(hook_name: str, callback: Callable) -> None:
+    """Register a lifecycle hook callback without a plugin manifest.
+
+    For in-process subsystems (e.g. server.tool_gate) that need the same
+    dispatch path as plugins. Idempotent per (hook_name, callback) pair.
+    """
+    manager = get_plugin_manager()
+    callbacks = manager._hooks.setdefault(hook_name, [])
+    if callback not in callbacks:
+        callbacks.append(callback)
+
+
 def invoke_middleware(kind: str, **kwargs: Any) -> List[Any]:
     """Invoke registered middleware callbacks.
 

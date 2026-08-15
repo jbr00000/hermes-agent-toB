@@ -184,5 +184,5 @@ deploy/searxng/settings.yml  SearXNG config (json format on, CN engine set, secr
 docs/                   改造计划.md (9 decisions) · 项目架构详解.md · API文档.md · security/ ·
                         B端前端设计方案.md · 前后端对接规划-不含知识库.md · Chat真实接入资源清单.md ·
                         Chat前后端联调指南.md · session-lifecycle.md · 联网检索接入方案.md ·
-                        知识库构建方案.md
+                        知识库构建方案.md · 数据库表结构.md
 ```

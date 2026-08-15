@@ -10,6 +10,7 @@ from typing import Any
 
 from server.audit import record_event
 from server.constants import is_default_agent_task_title
+from server import tool_gate  # 导入即注册 pre_tool_call 审批门控钩子
 from server.storage import get_repository, get_runtime_store
 from server.tool_events import sanitize_tool_event_payload, tool_risk_level
 
@@ -75,7 +76,9 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
     timed_out = threading.Event()
     lease_lost = threading.Event()
     cancel_requested = threading.Event()
-    max_runtime = max(30, int(os.environ.get("HERMES_AGENT_RUN_TIMEOUT_SECONDS", "300")))
+    # controlled 档等待人工审批可能长达数分钟，默认运行上限放宽到 3600s。
+    _default_timeout = "3600" if permission_mode == "controlled" else "300"
+    max_runtime = max(30, int(os.environ.get("HERMES_AGENT_RUN_TIMEOUT_SECONDS", _default_timeout)))
 
     started_run = repository.start_task_run(request_id, worker_id)
     if started_run is None:
@@ -388,6 +391,14 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
             },
         )
 
+        tool_gate.register_run_gate(
+            session_id=session_id,
+            request_id=request_id,
+            task_id=task_id,
+            user_id=user_id,
+            permission_mode=permission_mode,
+            emit=emit,
+        )
         agent = build_agent(
             session_id=session_id,
             user_id=user_id,
@@ -654,6 +665,13 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
     finally:
         stop_heartbeat.set()
         heartbeat_thread.join(timeout=3)
+        tool_gate.unregister_run_gate(session_id)
+        try:
+            repository.expire_pending_tool_approvals(request_id)
+        except Exception:
+            logger.warning(
+                "Could not expire pending tool approvals for %s", request_id, exc_info=True
+            )
         runtime_store.mark_request(request_id, "done")
         if phase == "execute":
             from server.sandbox import release_task_sandbox

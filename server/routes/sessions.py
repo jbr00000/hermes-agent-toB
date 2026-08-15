@@ -3,6 +3,11 @@
 All scoped to the authenticated user (per-user isolation). Resume itself
 happens by POSTing to /chat with the session_id; this endpoint just verifies
 ownership and returns the session so the client can confirm it's resumable.
+
+Feature gating: write paths that start/advance a run (create / plan /
+approve / execute) enforce the per-user `chat`/`agent` feature flags. Read
+paths (list/get/delete/resume/mode) are deliberately NOT gated — a user whose
+feature was revoked must still be able to read and export their own history.
 """
 from __future__ import annotations
 
@@ -11,6 +16,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from server import auth
 from server import sessions as sess
 from server.deps import get_current_user
 from server.storage import get_repository, get_runtime_store
@@ -29,8 +35,16 @@ class UpdateSessionRequest(BaseModel):
     archived: bool | None = None
 
 
+def _require_user_feature(user: dict, name: str) -> None:
+    if not auth.user_features(user).get(name, True):
+        raise HTTPException(
+            status_code=403, detail=f"feature '{name}' is disabled for this user"
+        )
+
+
 @router.post("", status_code=201)
 def create_session(req: CreateSessionRequest, user: dict = Depends(get_current_user)):
+    _require_user_feature(user, "agent" if req.interaction_type == "agent" else "chat")
     return {
         "session": sess.create_user_session(
             user["id"], interaction_type=req.interaction_type, title=req.title
@@ -126,14 +140,17 @@ def get_mode(session_id: str, user: dict = Depends(get_current_user)):
 
 @router.post("/{session_id}/plan")
 def start_plan(session_id: str, user: dict = Depends(get_current_user)):
+    _require_user_feature(user, "agent")
     return {"mode": sess.start_plan_mode(user["id"], session_id)}
 
 
 @router.post("/{session_id}/approve")
 def approve_plan(session_id: str, user: dict = Depends(get_current_user)):
+    _require_user_feature(user, "agent")
     return {"mode": sess.approve_plan(user["id"], session_id)}
 
 
 @router.post("/{session_id}/execute")
 def execute_plan(session_id: str, user: dict = Depends(get_current_user)):
+    _require_user_feature(user, "agent")
     return {"mode": sess.enter_execute_mode(user["id"], session_id)}

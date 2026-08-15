@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sse_starlette.sse import EventSourceResponse
 
+from server import auth
 from server.deps import get_current_user
 from server.storage import get_repository, get_runtime_store
 from server.tool_events import sanitize_tool_event_payload, tool_risk_level
@@ -81,6 +82,15 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
     # Legacy callers that send plan/execute without interaction_type remain
     # Agent calls. New browser clients must declare Chat explicitly.
     interaction_type = req.interaction_type or ("agent" if req.mode else "chat")
+
+    # Per-user feature gate — must run before ANY storage side effect below,
+    # otherwise a rejected call would still leave behind an empty conversation.
+    required_feature = "agent" if interaction_type == "agent" else "chat"
+    if not auth.user_features(user).get(required_feature, True):
+        raise HTTPException(
+            status_code=403,
+            detail=f"feature '{required_feature}' is disabled for this user",
+        )
 
     if req.session_id:
         from server.sessions import assert_session_owned
@@ -392,10 +402,13 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
                 duration_ms=duration_ms,
             )
             if final and assistant_status == "completed":
-                try:
-                    save_memory_candidate(user_id, session_id, req.message, final)
-                except Exception:
-                    logger.debug("Could not save memory candidate", exc_info=True)
+                # Users with the memory feature off should not silently
+                # accumulate memory candidates in the background.
+                if auth.user_features(user).get("memory", True):
+                    try:
+                        save_memory_candidate(user_id, session_id, req.message, final)
+                    except Exception:
+                        logger.debug("Could not save memory candidate", exc_info=True)
 
             final_status = assistant_status
             if task is not None:

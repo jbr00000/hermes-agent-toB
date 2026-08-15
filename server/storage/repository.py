@@ -29,10 +29,12 @@ from .models import (
     PermissionLease,
     TaskPlan,
     TaskRun,
+    ToolApproval,
     ToolEvent,
     User,
 )
 from .models import DEFAULT_KB_NAME
+from .user_features import normalize_features
 
 
 def tenant_id() -> str:
@@ -49,6 +51,8 @@ def _user_dict(row: User) -> dict[str, Any]:
         "username": row.username,
         "role": row.role,
         "status": row.status,
+        "features": normalize_features(row.features),
+        "must_change_password": bool(row.must_change_password),
         "created_at": row.created_at,
     }
 
@@ -147,6 +151,22 @@ def _tool_event_dict(row: ToolEvent) -> dict[str, Any]:
     }
 
 
+def _tool_approval_dict(row: ToolApproval) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "task_id": row.task_id,
+        "run_request_id": row.run_request_id,
+        "user_id": row.user_id,
+        "tool_name": row.tool_name,
+        "command_preview": row.command_preview,
+        "args_fingerprint": row.args_fingerprint,
+        "status": row.status,
+        "decided_by": row.decided_by,
+        "created_at": row.created_at,
+        "decided_at": row.decided_at,
+    }
+
+
 def _knowledge_base_dict(row: KnowledgeBase) -> dict[str, Any]:
     return {
         "id": row.id,
@@ -214,7 +234,14 @@ def _knowledge_job_dict(row: KnowledgeJob) -> dict[str, Any]:
 
 
 class StorageRepository:
-    def create_user(self, username: str, password_hash: str, role: str) -> dict[str, Any]:
+    def create_user(
+        self,
+        username: str,
+        password_hash: str,
+        role: str,
+        features: dict[str, Any] | None = None,
+        must_change_password: bool = False,
+    ) -> dict[str, Any]:
         now = time.time()
         row = User(
             id=str(uuid.uuid4()),
@@ -223,6 +250,8 @@ class StorageRepository:
             password_hash=password_hash,
             role=role,
             status="active",
+            features=normalize_features(features),
+            must_change_password=must_change_password,
             created_at=now,
             updated_at=now,
         )
@@ -250,12 +279,17 @@ class StorageRepository:
                 result["password_hash"] = row.password_hash
             return result
 
-    def get_user(self, user_id: str) -> dict[str, Any] | None:
+    def get_user(self, user_id: str, *, include_password: bool = False) -> dict[str, Any] | None:
         with session_scope() as session:
             row = session.scalar(
                 select(User).where(User.tenant_id == tenant_id(), User.id == user_id)
             )
-            return _user_dict(row) if row is not None else None
+            if row is None:
+                return None
+            result = _user_dict(row)
+            if include_password:
+                result["password_hash"] = row.password_hash
+            return result
 
     def list_users(self) -> list[dict[str, Any]]:
         with session_scope() as session:
@@ -281,6 +315,72 @@ class StorageRepository:
             row.role = role
             row.updated_at = time.time()
             return True
+
+    def set_user_password(
+        self, user_id: str, password_hash: str, *, must_change_password: bool = False
+    ) -> bool:
+        with session_scope() as session:
+            row = session.scalar(
+                select(User).where(User.tenant_id == tenant_id(), User.id == user_id)
+            )
+            if row is None:
+                return False
+            row.password_hash = password_hash
+            row.must_change_password = must_change_password
+            row.updated_at = time.time()
+            return True
+
+    def set_user_status(self, user_id: str, status: str) -> bool:
+        with session_scope() as session:
+            row = session.scalar(
+                select(User).where(User.tenant_id == tenant_id(), User.id == user_id)
+            )
+            if row is None:
+                return False
+            row.status = status
+            row.updated_at = time.time()
+            return True
+
+    def set_user_features(self, user_id: str, features: dict[str, Any]) -> bool:
+        with session_scope() as session:
+            row = session.scalar(
+                select(User).where(User.tenant_id == tenant_id(), User.id == user_id)
+            )
+            if row is None:
+                return False
+            # Assign a fresh dict so SQLAlchemy notices the JSON mutation.
+            row.features = normalize_features(features)
+            row.updated_at = time.time()
+            return True
+
+    def count_active_superadmins(self) -> int:
+        with session_scope() as session:
+            return int(
+                session.scalar(
+                    select(func.count())
+                    .select_from(User)
+                    .where(
+                        User.tenant_id == tenant_id(),
+                        User.role == "superadmin",
+                        User.status == "active",
+                    )
+                )
+                or 0
+            )
+
+    def get_oldest_active_admin(self) -> dict[str, Any] | None:
+        with session_scope() as session:
+            row = session.scalar(
+                select(User)
+                .where(
+                    User.tenant_id == tenant_id(),
+                    User.role == "admin",
+                    User.status == "active",
+                )
+                .order_by(User.created_at)
+                .limit(1)
+            )
+            return _user_dict(row) if row is not None else None
 
     def create_auth_session(
         self,
@@ -328,6 +428,21 @@ class StorageRepository:
                 return False
             row.revoked_at = time.time()
             return True
+
+    def revoke_auth_sessions_for_user(self, user_id: str) -> int:
+        """Revoke every live refresh session of a user (password reset / disable)."""
+        now = time.time()
+        with session_scope() as session:
+            rows = session.scalars(
+                select(AuthSession).where(
+                    AuthSession.tenant_id == tenant_id(),
+                    AuthSession.user_id == user_id,
+                    AuthSession.revoked_at.is_(None),
+                )
+            ).all()
+            for row in rows:
+                row.revoked_at = now
+            return len(rows)
 
     def create_conversation(
         self,
@@ -1360,6 +1475,139 @@ class StorageRepository:
                 .order_by(ToolEvent.created_at, ToolEvent.id)
             ).all()
             return [_tool_event_dict(row) for row in rows]
+
+    # ------------------------------------------------------ tool approvals
+    # controlled 权限档：一条待批准的 terminal/process 命令一行，属主域隔离。
+
+    def create_tool_approval(
+        self,
+        *,
+        task_id: str,
+        run_request_id: str,
+        user_id: str,
+        tool_name: str,
+        command_preview: str,
+        args_fingerprint: str,
+    ) -> dict[str, Any]:
+        now = time.time()
+        with session_scope() as session:
+            row = ToolApproval(
+                id=str(uuid.uuid4()),
+                tenant_id=tenant_id(),
+                task_id=task_id,
+                run_request_id=run_request_id,
+                user_id=user_id,
+                tool_name=tool_name,
+                command_preview=command_preview[:512],
+                args_fingerprint=args_fingerprint,
+                status="pending",
+                created_at=now,
+            )
+            session.add(row)
+            session.flush()
+            return _tool_approval_dict(row)
+
+    def get_tool_approval(self, approval_id: str) -> dict[str, Any] | None:
+        with session_scope() as session:
+            row = session.scalar(
+                select(ToolApproval).where(
+                    ToolApproval.tenant_id == tenant_id(),
+                    ToolApproval.id == approval_id,
+                )
+            )
+            return _tool_approval_dict(row) if row is not None else None
+
+    def list_tool_approvals(
+        self, user_id: str, task_id: str, *, status: str | None = None
+    ) -> list[dict[str, Any]]:
+        with session_scope() as session:
+            owned_task = session.scalar(
+                select(AgentTask.id).where(
+                    AgentTask.tenant_id == tenant_id(),
+                    AgentTask.user_id == user_id,
+                    AgentTask.id == task_id,
+                )
+            )
+            if owned_task is None:
+                return []
+            query = select(ToolApproval).where(
+                ToolApproval.tenant_id == tenant_id(),
+                ToolApproval.task_id == task_id,
+            )
+            if status is not None:
+                query = query.where(ToolApproval.status == status)
+            rows = session.scalars(
+                query.order_by(ToolApproval.created_at, ToolApproval.id)
+            ).all()
+            return [_tool_approval_dict(row) for row in rows]
+
+    def decide_tool_approval(
+        self,
+        approval_id: str,
+        *,
+        user_id: str,
+        decision: str,
+    ) -> dict[str, Any] | None:
+        """条件更新：只有仍 pending 且属主匹配的行才会被决定，否则返回 None。
+
+        返回 None 有两种含义（已决定 / 非属主），由调用方区分（路由层先查
+        属主再决定，重复决定 → 409）。
+        """
+        now = time.time()
+        with session_scope() as session:
+            row = session.scalar(
+                select(ToolApproval)
+                .where(
+                    ToolApproval.tenant_id == tenant_id(),
+                    ToolApproval.id == approval_id,
+                    ToolApproval.user_id == user_id,
+                    ToolApproval.status == "pending",
+                )
+                .with_for_update()
+            )
+            if row is None:
+                return None
+            row.status = decision
+            row.decided_by = user_id
+            row.decided_at = now
+            session.flush()
+            return _tool_approval_dict(row)
+
+    def expire_pending_tool_approvals(self, run_request_id: str) -> int:
+        """运行结束/取消时兜底：把该 run 残留的 pending 审批标记 expired。"""
+        now = time.time()
+        with session_scope() as session:
+            rows = session.scalars(
+                select(ToolApproval).where(
+                    ToolApproval.tenant_id == tenant_id(),
+                    ToolApproval.run_request_id == run_request_id,
+                    ToolApproval.status == "pending",
+                )
+            ).all()
+            for row in rows:
+                row.status = "expired"
+                row.decided_at = now
+            return len(rows)
+
+    def expire_tool_approval(self, approval_id: str) -> dict[str, Any] | None:
+        """单条 pending → expired（审批超时 / 等待中被取消）。已决定返回 None。"""
+        now = time.time()
+        with session_scope() as session:
+            row = session.scalar(
+                select(ToolApproval)
+                .where(
+                    ToolApproval.tenant_id == tenant_id(),
+                    ToolApproval.id == approval_id,
+                    ToolApproval.status == "pending",
+                )
+                .with_for_update()
+            )
+            if row is None:
+                return None
+            row.status = "expired"
+            row.decided_at = now
+            session.flush()
+            return _tool_approval_dict(row)
 
     def list_artifacts(self, user_id: str, task_id: str) -> list[dict[str, Any]]:
         with session_scope() as session:

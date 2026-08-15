@@ -5,18 +5,25 @@ import hashlib
 import os
 import secrets
 import time
-from typing import Optional
+from typing import Any, Optional
 
 import bcrypt
 import jwt
 
 from hermes_constants import get_hermes_home
 from server.storage import get_repository, init_storage
+from server.storage.user_features import (
+    DEFAULT_USER_FEATURES,
+    normalize_features,
+    user_features,
+)
 
 _DB_PATH: Optional[str] = None  # Backward-compatible test reset hook.
 _JWT_SECRET: Optional[str] = None
 _JWT_ALG = "HS256"
-VALID_ROLES = frozenset({"admin", "user"})
+VALID_ROLES = frozenset({"superadmin", "admin", "user"})
+VALID_STATUSES = frozenset({"active", "disabled"})
+MIN_PASSWORD_LENGTH = 8
 
 
 def _hash_pw(password: str) -> str:
@@ -40,6 +47,18 @@ def _validate_role(role: str) -> str:
     return role
 
 
+def _validate_password(password: str) -> str:
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise ValueError(f"password must be at least {MIN_PASSWORD_LENGTH} characters")
+    return password
+
+
+def _validate_status(status: str) -> str:
+    if status not in VALID_STATUSES:
+        raise ValueError(f"invalid status {status!r}; expected one of: {', '.join(sorted(VALID_STATUSES))}")
+    return status
+
+
 def _jwt_secret() -> str:
     global _JWT_SECRET
     configured = os.environ.get("HERMES_JWT_SECRET", "").strip()
@@ -60,6 +79,7 @@ def init_db() -> None:
     init_storage()
     repository = get_repository()
     if repository.count_users() > 0:
+        _promote_oldest_admin_if_no_superadmin()
         return
     username = os.environ.get("HERMES_ADMIN_USERNAME", "admin")
     password = os.environ.get("HERMES_ADMIN_PASSWORD") or "changeme"
@@ -71,19 +91,50 @@ def init_db() -> None:
             "Set HERMES_ADMIN_PASSWORD, or set HERMES_ALLOW_DEFAULT_ADMIN=1 "
             "only for local development."
         )
-    repository.create_user(username, _hash_pw(password), "admin")
+    repository.create_user(
+        username, _hash_pw(password), "superadmin",
+        features=dict(DEFAULT_USER_FEATURES),
+    )
     if password == "changeme":
-        print(f"[auth] WARNING: bootstrapped admin '{username}' with default password 'changeme'.")
+        print(f"[auth] WARNING: bootstrapped superadmin '{username}' with default password 'changeme'.")
     else:
-        print(f"[auth] bootstrapped admin user '{username}'.")
+        print(f"[auth] bootstrapped superadmin user '{username}'.")
 
 
-def create_user(username: str, password: str, role: str = "user") -> dict:
+def _promote_oldest_admin_if_no_superadmin() -> None:
+    """Upgrade path: deployments bootstrapped before the superadmin role existed
+    have only admin/user rows. Promote the oldest active admin so the user-admin
+    surface stays reachable; operators can later create their own superadmin and
+    demote this account."""
+    repository = get_repository()
+    if repository.count_active_superadmins() > 0:
+        return
+    oldest = repository.get_oldest_active_admin()
+    if oldest is None:
+        print("[auth] WARNING: no active superadmin and no admin to promote; "
+              "user management is unreachable until an operator promotes a user manually.")
+        return
+    repository.set_user_role(oldest["id"], "superadmin")
+    print(f"[auth] WARNING: promoted oldest admin '{oldest['username']}' to superadmin (upgrade path).")
+
+
+def create_user(
+    username: str,
+    password: str,
+    role: str = "user",
+    features: dict[str, Any] | None = None,
+) -> dict:
     role = _validate_role(role)
+    _validate_password(password)
     normalized_username = username.strip()
     if not normalized_username:
         raise ValueError("username must not be empty")
-    return get_repository().create_user(normalized_username, _hash_pw(password), role)
+    # 管理员代建的账号用初始密码，首次登录必须改密。
+    return get_repository().create_user(
+        normalized_username, _hash_pw(password), role,
+        features=normalize_features(features),
+        must_change_password=True,
+    )
 
 
 def authenticate(username: str, password: str) -> Optional[dict]:
@@ -111,6 +162,50 @@ def set_user_role(user_id: str, role: str) -> bool:
     return get_repository().set_user_role(user_id, _validate_role(role))
 
 
+def set_user_password(user_id: str, password: str) -> bool:
+    """Reset a user's password and revoke all their live refresh sessions.
+
+    Admin-initiated reset: the new password is a temporary one, so the user is
+    forced to choose their own at next login."""
+    _validate_password(password)
+    repository = get_repository()
+    updated = repository.set_user_password(
+        user_id, _hash_pw(password), must_change_password=True
+    )
+    if updated:
+        repository.revoke_auth_sessions_for_user(user_id)
+    return updated
+
+
+def change_password(user_id: str, old_password: str, new_password: str) -> Optional[dict]:
+    """User-initiated password change. Verifies the old password, clears the
+    must_change_password flag, and revokes all live refresh sessions (the
+    caller issues a fresh one). Returns the updated user, or None if the old
+    password is wrong."""
+    _validate_password(new_password)
+    repository = get_repository()
+    row = repository.get_user(user_id, include_password=True)
+    if row is None or not _verify_pw(old_password, row["password_hash"]):
+        return None
+    repository.set_user_password(user_id, _hash_pw(new_password), must_change_password=False)
+    repository.revoke_auth_sessions_for_user(user_id)
+    return repository.get_user(user_id)
+
+
+def set_user_status(user_id: str, status: str) -> bool:
+    """Enable/disable a user. Disabling also revokes live refresh sessions."""
+    _validate_status(status)
+    repository = get_repository()
+    updated = repository.set_user_status(user_id, status)
+    if updated and status != "active":
+        repository.revoke_auth_sessions_for_user(user_id)
+    return updated
+
+
+def set_user_features(user_id: str, features: dict[str, Any]) -> bool:
+    return get_repository().set_user_features(user_id, normalize_features(features))
+
+
 def create_token(user: dict) -> str:
     now = int(time.time())
     ttl = int(os.environ.get("HERMES_ACCESS_TOKEN_TTL", "900"))
@@ -131,10 +226,13 @@ def decode_token(token: str) -> Optional[dict]:
         return None
 
 
-def issue_refresh_token(user: dict, user_agent: str | None = None) -> str:
+def issue_refresh_token(
+    user: dict, user_agent: str | None = None, *, ttl: int | None = None
+) -> str:
     token = secrets.token_urlsafe(48)
     token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
-    ttl = int(os.environ.get("HERMES_REFRESH_TOKEN_TTL", str(7 * 24 * 3600)))
+    if ttl is None:
+        ttl = int(os.environ.get("HERMES_REFRESH_TOKEN_TTL", str(7 * 24 * 3600)))
     get_repository().create_auth_session(
         user["id"], token_hash, time.time() + ttl, user_agent
     )

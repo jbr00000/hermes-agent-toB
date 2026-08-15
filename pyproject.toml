@@ -111,6 +111,10 @@ dependencies = [
   "PyMySQL==1.2.0",
   "redis==8.1.0",
   "alembic==1.19.0",
+  # Table-level data permissions (server/data_permissions.py): parse the SQL
+  # about to run through db_query and extract referenced tables to enforce
+  # per-role whitelists from deployment.yaml.
+  "sqlglot==30.15.0",
   # Streaming multipart uploads for the dashboard file manager (NS-501).
   # FastAPI's UploadFile/Form depend on python-multipart; it is NOT pulled in
   # by fastapi itself, so the dashboard's multipart upload endpoint would 500

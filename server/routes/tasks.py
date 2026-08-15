@@ -9,10 +9,14 @@ from pydantic import BaseModel, Field
 
 from server import sessions as session_service
 from server.agent_queue import enqueue_agent_run, stream_agent_run
-from server.deps import get_current_user
+from server.deps import get_current_user, require_feature
 from server.storage import get_repository, get_runtime_store
 
-router = APIRouter(prefix="/tasks", tags=["tasks"])
+router = APIRouter(
+    prefix="/tasks",
+    tags=["tasks"],
+    dependencies=[Depends(require_feature("agent"))],
+)
 
 
 class CreateTaskRequest(BaseModel):
@@ -38,6 +42,10 @@ class RetryTaskRequest(BaseModel):
 class PermissionRequest(BaseModel):
     mode: Literal["read", "controlled", "full"]
     ttl_seconds: int = Field(default=900, ge=60, le=3600)
+
+
+class ToolApprovalDecisionRequest(BaseModel):
+    decision: Literal["allow", "deny", "allow_all"]
 
 
 def _task_detail(user_id: str, task_id: str) -> dict:
@@ -273,6 +281,59 @@ def reconnect_task_run(
         request_id=request_id,
         content_offset=content_offset,
     )
+
+
+@router.get("/{task_id}/tool-approvals")
+def list_tool_approvals(
+    task_id: str,
+    status: Literal["pending", "approved", "denied", "expired"] | None = Query(
+        default=None
+    ),
+    user: dict = Depends(get_current_user),
+):
+    """controlled 档审批列表；前端重连时用它重建 pending 审批的 ground truth。"""
+    repository = get_repository()
+    task = repository.get_owned_task(user["id"], task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    return {
+        "approvals": repository.list_tool_approvals(user["id"], task_id, status=status)
+    }
+
+
+@router.post("/{task_id}/tool-approvals/{approval_id}")
+def decide_tool_approval(
+    task_id: str,
+    approval_id: str,
+    req: ToolApprovalDecisionRequest,
+    user: dict = Depends(get_current_user),
+):
+    """批准/拒绝一条待执行命令。不写 SSE——审批门控钩子的下一拍轮询会发现
+    决定并经 executor 的 emit 发 tool.approval_resolved（单一 emitter 不撞号）。"""
+    repository = get_repository()
+    task = repository.get_owned_task(user["id"], task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    approval = repository.get_tool_approval(approval_id)
+    if (
+        approval is None
+        or approval["task_id"] != task_id
+        or approval["user_id"] != user["id"]
+    ):
+        raise HTTPException(status_code=404, detail="approval not found")
+    if approval["status"] != "pending":
+        raise HTTPException(status_code=409, detail="approval already decided")
+    decided = repository.decide_tool_approval(
+        approval_id,
+        user_id=user["id"],
+        decision="denied" if req.decision == "deny" else "approved",
+    )
+    if decided is None:  # 并发决定竞态：另一请求已先落库
+        raise HTTPException(status_code=409, detail="approval already decided")
+    if req.decision == "allow_all":
+        # 本次运行后续命令不再询问；Redis 部署下对 worker 进程可见。
+        get_runtime_store().set_run_flag(approval["run_request_id"], "allow_all")
+    return {"approval": decided}
 
 
 @router.post("/{task_id}/retry")

@@ -67,6 +67,18 @@ export interface ToolEvent {
   createdAt: number
 }
 
+/** controlled 权限档：一条待用户批准的 terminal/process 命令。 */
+export interface ToolApproval {
+  id: string
+  taskId: string
+  runRequestId: string
+  toolName: string
+  commandPreview: string
+  status: 'pending' | 'approved' | 'denied' | 'expired'
+  createdAt: number
+  decidedAt: number | null
+}
+
 export interface AgentTaskDetail {
   id: string
   sessionId: string
@@ -99,10 +111,22 @@ export interface AgentTaskDetail {
   }>
 }
 
+export type UserRole = 'superadmin' | 'admin' | 'user'
+
+export interface UserFeatures {
+  agent: boolean
+  chat: boolean
+  knowledge: boolean
+  memory: boolean
+}
+
 export interface AuthUser {
   id: string
   username: string
-  role: 'admin' | 'user'
+  role: UserRole
+  features: UserFeatures
+  /** 建号/管理员重置后为 true：必须先改密才能进入工作台。 */
+  mustChangePassword?: boolean
 }
 
 export interface SessionSummary {
@@ -224,11 +248,13 @@ export interface MemoryCandidate {
   status: 'pending' | 'approved'
 }
 
-export interface UserRow {
+export interface AdminUserRow {
   id: string
   username: string
-  role: 'admin' | 'user'
-  spaces: string[]
+  role: UserRole
+  status: 'active' | 'disabled'
+  features: UserFeatures
+  createdAt: number
 }
 
 export interface AuditEvent {

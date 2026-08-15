@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 
 from hermes_constants import get_hermes_home
 from server.deployment_config import KnowledgeDeploymentConfig, load_deployment_config
-from server.deps import get_current_user, require_admin
+from server.deps import get_current_user, require_admin, require_feature
 from server.knowledge.parser_client import SUPPORTED_EXTS
 from server.knowledge.queue import enqueue_knowledge_job
 from server.storage import get_repository
@@ -32,8 +32,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 
-# 查看对所有登录用户开放（含未解析/失败文档）；变更仅 admin。
-_read_router = APIRouter(dependencies=[Depends(get_current_user)])
+# 查看是受 per-user「knowledge」功能开关控制；变更仍由角色(admin)控制。
+_read_router = APIRouter(dependencies=[Depends(require_feature("knowledge"))])
 _admin_router = APIRouter(dependencies=[Depends(require_admin)])
 
 _FILES_DIR = Path("knowledge") / "files"

@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from hermes_constants import get_hermes_home
 
 from .models import DEFAULT_KB_NAME, Base
+from .user_features import DEFAULT_USER_FEATURES
 
 _lock = threading.Lock()
 _engine: Engine | None = None
@@ -84,6 +85,8 @@ def init_database() -> None:
 # shim; MySQL deployments instead advance through Alembic (auditable).
 # Each entry: (table, column, DDL type, backfill JSON value or None).
 _ADDED_COLUMNS: tuple[tuple[str, str, str, dict | None], ...] = (
+    ("users", "features", "JSON", DEFAULT_USER_FEATURES),
+    ("users", "must_change_password", "BOOLEAN NOT NULL DEFAULT 0", None),
     ("knowledge_documents", "kb_id", "VARCHAR(36)", None),
     ("knowledge_chunks", "kb_id", "VARCHAR(36)", None),
 )

@@ -1,4 +1,4 @@
-import type { ChatMessage, ConversationSummary, KnowledgeSpace, MemoryCandidate, SessionSummary, UserRow } from './types'
+import type { ChatMessage, ConversationSummary, KnowledgeSpace, MemoryCandidate, SessionSummary } from './types'
 
 export const spaces: KnowledgeSpace[] = [
   { id: 'rail', name: '轨道公司', role: 'space_admin', libraries: 4, documents: 128 },
@@ -44,10 +44,4 @@ export const messages: Record<string, ChatMessage[]> = {
 export const memoryCandidates: MemoryCandidate[] = [
   { id: 'c-01', content: '费用测算任务默认优先输出“测算口径、费用构成、风险项、待确认问题”四段。', source: '智库平台费用测算文档总结', status: 'pending' },
   { id: 'c-02', content: '轨道公司相关资料默认使用“轨道公司”业务空间知识库。', source: '历史会话', status: 'pending' },
-]
-
-export const users: UserRow[] = [
-  { id: 'u-1', username: 'admin', role: 'admin', spaces: ['轨道公司', '费用测算', '合同资料'] },
-  { id: 'u-2', username: 'alice', role: 'user', spaces: ['轨道公司', '费用测算'] },
-  { id: 'u-3', username: 'bob', role: 'user', spaces: ['轨道公司'] },
 ]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -36,6 +37,11 @@ class RuntimeStore:
         self._local_knowledge_processing: dict[str, dict[str, Any]] = {}
         self._local_events: dict[str, list[dict[str, Any]]] = {}
         self._local_workers: dict[str, float] = {}
+        # key -> (window_expires_at, fail_count) / key -> locked_until
+        self._local_login_failures: dict[str, tuple[float, int]] = {}
+        self._local_login_locks: dict[str, float] = {}
+        # key -> expires_at（run 级布尔标志，如 controlled 的 allow_all）
+        self._local_run_flags: dict[str, float] = {}
 
     def _key(self, *parts: str) -> str:
         return ":".join(("hermes", tenant_id(), *parts))
@@ -119,6 +125,114 @@ class RuntimeStore:
 
     def is_cancelled(self, request_id: str) -> bool:
         return self.cancellation_state(request_id) is True
+
+    def set_run_flag(self, request_id: str, name: str, ttl_seconds: int = 3600) -> None:
+        """run 级布尔标志（如 controlled 审批的 allow_all），Redis 跨进程共享。"""
+        key = self._key("request", request_id, "flag", name)
+        if self._redis is not None:
+            try:
+                self._redis.set(key, "1", ex=ttl_seconds)
+                return
+            except RedisError as exc:
+                logger.warning("Redis run-flag write failed: %s", exc)
+        with self._local_guard:
+            self._local_run_flags[key] = time.time() + ttl_seconds
+
+    def is_run_flag(self, request_id: str, name: str) -> bool:
+        key = self._key("request", request_id, "flag", name)
+        if self._redis is not None:
+            try:
+                return self._redis.get(key) == "1"
+            except RedisError as exc:
+                logger.warning("Redis run-flag read failed: %s", exc)
+                return False
+        with self._local_guard:
+            expires_at = self._local_run_flags.get(key)
+            if expires_at is None:
+                return False
+            if expires_at <= time.time():
+                self._local_run_flags.pop(key, None)
+                return False
+            return True
+
+    # ------------------------------------------------------ login lockout
+    # 登录防爆破：失败计数（窗口内累计）+ 锁定时长，Redis 跨进程共享、本地 dict
+    # 兜底（仅内嵌 worker 单进程形态）。安全策略，不是行为配置，用 env 覆盖。
+
+    @staticmethod
+    def _login_lockout_seconds() -> int:
+        raw = os.environ.get("HERMES_LOGIN_LOCKOUT_SECONDS", "900").strip()
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            return 900
+
+    def register_login_failure(
+        self,
+        username: str,
+        *,
+        max_attempts: int = 5,
+        window_seconds: int = 900,
+    ) -> tuple[int, int]:
+        """Record one failed login; returns (fail_count, lock_seconds_set)."""
+        count_key = self._key("auth", "login-failures", username)
+        lock_key = self._key("auth", "login-lock", username)
+        if self._redis is not None:
+            try:
+                count = int(self._redis.incr(count_key))
+                if count == 1:
+                    self._redis.expire(count_key, window_seconds)
+                lock_seconds = 0
+                if count >= max_attempts:
+                    lock_seconds = self._login_lockout_seconds()
+                    self._redis.set(lock_key, "1", ex=lock_seconds)
+                return count, lock_seconds
+            except RedisError as exc:
+                logger.warning("Redis login-failure counter write failed: %s", exc)
+        with self._local_guard:
+            now = time.time()
+            expires_at, count = self._local_login_failures.get(count_key, (0.0, 0))
+            if expires_at <= now:
+                expires_at, count = now + window_seconds, 0
+            count += 1
+            self._local_login_failures[count_key] = (expires_at, count)
+            lock_seconds = 0
+            if count >= max_attempts:
+                lock_seconds = self._login_lockout_seconds()
+                self._local_login_locks[lock_key] = now + lock_seconds
+            return count, lock_seconds
+
+    def login_lock_remaining_seconds(self, username: str) -> int:
+        lock_key = self._key("auth", "login-lock", username)
+        if self._redis is not None:
+            try:
+                # ttl: -2 键不存在 / -1 无过期；都按未锁定处理。
+                return max(0, int(self._redis.ttl(lock_key)))
+            except RedisError as exc:
+                logger.warning("Redis login-lock read failed: %s", exc)
+                return 0
+        with self._local_guard:
+            locked_until = self._local_login_locks.get(lock_key)
+            if locked_until is None:
+                return 0
+            remaining = locked_until - time.time()
+            if remaining <= 0:
+                self._local_login_locks.pop(lock_key, None)
+                return 0
+            return max(1, math.ceil(remaining))
+
+    def clear_login_failures(self, username: str) -> None:
+        count_key = self._key("auth", "login-failures", username)
+        lock_key = self._key("auth", "login-lock", username)
+        if self._redis is not None:
+            try:
+                self._redis.delete(count_key, lock_key)
+                return
+            except RedisError as exc:
+                logger.warning("Redis login-failure clear failed: %s", exc)
+        with self._local_guard:
+            self._local_login_failures.pop(count_key, None)
+            self._local_login_locks.pop(lock_key, None)
 
     def append_event(
         self,

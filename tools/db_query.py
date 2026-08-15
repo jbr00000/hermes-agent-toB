@@ -255,7 +255,55 @@ def db_query(sql: str, max_rows: int = _MAX_ROWS) -> str:
         con.close()
 
 
+def _check_data_permissions(sql: str, kw: dict) -> str | None:
+    """Enforce per-role table whitelists (deployment.yaml data_permissions).
+
+    Returns None when the statement may run; otherwise a JSON error payload.
+    The SQL text never reaches the audit log — summarize_tool_args stores a
+    fingerprint only. Fail-open on infrastructure errors (matching the rest
+    of this module): the feature is off by default, and the fail-CLOSED case
+    that matters (restricted role + unparseable SQL) lives in
+    server/data_permissions.py.
+
+    Boundary note: full-permission users could in theory bypass this from
+    sandbox code (shared read-only credentials); the chat/plan paths are
+    sealed because db_query is their only DB access.
+    """
+    user_id = kw.get("user_id")
+    if not user_id:
+        return None
+    try:
+        from server import data_permissions
+        from server.storage import get_repository
+
+        user = get_repository().get_user(str(user_id))
+        role = str((user or {}).get("role") or "")
+        reason = data_permissions.check_sql_allowed(sql, role)
+        if reason is None:
+            return None
+        try:
+            from server import audit
+
+            audit.record_tool_call(
+                tool_name="db_query",
+                args={"sql": sql},
+                session_id=kw.get("session_id"),
+                user_id=str(user_id),
+                status="blocked",
+                task_id=kw.get("task_id"),
+                error=reason,
+            )
+        except Exception:
+            pass
+        return json.dumps({"error": reason}, ensure_ascii=False)
+    except Exception:
+        return None
+
+
 def _handle(args: dict, **kw) -> str:
+    denied = _check_data_permissions(str(args.get("sql") or ""), kw)
+    if denied is not None:
+        return denied
     return db_query(sql=args["sql"], max_rows=int(args.get("max_rows") or _MAX_ROWS))
 
 
