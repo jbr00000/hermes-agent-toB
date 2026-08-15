@@ -1,0 +1,48 @@
+{
+  "name": "default",
+  "schema": "v1",
+  "description": "Default recipe for Chinese and bilingual DMFC parsed markdown documents",
+  "language": "zh",
+  "metadata": {
+    "version": "0.2.0",
+    "author": "DMFC MVP"
+  },
+  "recipe": {
+    "delimiters": ["。", "！", "？", "；", "\n"],
+    "include_delim": "prev",
+    "recursive_rules": {
+      "levels": [
+        {
+          "delimiters": ["\n\n", "\r\n\r\n"],
+          "whitespace": false,
+          "include_delim": "next"
+        },
+        {
+          "delimiters": ["\n", "\r"],
+          "whitespace": false,
+          "include_delim": "prev"
+        },
+        {
+          "delimiters": ["。", "！", "？", "；", ".", "!", "?", ";"],
+          "whitespace": false,
+          "include_delim": "prev"
+        },
+        {
+          "delimiters": ["，", "、", ",", ":", "："],
+          "whitespace": false,
+          "include_delim": "prev"
+        },
+        {
+          "delimiters": null,
+          "whitespace": true,
+          "include_delim": "prev"
+        },
+        {
+          "delimiters": null,
+          "whitespace": false,
+          "include_delim": "prev"
+        }
+      ]
+    }
+  }
+}

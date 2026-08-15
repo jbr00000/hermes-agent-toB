@@ -159,6 +159,7 @@ def chunk_index_mappings() -> dict[str, Any]:
     return {
         "properties": {
             "id": {"type": "keyword"},
+            "kb_id": {"type": "keyword"},
             "doc_id": {"type": "keyword"},
             "doc_name": {"type": "text", "fields": {"keyword": {"type": "keyword"}}},
             "doc_pos": {"type": "integer"},

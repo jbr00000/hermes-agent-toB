@@ -343,8 +343,10 @@ services:
   # ------------------------------------------------------------------
   # 知识库构建栈（docker compose --profile knowledge up -d）
   # ES（BM25 全文）+ Milvus（向量）+ Milvus 内部依赖 etcd/minio + 知识库 worker。
-  # 全部只挂 hermes-data：不映射宿主机端口、不出网，仅 hermes-server/worker
-  # 可达（天然无端口冲突；es_url 用容器内网 http.port=19200）。
+  # 全部只挂 hermes-data：不出网，仅 hermes-server/worker 可达；
+  # etcd/minio 不映射宿主机端口。ES/Milvus 各映射一个 127.0.0.1 回环端口，
+  # 仅供宿主机 dev（本机 python -m server / 知识库 worker 跑在宿主机时直连）；
+  # 全容器化部署时忽略映射端口，用内网地址（es_url 用容器内网 http.port=19200）。
   # 注意：minio/etcd 是 Milvus standalone 的内部组件，与知识库文档存储无关
   # ——文档原文存宿主机卷 ./.hermes-dev/knowledge/files/。
   # MinerU 与 embedding 端点是客户自备服务，不在本栈内。
@@ -356,7 +358,8 @@ services:
     container_name: hermes_tob_elasticsearch
     environment:
       discovery.type: single-node
-      # 仅容器内网可达（不映射宿主机）；与客户可能已有的 ES :9200 错开
+      # 容器内网端口与客户可能已有的 ES :9200 错开；宿主机映射仅绑回环，
+      # 供本机 dev 直连（全容器化部署时无需使用该映射）
       http.port: "19200"
       # 内网无暴露，默认关安全层；客户要求开启时在 .env 配
       # KNOWLEDGE_ES_PASSWORD 并改用 elastic 账号（见 server/knowledge/es_client.py）
@@ -368,6 +371,9 @@ services:
       memlock:
         soft: -1
         hard: -1
+    ports:
+      # 仅宿主机 dev 直连（本机 python -m server 场景）：127.0.0.1 回环
+      - "127.0.0.1:${KNOWLEDGE_ES_PORT:-19200}:19200"
     volumes:
       - hermes-es-data:/usr/share/elasticsearch/data
     networks:
@@ -400,7 +406,9 @@ services:
     networks:
       - hermes-data
     healthcheck:
-      test: ["CMD-SHELL", "ETCDCTL_API=3 etcdctl endpoint health"]
+      # quay.io/coreos/etcd 镜像无 /bin/sh，CMD-SHELL 不可用；
+      # 3.5 的 etcdctl 默认 API v3，直接 exec 即可
+      test: ["CMD", "etcdctl", "endpoint", "health"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -440,6 +448,9 @@ services:
       MINIO_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in compose.env}
       TZ: UTC
     command: ["milvus", "run", "standalone"]
+    ports:
+      # 仅宿主机 dev 直连（本机 python -m server 场景）：127.0.0.1 回环
+      - "127.0.0.1:${KNOWLEDGE_MILVUS_PORT:-19530}:19530"
     depends_on:
       etcd:
         condition: service_healthy

@@ -59,6 +59,7 @@ def synchronize_document(
         [
             {
                 "id": chunk["id"],
+                "kb_id": chunk.get("kb_id") or "",
                 "doc_id": doc_id,
                 "doc_name": chunk.get("doc_name") or "",
                 "doc_pos": chunk["doc_pos"],
@@ -83,6 +84,7 @@ def synchronize_document(
         [
             {
                 "id": chunk["id"],
+                "kb_id": chunk.get("kb_id") or "",
                 "doc_id": doc_id,
                 "chunk_title": (chunk.get("chunk_title") or "")[:512],
                 "content": str(chunk["content"])[:_MILVUS_CONTENT_MAX_CHARS],

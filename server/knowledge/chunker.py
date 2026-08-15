@@ -1,26 +1,34 @@
-"""Semantic chunker for knowledge documents.
+"""Chunker for knowledge documents.
 
 Pure functions over the MinerU-style ``content_list`` produced by
-``parser_client``. Strategy (deliberately not chonkie — the reference
-project's LateChunker needs a local embedding model, which conflicts with
-our remote-endpoint architecture):
+``parser_client``. 两种模式（``deployment.yaml: knowledge.chunk_mode``）：
+
+- **structural**（默认）：标题分段 + tiktoken 递归切分，零 embedding 消耗。
+- **semantic**：标题分段保持不变，段内用句级 embedding 相似度找话题切换点
+  （chonkie SemanticChunker 的本地化实现，见 ``semantic_chunker.py``）。
+
+公共策略（两种模式一致）：
 
 1. **结构分段**：遍历 content_list，``text_level`` 标题项开启新 section，
    chunk_title = 最近标题路径（截 200 字符）。
-2. **递归切分**：tiktoken ``cl100k_base`` 计数；section 超 ``chunk_size``
-   先按段落、再按句子递归切；相邻块保留 ``chunk_overlap`` 的重叠；
-   <50 token 的尾块向前合并。
+2. **段内切分**：structural 走段落→句子递归 + ``chunk_overlap`` 重叠；
+   semantic 走滑窗相似度 + Savitzky-Golay 极小值检测（无重叠）。
+   短于 ``min_tail_tokens``（deployment.yaml ``min_chunk_tokens``，默认 50）
+   的尾块向前合并。
 3. **表格**：``type=="table"`` 整块成一个 chunk；超 ``2×chunk_size`` 按行切
    并重复表头行；标题追加"（表）"。
 4. 页眉/页脚降级为普通文本；页码/页脚注丢弃；图片只保留 caption。
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import re
 from typing import Any
 
 import tiktoken
+
+from .semantic_chunker import SemanticChunkConfig, semantic_split
 
 DEFAULT_CHUNK_SIZE = 400
 DEFAULT_CHUNK_OVERLAP = 64
@@ -60,13 +68,27 @@ def chunk_document(
     *,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
+    mode: str = "structural",
+    embed_batch: Callable[[list[str]], list[list[float]]] | None = None,
+    semantic: SemanticChunkConfig | None = None,
+    min_tail_tokens: int = _MIN_TAIL_TOKENS,
 ) -> list[Chunk]:
-    """Chunk a parsed document. ``doc_pos`` is a global 0-based sequence."""
+    """Chunk a parsed document. ``doc_pos`` is a global 0-based sequence.
+
+    ``mode="structural"``（默认）：标题分段 + token 递归切分，零 embedding 消耗。
+    ``mode="semantic"``：标题分段保持不变，段内改用句级 embedding 相似度
+    找话题切换点（见 semantic_chunker），此时必须提供 ``embed_batch``。
+    ``min_tail_tokens``：短于此 token 数的尾块并入前一块（表格块除外）。
+    """
+    if mode == "semantic" and embed_batch is None:
+        raise ValueError("chunk_mode=semantic 需要 embed_batch（embedding 端点未配置？）")
     sections = _to_sections(content_list)
     chunks: list[Chunk] = []
     for title, blocks in sections:
-        chunks.extend(_chunk_section(title, blocks, chunk_size, chunk_overlap))
-    chunks = _merge_short_tails(chunks)
+        chunks.extend(
+            _chunk_section(title, blocks, chunk_size, chunk_overlap, mode, embed_batch, semantic)
+        )
+    chunks = _merge_short_tails(chunks, min_tail_tokens)
     for pos, chunk in enumerate(chunks):
         chunk.doc_pos = pos
         chunk.token_num = count_tokens(chunk.content)
@@ -146,6 +168,9 @@ def _chunk_section(
     blocks: list[dict[str, Any]],
     chunk_size: int,
     chunk_overlap: int,
+    mode: str = "structural",
+    embed_batch: Callable[[list[str]], list[list[float]]] | None = None,
+    semantic: SemanticChunkConfig | None = None,
 ) -> list[Chunk]:
     chunks: list[Chunk] = []
     pending_text: list[str] = []
@@ -154,7 +179,13 @@ def _chunk_section(
         nonlocal pending_text
         text = "\n\n".join(pending_text).strip()
         pending_text = []
-        if text:
+        if not text:
+            return
+        if mode == "semantic":
+            # embed_batch 一定非 None（chunk_document 入口已校验）
+            for piece in semantic_split(text, embed_batch, chunk_size, semantic):  # type: ignore[arg-type]
+                chunks.append(Chunk(content=piece, chunk_title=title, doc_pos=-1, token_num=0))
+        else:
             chunks.extend(_split_text(text, title, chunk_size, chunk_overlap))
 
     for block in blocks:
@@ -285,8 +316,8 @@ def _table_chunk(header: str, rows: list[str], caption: str, title: str) -> Chun
 # ----------------------------------------------------------------- 尾块合并
 
 
-def _merge_short_tails(chunks: list[Chunk]) -> list[Chunk]:
-    """Merge chunks shorter than _MIN_TAIL_TOKENS into the previous chunk.
+def _merge_short_tails(chunks: list[Chunk], min_tokens: int = _MIN_TAIL_TOKENS) -> list[Chunk]:
+    """Merge chunks shorter than ``min_tokens`` into the previous chunk.
 
     表格块保持原子性（含 ``<tr>`` 的内容不并入文本块，也不吸收别块）。
     """
@@ -295,7 +326,7 @@ def _merge_short_tails(chunks: list[Chunk]) -> list[Chunk]:
     merged: list[Chunk] = [chunks[0]]
     for chunk in chunks[1:]:
         is_table = "<tr" in chunk.content
-        if not is_table and count_tokens(chunk.content) < _MIN_TAIL_TOKENS and merged:
+        if not is_table and count_tokens(chunk.content) < min_tokens and merged:
             merged[-1].content = f"{merged[-1].content}\n\n{chunk.content}"
         else:
             merged.append(chunk)

@@ -7,6 +7,7 @@ import uuid
 from typing import Any
 
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 
 from server.constants import DEFAULT_AGENT_TASK_TITLE, DEFAULT_CHAT_TITLE
 
@@ -17,6 +18,7 @@ from .models import (
     Artifact,
     AuthSession,
     Conversation,
+    KnowledgeBase,
     KnowledgeChunk,
     KnowledgeDocument,
     KnowledgeJob,
@@ -30,6 +32,7 @@ from .models import (
     ToolEvent,
     User,
 )
+from .models import DEFAULT_KB_NAME
 
 
 def tenant_id() -> str:
@@ -144,9 +147,23 @@ def _tool_event_dict(row: ToolEvent) -> dict[str, Any]:
     }
 
 
+def _knowledge_base_dict(row: KnowledgeBase) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "name": row.name,
+        "description": row.description,
+        "creator_id": row.creator_id,
+        "doc_count": row.doc_count,
+        "chunk_count": row.chunk_count,
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+    }
+
+
 def _knowledge_document_dict(row: KnowledgeDocument) -> dict[str, Any]:
     return {
         "id": row.id,
+        "kb_id": row.kb_id,
         "uploader_id": row.uploader_id,
         "title": row.title,
         "file_name": row.file_name,
@@ -167,6 +184,7 @@ def _knowledge_document_dict(row: KnowledgeDocument) -> dict[str, Any]:
 def _knowledge_chunk_dict(row: KnowledgeChunk) -> dict[str, Any]:
     return {
         "id": row.id,
+        "kb_id": row.kb_id,
         "doc_id": row.doc_id,
         "doc_name": row.doc_name,
         "chunk_title": row.chunk_title,
@@ -1958,11 +1976,142 @@ class StorageRepository:
                 for row in rows
             ]
 
-    # ---- knowledge base (enterprise library) ----
+    # ---- knowledge bases (三步流程：建库 → 上传 → 选择解析) ----
+
+    def create_knowledge_base(
+        self, *, name: str, creator_id: str | None, description: str | None = None
+    ) -> dict[str, Any]:
+        """Create a named knowledge base. Raises IntegrityError on duplicate name."""
+        now = time.time()
+        row = KnowledgeBase(
+            id=str(uuid.uuid4()),
+            tenant_id=tenant_id(),
+            name=name,
+            description=description,
+            creator_id=creator_id,
+            doc_count=0,
+            chunk_count=0,
+            created_at=now,
+            updated_at=now,
+        )
+        with session_scope() as session:
+            session.add(row)
+        return _knowledge_base_dict(row)
+
+    def get_knowledge_base(self, kb_id: str) -> dict[str, Any] | None:
+        with session_scope() as session:
+            row = session.scalar(
+                select(KnowledgeBase).where(
+                    KnowledgeBase.tenant_id == tenant_id(),
+                    KnowledgeBase.id == kb_id,
+                )
+            )
+            return _knowledge_base_dict(row) if row is not None else None
+
+    def get_knowledge_base_by_name(self, name: str) -> dict[str, Any] | None:
+        with session_scope() as session:
+            row = session.scalar(
+                select(KnowledgeBase).where(
+                    KnowledgeBase.tenant_id == tenant_id(),
+                    KnowledgeBase.name == name,
+                )
+            )
+            return _knowledge_base_dict(row) if row is not None else None
+
+    def list_knowledge_bases(self) -> list[dict[str, Any]]:
+        with session_scope() as session:
+            rows = session.scalars(
+                select(KnowledgeBase)
+                .where(KnowledgeBase.tenant_id == tenant_id())
+                .order_by(KnowledgeBase.updated_at.desc(), KnowledgeBase.id.desc())
+            ).all()
+            return [_knowledge_base_dict(row) for row in rows]
+
+    def get_or_create_default_knowledge_base(
+        self, *, creator_id: str | None = None
+    ) -> dict[str, Any]:
+        """The base legacy documents were migrated into; lazily created so an
+        upload never fails just because the tenant has no bases yet."""
+        existing = self.get_knowledge_base_by_name(DEFAULT_KB_NAME)
+        if existing is not None:
+            return existing
+        try:
+            return self.create_knowledge_base(
+                name=DEFAULT_KB_NAME, creator_id=creator_id
+            )
+        except IntegrityError:
+            # Concurrent creator won the race — re-read.
+            existing = self.get_knowledge_base_by_name(DEFAULT_KB_NAME)
+            assert existing is not None
+            return existing
+
+    def update_knowledge_base(self, kb_id: str, **changes: Any) -> dict[str, Any] | None:
+        allowed = {"name", "description"}
+        with session_scope() as session:
+            row = session.scalar(
+                select(KnowledgeBase).where(
+                    KnowledgeBase.tenant_id == tenant_id(),
+                    KnowledgeBase.id == kb_id,
+                )
+            )
+            if row is None:
+                return None
+            for key, value in changes.items():
+                if key in allowed:
+                    setattr(row, key, value)
+            row.updated_at = time.time()
+            session.flush()
+            return _knowledge_base_dict(row)
+
+    def delete_knowledge_base(self, kb_id: str) -> list[dict[str, Any]] | None:
+        """Delete a base and ALL its documents/chunks/jobs (DB side).
+
+        Returns the deleted documents (caller needs file_path / doc ids to
+        clean disk + ES/Milvus), or None if the base does not exist.
+        """
+        with session_scope() as session:
+            base = session.scalar(
+                select(KnowledgeBase).where(
+                    KnowledgeBase.tenant_id == tenant_id(),
+                    KnowledgeBase.id == kb_id,
+                )
+            )
+            if base is None:
+                return None
+            docs = session.scalars(
+                select(KnowledgeDocument).where(
+                    KnowledgeDocument.tenant_id == tenant_id(),
+                    KnowledgeDocument.kb_id == kb_id,
+                )
+            ).all()
+            deleted = [_knowledge_document_dict(doc) for doc in docs]
+            doc_ids = [doc.id for doc in docs]
+            if doc_ids:
+                session.execute(
+                    delete(KnowledgeChunk).where(
+                        KnowledgeChunk.tenant_id == tenant_id(),
+                        KnowledgeChunk.doc_id.in_(doc_ids),
+                    )
+                )
+                session.execute(
+                    delete(KnowledgeJob).where(
+                        KnowledgeJob.tenant_id == tenant_id(),
+                        KnowledgeJob.doc_id.in_(doc_ids),
+                    )
+                )
+                session.execute(
+                    delete(KnowledgeDocument).where(
+                        KnowledgeDocument.tenant_id == tenant_id(),
+                        KnowledgeDocument.id.in_(doc_ids),
+                    )
+                )
+            session.delete(base)
+            return deleted
 
     def create_knowledge_document(
         self,
         *,
+        kb_id: str,
         uploader_id: str,
         title: str,
         file_name: str,
@@ -1970,23 +2119,36 @@ class StorageRepository:
         size_bytes: int,
         file_path: str,
     ) -> dict[str, Any]:
+        """Step ②: store an uploaded file. Status stays ``uploaded`` — parsing
+        only starts when an admin explicitly enqueues the document (step ③)."""
         now = time.time()
         row = KnowledgeDocument(
             id=str(uuid.uuid4()),
             tenant_id=tenant_id(),
+            kb_id=kb_id,
             uploader_id=uploader_id,
             title=title,
             file_name=file_name,
             file_ext=file_ext,
             size_bytes=size_bytes,
             file_path=file_path,
-            status="pending",
+            status="uploaded",
             chunk_count=0,
             retry_count=0,
             created_at=now,
             updated_at=now,
         )
         with session_scope() as session:
+            base = session.scalar(
+                select(KnowledgeBase).where(
+                    KnowledgeBase.tenant_id == tenant_id(),
+                    KnowledgeBase.id == kb_id,
+                )
+            )
+            if base is None:
+                raise ValueError(f"knowledge base not found: {kb_id}")
+            base.doc_count += 1
+            base.updated_at = now
             session.add(row)
         return _knowledge_document_dict(row)
 
@@ -2003,11 +2165,14 @@ class StorageRepository:
     def list_knowledge_documents(
         self,
         *,
+        kb_id: str | None = None,
         status: str | None = None,
         limit: int = 200,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
         query = select(KnowledgeDocument).where(KnowledgeDocument.tenant_id == tenant_id())
+        if kb_id is not None:
+            query = query.where(KnowledgeDocument.kb_id == kb_id)
         if status is not None:
             query = query.where(KnowledgeDocument.status == status)
         query = query.order_by(
@@ -2056,7 +2221,15 @@ class StorageRepository:
     def delete_knowledge_document(self, doc_id: str) -> bool:
         """Delete a document and its chunks (the DB side; ES/Milvus/disk are the caller's job)."""
         with session_scope() as session:
-            session.execute(
+            doc = session.scalar(
+                select(KnowledgeDocument).where(
+                    KnowledgeDocument.tenant_id == tenant_id(),
+                    KnowledgeDocument.id == doc_id,
+                )
+            )
+            if doc is None:
+                return False
+            chunk_rows = session.execute(
                 delete(KnowledgeChunk).where(
                     KnowledgeChunk.tenant_id == tenant_id(),
                     KnowledgeChunk.doc_id == doc_id,
@@ -2068,21 +2241,38 @@ class StorageRepository:
                     KnowledgeJob.doc_id == doc_id,
                 )
             )
-            result = session.execute(
-                delete(KnowledgeDocument).where(
-                    KnowledgeDocument.tenant_id == tenant_id(),
-                    KnowledgeDocument.id == doc_id,
+            base = session.scalar(
+                select(KnowledgeBase).where(
+                    KnowledgeBase.tenant_id == tenant_id(),
+                    KnowledgeBase.id == doc.kb_id,
                 )
             )
-            return bool(result.rowcount)
+            if base is not None:
+                base.doc_count = max(0, base.doc_count - 1)
+                base.chunk_count = max(0, base.chunk_count - int(chunk_rows.rowcount or 0))
+                base.updated_at = time.time()
+            session.delete(doc)
+            return True
 
     def replace_knowledge_chunks(
         self, doc_id: str, doc_name: str, chunks: list[dict[str, Any]]
     ) -> int:
-        """Atomically replace all chunks of a document (idempotent re-parse)."""
+        """Atomically replace all chunks of a document (idempotent re-parse).
+
+        ``kb_id`` is denormalized onto each chunk (future per-base retrieval);
+        the base's chunk_count tracks the delta.
+        """
         now = time.time()
         with session_scope() as session:
-            session.execute(
+            doc = session.scalar(
+                select(KnowledgeDocument).where(
+                    KnowledgeDocument.tenant_id == tenant_id(),
+                    KnowledgeDocument.id == doc_id,
+                )
+            )
+            if doc is None:
+                raise ValueError(f"knowledge document not found: {doc_id}")
+            removed = session.execute(
                 delete(KnowledgeChunk).where(
                     KnowledgeChunk.tenant_id == tenant_id(),
                     KnowledgeChunk.doc_id == doc_id,
@@ -2093,6 +2283,7 @@ class StorageRepository:
                     KnowledgeChunk(
                         id=str(chunk.get("id") or uuid.uuid4()),
                         tenant_id=tenant_id(),
+                        kb_id=doc.kb_id,
                         doc_id=doc_id,
                         doc_name=doc_name,
                         chunk_title=chunk.get("chunk_title"),
@@ -2103,6 +2294,17 @@ class StorageRepository:
                         created_at=now,
                     )
                 )
+            base = session.scalar(
+                select(KnowledgeBase).where(
+                    KnowledgeBase.tenant_id == tenant_id(),
+                    KnowledgeBase.id == doc.kb_id,
+                )
+            )
+            if base is not None:
+                base.chunk_count = max(
+                    0, base.chunk_count - int(removed.rowcount or 0) + len(chunks)
+                )
+                base.updated_at = now
         return len(chunks)
 
     def list_knowledge_chunks(self, doc_id: str) -> list[dict[str, Any]]:

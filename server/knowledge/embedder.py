@@ -39,7 +39,17 @@ class Embedder:
         self.dim = dim
         from openai import OpenAI
 
-        self._client = OpenAI(base_url=base_url, api_key=api_key or "not-configured")
+        # embedding 端点是客户内网地址，绝不能走本机系统代理：httpx 默认
+        # trust_env=True，在 Windows 上会读注册表里的 IE 代理设置（且对
+        # ProxyOverride 的 192.168.* 通配符匹配不灵），把请求拐进本机代理
+        # 导致 502。显式 trust_env=False 保证直连。
+        import httpx
+
+        self._client = OpenAI(
+            base_url=base_url,
+            api_key=api_key or "not-configured",
+            http_client=httpx.Client(trust_env=False),
+        )
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         """Embed texts in batches, preserving order. Raises EmbedderError on mismatch."""

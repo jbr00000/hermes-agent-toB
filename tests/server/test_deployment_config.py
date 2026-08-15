@@ -101,6 +101,7 @@ knowledge:
     dim: 1024
     batch_size: 16
   chunk_size: 512
+  min_chunk_tokens: 80
   max_file_mb: 50
 """.strip(),
         encoding="utf-8",
@@ -118,4 +119,5 @@ knowledge:
     assert config.knowledge.embedding.batch_size == 16
     assert config.knowledge.chunk_size == 512
     assert config.knowledge.chunk_overlap == 64  # 未配置走默认
+    assert config.knowledge.min_chunk_tokens == 80
     assert config.knowledge.max_file_mb == 50

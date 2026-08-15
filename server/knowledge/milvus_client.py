@@ -118,6 +118,7 @@ def chunk_collection_fields(dim: int) -> list[Any]:
     FieldSchema, DataType = pymilvus.FieldSchema, pymilvus.DataType
     return [
         FieldSchema(name="id", dtype=DataType.VARCHAR, max_length=64, is_primary=True),
+        FieldSchema(name="kb_id", dtype=DataType.VARCHAR, max_length=64),
         FieldSchema(name="doc_id", dtype=DataType.VARCHAR, max_length=64),
         FieldSchema(name="chunk_title", dtype=DataType.VARCHAR, max_length=1024),
         FieldSchema(name="content", dtype=DataType.VARCHAR, max_length=8192),

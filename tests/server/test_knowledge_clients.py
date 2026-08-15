@@ -275,3 +275,22 @@ def test_embedder_endpoint_failure_raises(monkeypatch) -> None:
     embedder = Embedder(base_url="http://x/v1", model="m", dim=1)
     with pytest.raises(EmbedderError, match="embedding 端点调用失败"):
         embedder.embed(["a"])
+
+
+def test_embedder_http_client_bypasses_system_proxy(monkeypatch) -> None:
+    """embedding 端点是客户内网地址，必须 trust_env=False：httpx 默认 True，
+    在 Windows 上会读注册表 IE 系统代理（Clash 之类），把内网请求拐进本机
+    代理 → 502。"""
+    import openai
+
+    captured: dict = {}
+    monkeypatch.setattr(
+        openai,
+        "OpenAI",
+        lambda **kw: captured.update(kw) or types.SimpleNamespace(embeddings=_FakeEmbeddings(4)),
+    )
+    Embedder(base_url="http://llm-gw.internal/v1", model="bge-m3", dim=4)
+
+    http_client = captured.get("http_client")
+    assert http_client is not None, "Embedder 必须显式传 http_client"
+    assert http_client._trust_env is False

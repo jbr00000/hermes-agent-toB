@@ -1,4 +1,4 @@
-export type TabType = 'agent' | 'chat' | 'knowledgeBase' | 'document' | 'memory' | 'users' | 'security' | 'audit'
+export type TabType = 'agent' | 'chat' | 'knowledgeBase' | 'knowledgeBaseDetail' | 'document' | 'memory' | 'users' | 'security' | 'audit'
 
 export type WorkspaceMode = 'agent' | 'chat'
 
@@ -167,11 +167,24 @@ export interface KnowledgeSpace {
   documents: number
 }
 
-export type KnowledgeDocumentStatus = 'pending' | 'parsing' | 'syncing' | 'ready' | 'failed'
+/** 知识库实体 —— 三步流程的步骤①：先建库，再往库里传文档，最后选文档解析 */
+export interface KnowledgeBase {
+  id: string
+  name: string
+  description: string | null
+  docCount: number
+  chunkCount: number
+  createdAt: number
+  updatedAt: number
+}
 
-/** 对齐 server/routes/knowledge.py 的 document 序列化（企业统一知识库） */
+/** uploaded = 已上传待解析（上传与解析已解耦，需显式触发解析才会进入构建流水线） */
+export type KnowledgeDocumentStatus = 'uploaded' | 'pending' | 'parsing' | 'syncing' | 'ready' | 'failed'
+
+/** 对齐 server/routes/knowledge.py 的 document 序列化（企业知识库） */
 export interface KnowledgeDocument {
   id: string
+  kbId: string
   title: string
   fileName: string
   fileExt: string
@@ -189,6 +202,7 @@ export interface KnowledgeDocument {
 
 export interface KnowledgeChunk {
   id: string
+  kbId: string
   docId: string
   docName: string
   chunkTitle: string

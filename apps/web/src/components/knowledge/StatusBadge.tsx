@@ -3,6 +3,7 @@ import type { KnowledgeDocumentStatus } from '../../types'
 import { Badge, cn } from '../ui'
 
 const STATUS_TEXT: Record<KnowledgeDocumentStatus, string> = {
+  uploaded: '待解析',
   pending: '排队中',
   parsing: '解析中',
   syncing: '入库中',
@@ -11,6 +12,7 @@ const STATUS_TEXT: Record<KnowledgeDocumentStatus, string> = {
 }
 
 const STATUS_TONE: Record<KnowledgeDocumentStatus, string> = {
+  uploaded: 'bg-amber-50 text-amber-700',
   pending: 'bg-zinc-100 text-zinc-600',
   parsing: 'bg-sky-50 text-info',
   syncing: 'bg-sky-50 text-info',

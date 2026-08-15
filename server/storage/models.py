@@ -287,27 +287,62 @@ class AuditEvent(Base):
     created_at: Mapped[float] = mapped_column(Double, nullable=False)
 
 
-class KnowledgeDocument(Base):
-    """One uploaded file in the enterprise knowledge base.
+# Name of the base that legacy (pre-multi-base) documents are migrated into;
+# also lazily created when an upload targets a tenant with no bases at all.
+DEFAULT_KB_NAME = "默认知识库"
 
-    Status machine: pending → parsing → syncing → ready / failed.
+
+class KnowledgeBase(Base):
+    """A named knowledge base — step ① of the build flow.
+
+    Documents are uploaded into a base (step ②, status=uploaded) and only
+    parsed when an admin explicitly selects them (step ③). doc_count /
+    chunk_count are denormalized counters maintained by the repository.
+    """
+
+    __tablename__ = "knowledge_bases"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "name", name="uq_knowledge_bases_tenant_name"),
+        Index("idx_knowledge_bases_tenant_updated", "tenant_id", "updated_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    # Migration-created default bases have no creator → nullable.
+    creator_id: Mapped[str | None] = mapped_column(String(36))
+    doc_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[float] = mapped_column(Double, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Double, nullable=False)
+
+
+class KnowledgeDocument(Base):
+    """One uploaded file in a knowledge base.
+
+    Status machine: uploaded → pending → parsing → syncing → ready / failed.
+    ``uploaded`` means the file is stored but not yet queued for parsing
+    (upload and parse are decoupled; admins pick documents to parse).
     MySQL is the source of truth; ES/Milvus are projections rebuilt from chunks.
     """
 
     __tablename__ = "knowledge_documents"
     __table_args__ = (
         Index("idx_knowledge_docs_tenant_updated", "tenant_id", "updated_at"),
+        Index("idx_knowledge_docs_kb", "kb_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    kb_id: Mapped[str] = mapped_column(String(36), nullable=False)
     uploader_id: Mapped[str] = mapped_column(String(36), nullable=False)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     file_name: Mapped[str] = mapped_column(String(255), nullable=False)
     file_ext: Mapped[str] = mapped_column(String(16), nullable=False)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     file_path: Mapped[str] = mapped_column(String(1024), nullable=False)
-    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="uploaded")
     error: Mapped[str | None] = mapped_column(Text)
     parser: Mapped[str | None] = mapped_column(String(16))
     chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -324,10 +359,13 @@ class KnowledgeChunk(Base):
     __table_args__ = (
         UniqueConstraint("doc_id", "doc_pos", name="uq_knowledge_chunks_doc_pos"),
         Index("idx_knowledge_chunks_tenant_doc", "tenant_id", "doc_id"),
+        Index("idx_knowledge_chunks_kb", "kb_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Denormalized from the document for future per-base retrieval filtering.
+    kb_id: Mapped[str] = mapped_column(String(36), nullable=False)
     doc_id: Mapped[str] = mapped_column(String(36), nullable=False)
     doc_name: Mapped[str] = mapped_column(String(255), nullable=False)
     chunk_title: Mapped[str | None] = mapped_column(String(512))

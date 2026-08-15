@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
 import threading
+import time
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
@@ -11,7 +14,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from hermes_constants import get_hermes_home
 
-from .models import Base
+from .models import DEFAULT_KB_NAME, Base
 
 _lock = threading.Lock()
 _engine: Engine | None = None
@@ -72,6 +75,97 @@ def session_scope() -> Iterator[Session]:
 
 def init_database() -> None:
     Base.metadata.create_all(get_engine())
+    _ensure_added_columns(get_engine())
+    _ensure_knowledge_kb_ids(get_engine())
+
+
+# Columns added after the table first shipped. ``create_all`` never alters
+# existing tables, so the SQLite zero-config path needs this table-driven
+# shim; MySQL deployments instead advance through Alembic (auditable).
+# Each entry: (table, column, DDL type, backfill JSON value or None).
+_ADDED_COLUMNS: tuple[tuple[str, str, str, dict | None], ...] = (
+    ("knowledge_documents", "kb_id", "VARCHAR(36)", None),
+    ("knowledge_chunks", "kb_id", "VARCHAR(36)", None),
+)
+
+
+def _ensure_added_columns(engine: Engine) -> None:
+    """Add post-hoc columns on SQLite and backfill them. Idempotent."""
+    if not engine.url.get_backend_name().startswith("sqlite"):
+        return
+    with engine.begin() as conn:
+        for table, column, ddl, backfill in _ADDED_COLUMNS:
+            exists = conn.execute(
+                text("SELECT 1 FROM sqlite_master WHERE type='table' AND name=:t"),
+                {"t": table},
+            ).scalar()
+            if not exists:
+                continue
+            cols = {row[1] for row in conn.execute(text(f"PRAGMA table_info({table})"))}
+            if column in cols:
+                continue
+            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+            if backfill is not None:
+                conn.execute(
+                    text(f"UPDATE {table} SET {column} = :v WHERE {column} IS NULL"),
+                    {"v": json.dumps(backfill)},
+                )
+
+
+def _ensure_knowledge_kb_ids(engine: Engine) -> None:
+    """Backfill kb_id on legacy knowledge rows (SQLite path). Idempotent.
+
+    Mirrors the Alembic data migration for MySQL: every tenant with documents
+    but no knowledge base gets a default base, and documents/chunks pointing
+    at nothing are attached to it. Fresh databases have no NULL kb_id rows,
+    so this is a no-op there.
+    """
+    if not engine.url.get_backend_name().startswith("sqlite"):
+        return
+    with engine.begin() as conn:
+        if not conn.execute(
+            text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='knowledge_bases'")
+        ).scalar():
+            return
+        tenant_rows = conn.execute(
+            text("SELECT DISTINCT tenant_id FROM knowledge_documents "
+                 "WHERE kb_id IS NULL OR kb_id = ''")
+        ).fetchall()
+        now = time.time()
+        for (tenant_id,) in tenant_rows:
+            kb_id = conn.execute(
+                text("SELECT id FROM knowledge_bases WHERE tenant_id = :t AND name = :n"),
+                {"t": tenant_id, "n": DEFAULT_KB_NAME},
+            ).scalar()
+            if kb_id is None:
+                kb_id = uuid.uuid4().hex
+                conn.execute(
+                    text("INSERT INTO knowledge_bases "
+                         "(id, tenant_id, name, description, creator_id, doc_count, "
+                         " chunk_count, created_at, updated_at) "
+                         "VALUES (:id, :t, :n, NULL, NULL, 0, 0, :now, :now)"),
+                    {"id": kb_id, "t": tenant_id, "n": DEFAULT_KB_NAME, "now": now},
+                )
+            conn.execute(
+                text("UPDATE knowledge_documents SET kb_id = :kb "
+                     "WHERE tenant_id = :t AND (kb_id IS NULL OR kb_id = '')"),
+                {"kb": kb_id, "t": tenant_id},
+            )
+        # Chunks follow their document (denormalized copy).
+        conn.execute(
+            text("UPDATE knowledge_chunks SET kb_id = ("
+                 "  SELECT d.kb_id FROM knowledge_documents d"
+                 "  WHERE d.id = knowledge_chunks.doc_id) "
+                 "WHERE kb_id IS NULL OR kb_id = ''")
+        )
+        # 计数与现状对齐（之后由 repository 增量维护）。
+        conn.execute(
+            text("UPDATE knowledge_bases SET "
+                 "doc_count = (SELECT COUNT(*) FROM knowledge_documents d "
+                 "              WHERE d.kb_id = knowledge_bases.id), "
+                 "chunk_count = (SELECT COUNT(*) FROM knowledge_chunks c "
+                 "                WHERE c.kb_id = knowledge_bases.id)")
+        )
 
 
 def database_health() -> bool:

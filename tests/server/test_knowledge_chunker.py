@@ -79,6 +79,25 @@ def test_chunker_merges_short_tail_into_previous() -> None:
     assert all(count_tokens(c.content) >= 10 for c in chunks)
 
 
+def test_chunker_min_tail_tokens_configurable() -> None:
+    # 用标题把短尾隔成独立 section，保证它分块后一定是单独的块（而非被尺寸打包吸走）
+    content_list = [
+        _text_item("这是第一节的正文内容，长度足够独立成块不会被合并掉。" * 3),
+        _text_item("第二节", level=1),
+        _text_item("短尾。"),
+    ]
+
+    # min_tail_tokens=0 关闭合并："短尾。" 作为第二节的块独立存活
+    chunks = chunk_document(content_list, chunk_size=200, chunk_overlap=0, min_tail_tokens=0)
+    assert chunks[-1].content == "短尾。"
+    assert chunks[-1].chunk_title == "第二节"
+
+    # 默认 50 时同一输入的短尾被并掉（行为不随新参数回归）
+    merged = chunk_document(content_list, chunk_size=200, chunk_overlap=0)
+    assert len(merged) == len(chunks) - 1
+    assert merged[-1].content.endswith("短尾。")
+
+
 def test_chunker_table_whole_block_and_oversized_row_split() -> None:
     header = "<tr><td>型号</td><td>功率</td></tr>"
     rows = "".join(f"<tr><td>H{i:03d}</td><td>{i}kW</td></tr>" for i in range(5))

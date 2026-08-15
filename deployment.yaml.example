@@ -31,7 +31,10 @@ features:
 # 内网自部署服务；密钥（embedding api key / ES 密码）只放 $HERMES_HOME/.env。
 knowledge:
   enabled: false
-  mineru_url: http://gpu-server:18888        # 客户 GPU 服务器上的 MinerU API
+  mineru_url: http://gpu-server:18888        # 客户 GPU 服务器上的 MinerU
+  # api = MinerU FastAPI 封装（POST /file_parse）；vlm = vLLM 裸起的
+  # MinerU2.5 模型服务（OpenAI 兼容），由 mineru-vl-utils 客户端驱动
+  mineru_mode: api
   es_url: http://elasticsearch:19200         # compose knowledge profile 内网地址
   milvus_uri: http://milvus:19530
   embedding:
@@ -42,4 +45,16 @@ knowledge:
     batch_size: 32
   chunk_size: 400
   chunk_overlap: 64
+  # 短于此 token 数的尾块并入前一块（两种 chunk_mode 共用，表格块除外）；
+  # 调大可减少碎片小块，调 0/缺省则保持默认 50
+  min_chunk_tokens: 50
+  # structural（默认）= 结构+token 递归切，零额外消耗；
+  # semantic = 句级 embedding 相似度找话题切换点（分块时多一轮 embedding 调用，
+  # 复用上面的 embedding 端点；参数缺省对齐 chonkie SemanticChunker）
+  chunk_mode: structural
+  # semantic:
+  #   threshold: 0.8                # 极小值分位数阈值，越小切得越保守
+  #   similarity_window: 3          # 衡量"下一句"时回看几句
+  #   min_sentences_per_chunk: 1    # 两个切点的最小句距
+  #   min_characters_per_sentence: 24
   max_file_mb: 100

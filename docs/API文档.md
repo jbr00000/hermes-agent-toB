@@ -324,16 +324,50 @@ Agent 模式必须通过任务接口进入。服务端持久化任务、运行�
 
 ### 3.9 知识库 Knowledge
 
-企业统一知识库（构建链路见 [`知识库构建方案.md`](知识库构建方案.md)）。`deployment.yaml` 里 `knowledge.enabled=false`（缺省）时**整组路由 404**，前端据此显示"当前部署未启用知识库"。
+企业知识库，按「知识库（base）→ 文档 → 分块」三级组织，使用分三步：**① 新建知识库 → ② 往库里上传文档（只落盘，不解析）→ ③ 勾选文档批量触发解析**（构建链路见 [`知识库构建方案.md`](知识库构建方案.md)）。`deployment.yaml` 里 `knowledge.enabled=false`（缺省）时**整组路由 404**，前端据此显示"当前部署未启用知识库"。
 
-文档状态机：`pending → parsing → syncing → ready / failed`。上传是异步的——202 立即返回，前端轮询 `GET /knowledge/documents`（构建中有文档时 3s 一次）直到全部终态。
+所有**写操作（建库/改库/删库/上传/解析/删除/重试）仅 admin**；所有读操作普通用户可用。
 
-#### `GET /knowledge/documents?status=&limit=&offset=`
-文档列表 + 汇总。**需登录（普通用户可读）。** `status` 可选过滤（`pending/parsing/syncing/ready/failed`）。
+文档状态机：`uploaded → pending → parsing → syncing → ready / failed`。`uploaded` 是上传后的静止态（待解析），只有显式调用 parse/retry 才会置为 `pending` 并入队；构建是异步的——202 立即返回，前端轮询 `GET /knowledge/documents`（构建中有文档时 3s 一次）直到全部终态。存量部署升级时，旧文档自动回填进按租户创建的「默认知识库」。
+
+#### `GET /knowledge/bases`
+知识库列表。**需登录（普通用户可读）。**
+```json
+// 响应 200
+{ "bases": [
+    { "id": "kb-uuid", "name": "运维规范", "description": "…",
+      "doc_count": 12, "chunk_count": 860, "created_at": 1783…, "updated_at": 1783… }
+  ] }
+```
+
+#### `POST /knowledge/bases`（仅 admin）
+新建知识库。Body：`{ "name": "运维规范", "description": "可选" }`。
+```json
+// 响应 201
+{ "base": { "id": "kb-uuid", "name": "运维规范", … } }
+// 409 同名知识库已存在（同一租户内 name 唯一）
+```
+
+#### `PATCH /knowledge/bases/{kb_id}`（仅 admin）
+改名/描述。Body：`{ "name": "可选", "description": "可选" }`（至少一个字段）。
+```json
+// 响应 200 → { "base": { … } }
+// 400 没有需要更新的字段；404 不存在；409 名称冲突
+```
+
+#### `DELETE /knowledge/bases/{kb_id}`（仅 admin）
+删除知识库并**级联删除**库内全部文档：清 ES/Milvus 投影 → 删本地文件 → 删 MySQL 行。
+```json
+// 响应 200
+{ "deleted": "kb-uuid", "documents": 12 }
+```
+
+#### `GET /knowledge/documents?status=&kb_id=&limit=&offset=`
+文档列表 + 汇总。**需登录（普通用户可读）。** `status` 可选过滤（`uploaded/pending/parsing/syncing/ready/failed`）；`kb_id` 可选按库过滤。聊天页的知识引用列表用 `status=ready` 取全库可检索文档。
 ```json
 // 响应 200
 { "documents": [
-    { "id": "doc-uuid", "title": "费用测算办法", "file_name": "费用测算办法.pdf",
+    { "id": "doc-uuid", "kb_id": "kb-uuid", "title": "费用测算办法", "file_name": "费用测算办法.pdf",
       "file_ext": ".pdf", "size_bytes": 831022, "status": "ready",
       "error": null, "parser": "mineru", "chunk_count": 64, "retry_count": 0,
       "uploader_id": "...", "created_at": 1783…, "updated_at": 1783…, "finished_at": 1783… }
@@ -345,7 +379,7 @@ Agent 模式必须通过任务接口进入。服务端持久化任务、运行�
 单个文档详情。**需登录。**
 ```json
 // 响应 200
-{ "document": { "id": "…", "status": "parsing", … } }
+{ "document": { "id": "…", "kb_id": "…", "status": "parsing", … } }
 // 404 文档不存在
 ```
 
@@ -354,20 +388,29 @@ Agent 模式必须通过任务接口进入。服务端持久化任务、运行�
 ```json
 // 响应 200
 { "chunks": [
-    { "id": "chunk-uuid", "doc_id": "…", "doc_name": "费用测算办法",
+    { "id": "chunk-uuid", "kb_id": "kb-uuid", "doc_id": "…", "doc_name": "费用测算办法",
       "chunk_title": "第三章 / 费用构成", "content": "……", "doc_pos": 0,
       "token_num": 387, "is_use": true }
   ] }
 ```
 
-#### `POST /knowledge/documents`（仅 admin，multipart）
-上传并触发异步构建。**需 admin token。** `Content-Type: multipart/form-data`，字段：`file`（文件）、`title`（可选，缺省用文件名去扩展名）。
+#### `POST /knowledge/bases/{kb_id}/documents`（仅 admin，multipart）
+上传文档到指定知识库——**只建 `uploaded` 文档，不触发解析**（步骤②）。**需 admin token。** `Content-Type: multipart/form-data`，字段：`file`（文件）、`title`（可选，缺省用文件名去扩展名）。
 
 支持格式：`.pdf .doc .docx .ppt .pptx .xls .xlsx .txt .md`；大小上限 `knowledge.max_file_mb`（默认 100MB）。
 ```json
 // 响应 202
-{ "document": { "id": "doc-uuid", "status": "pending", … }, "job_id": "job-uuid" }
-// 400 格式不支持/空文件；413 超大小；503 队列不可用（无 Redis 且未开内嵌 worker）
+{ "document": { "id": "doc-uuid", "kb_id": "kb-uuid", "status": "uploaded", … } }
+// 400 格式不支持/空文件；404 知识库不存在；413 超大小
+```
+
+#### `POST /knowledge/documents/parse`（仅 admin）
+批量触发解析（步骤③）。Body：`{ "document_ids": ["doc-uuid", …] }`。对 `uploaded`/`failed` 状态的文档逐个置 `pending` 并入队；其他状态（构建中/已就绪）跳过。
+```json
+// 响应 202
+{ "queued": [{ "id": "doc-uuid", "job_id": "job-uuid" }],
+  "skipped": [{ "id": "doc-uuid", "reason": "状态 ready 不可解析" }] }
+// 503 队列不可用（无 Redis 且未开内嵌 worker）
 ```
 
 #### `DELETE /knowledge/documents/{doc_id}`（仅 admin）
@@ -378,7 +421,7 @@ Agent 模式必须通过任务接口进入。服务端持久化任务、运行�
 ```
 
 #### `POST /knowledge/documents/{doc_id}/retry`（仅 admin）
-重新构建。仅 `failed`/`ready` 状态可重试。
+重新构建。仅 `failed`/`ready` 状态可重试（`retry_count` 递增）。
 ```json
 // 响应 202
 { "document_id": "doc-uuid", "job_id": "job-uuid" }

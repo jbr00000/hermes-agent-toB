@@ -6,6 +6,7 @@ import type {
   ChatMessage,
   ConversationDetail,
   ConversationSummary,
+  KnowledgeBase,
   KnowledgeChunk,
   KnowledgeDocument,
   KnowledgeStats,
@@ -151,8 +152,20 @@ interface BackendAuditEvent {
   created_at: number
 }
 
+interface BackendKnowledgeBase {
+  id: string
+  name: string
+  description: string | null
+  creator_id: string | null
+  doc_count: number
+  chunk_count: number
+  created_at: number
+  updated_at: number
+}
+
 interface BackendKnowledgeDocument {
   id: string
+  kb_id: string
   uploader_id: string
   title: string
   file_name: string
@@ -170,6 +183,7 @@ interface BackendKnowledgeDocument {
 
 interface BackendKnowledgeChunk {
   id: string
+  kb_id: string
   doc_id: string
   doc_name: string
   chunk_title: string | null
@@ -401,9 +415,22 @@ function toTaskSummary(row: BackendTaskSummary): SessionSummary {
   }
 }
 
+function toKnowledgeBase(row: BackendKnowledgeBase): KnowledgeBase {
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    docCount: row.doc_count,
+    chunkCount: row.chunk_count,
+    createdAt: row.created_at * 1000,
+    updatedAt: row.updated_at * 1000,
+  }
+}
+
 function toKnowledgeDocument(row: BackendKnowledgeDocument): KnowledgeDocument {
   return {
     id: row.id,
+    kbId: row.kb_id,
     title: row.title,
     fileName: row.file_name,
     fileExt: row.file_ext,
@@ -423,6 +450,7 @@ function toKnowledgeDocument(row: BackendKnowledgeDocument): KnowledgeDocument {
 function toKnowledgeChunk(row: BackendKnowledgeChunk): KnowledgeChunk {
   return {
     id: row.id,
+    kbId: row.kb_id,
     docId: row.doc_id,
     docName: row.doc_name,
     chunkTitle: row.chunk_title ?? '',
@@ -732,12 +760,50 @@ export const api = {
     return body.events.map(toAuditEvent)
   },
 
-  // ---------------------------------------------------------- 知识库（企业统一库）
+  // ------------------------------------------- 知识库（三步：建库 → 上传 → 选择解析）
+
+  async listKnowledgeBases(): Promise<KnowledgeBase[]> {
+    const response = await apiFetch('/knowledge/bases')
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as { bases: BackendKnowledgeBase[] }
+    return body.bases.map(toKnowledgeBase)
+  },
+
+  async createKnowledgeBase(name: string, description?: string): Promise<KnowledgeBase> {
+    const response = await apiFetch('/knowledge/bases', {
+      method: 'POST',
+      body: JSON.stringify({ name, description: description?.trim() || null }),
+    })
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as { base: BackendKnowledgeBase }
+    return toKnowledgeBase(body.base)
+  },
+
+  async renameKnowledgeBase(kbId: string, name: string, description?: string): Promise<KnowledgeBase> {
+    const response = await apiFetch(`/knowledge/bases/${encodeURIComponent(kbId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name, description: description?.trim() || null }),
+    })
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as { base: BackendKnowledgeBase }
+    return toKnowledgeBase(body.base)
+  },
+
+  async deleteKnowledgeBase(kbId: string): Promise<void> {
+    const response = await apiFetch(`/knowledge/bases/${encodeURIComponent(kbId)}`, {
+      method: 'DELETE',
+    })
+    if (!response.ok) throw await parseError(response)
+  },
 
   async listKnowledgeDocuments(
     status?: KnowledgeDocument['status'],
+    kbId?: string,
   ): Promise<{ documents: KnowledgeDocument[]; stats: KnowledgeStats }> {
-    const query = status ? `?status=${status}` : ''
+    const params = new URLSearchParams()
+    if (status) params.set('status', status)
+    if (kbId) params.set('kb_id', kbId)
+    const query = params.size > 0 ? `?${params.toString()}` : ''
     const response = await apiFetch(`/knowledge/documents${query}`)
     if (!response.ok) throw await parseError(response)
     const body = await response.json() as {
@@ -761,14 +827,32 @@ export const api = {
     return body.chunks.map(toKnowledgeChunk)
   },
 
-  async uploadKnowledgeDocument(file: File, title?: string): Promise<KnowledgeDocument> {
+  async uploadKnowledgeDocument(kbId: string, file: File, title?: string): Promise<KnowledgeDocument> {
     const form = new FormData()
     form.append('file', file)
     if (title?.trim()) form.append('title', title.trim())
-    const response = await apiFetch('/knowledge/documents', { method: 'POST', body: form })
+    const response = await apiFetch(
+      `/knowledge/bases/${encodeURIComponent(kbId)}/documents`,
+      { method: 'POST', body: form },
+    )
     if (!response.ok) throw await parseError(response)
-    const body = await response.json() as { document: BackendKnowledgeDocument; job_id: string }
+    const body = await response.json() as { document: BackendKnowledgeDocument }
     return toKnowledgeDocument(body.document)
+  },
+
+  /** 步骤③：批量把 uploaded/failed 文档入队解析；返回入队与跳过清单。 */
+  async parseKnowledgeDocuments(
+    documentIds: string[],
+  ): Promise<{ queued: { id: string; job_id: string }[]; skipped: { id: string; reason: string }[] }> {
+    const response = await apiFetch('/knowledge/documents/parse', {
+      method: 'POST',
+      body: JSON.stringify({ document_ids: documentIds }),
+    })
+    if (!response.ok) throw await parseError(response)
+    return response.json() as Promise<{
+      queued: { id: string; job_id: string }[]
+      skipped: { id: string; reason: string }[]
+    }>
   },
 
   async deleteKnowledgeDocument(docId: string): Promise<void> {

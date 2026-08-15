@@ -38,12 +38,18 @@ def _config(**overrides) -> KnowledgeDeploymentConfig:
     return KnowledgeDeploymentConfig(**values)
 
 
-def _make_md_document(repo, tmp_path, body: str) -> dict:
+@pytest.fixture()
+def kb(repo):
+    return repo.create_knowledge_base(name="规范库", creator_id="admin-1")
+
+
+def _make_md_document(repo, kb, tmp_path, body: str, *, status: str = "pending") -> dict:
     files_dir = tmp_path / "knowledge" / "files"
     files_dir.mkdir(parents=True, exist_ok=True)
     path = files_dir / "design.md"
     path.write_text(body, encoding="utf-8")
-    return repo.create_knowledge_document(
+    document = repo.create_knowledge_document(
+        kb_id=kb["id"],
         uploader_id="admin-1",
         title="设计规范",
         file_name="design.md",
@@ -51,19 +57,23 @@ def _make_md_document(repo, tmp_path, body: str) -> dict:
         size_bytes=path.stat().st_size,
         file_path=str(path),
     )
+    # 上传与解析已解耦：显式入队前文档是 uploaded；这里模拟 parse 接口的置位
+    if status != "uploaded":
+        repo.update_knowledge_document(document["id"], status=status)
+    return repo.get_knowledge_document(document["id"])
 
 
 _MD_BODY = "# 第一章 总则\n\n" + ("氢电系统设计需要遵循的基本准则与术语定义。" * 10) + "\n\n# 第二章 参数\n\n" + ("关键参数的选取方法与校核流程。" * 10)
 
 
-def test_pipeline_md_document_reaches_ready(repo, tmp_path, monkeypatch) -> None:
+def test_pipeline_md_document_reaches_ready(repo, kb, tmp_path, monkeypatch) -> None:
     from server.knowledge import pipeline
 
     synced: list[str] = []
     monkeypatch.setattr(
         pipeline, "synchronize_document", lambda doc_id, *, config=None: synced.append(doc_id) or 1
     )
-    document = _make_md_document(repo, tmp_path, _MD_BODY)
+    document = _make_md_document(repo, kb, tmp_path, _MD_BODY)
     job = {"job_id": "job-1", "doc_id": document["id"], "user_id": "admin-1"}
 
     assert pipeline.run_job(job, "worker-1", config=_config()) == "succeeded"
@@ -80,13 +90,13 @@ def test_pipeline_md_document_reaches_ready(repo, tmp_path, monkeypatch) -> None
     assert synced == [document["id"]]
 
 
-def test_pipeline_is_idempotent_on_rerun(repo, tmp_path, monkeypatch) -> None:
+def test_pipeline_is_idempotent_on_rerun(repo, kb, tmp_path, monkeypatch) -> None:
     from server.knowledge import pipeline
 
     monkeypatch.setattr(
         pipeline, "synchronize_document", lambda doc_id, *, config=None: 1
     )
-    document = _make_md_document(repo, tmp_path, _MD_BODY)
+    document = _make_md_document(repo, kb, tmp_path, _MD_BODY)
     job = {"job_id": "job-1", "doc_id": document["id"], "user_id": "admin-1"}
 
     pipeline.run_job(job, "worker-1", config=_config())
@@ -98,7 +108,7 @@ def test_pipeline_is_idempotent_on_rerun(repo, tmp_path, monkeypatch) -> None:
     assert [c["content"] for c in first] == [c["content"] for c in second]
 
 
-def test_pipeline_marks_failed_on_parse_error(repo, tmp_path, monkeypatch) -> None:
+def test_pipeline_marks_failed_on_parse_error(repo, kb, tmp_path, monkeypatch) -> None:
     from server.knowledge import pipeline
 
     # pdf 且未配置 mineru_url → ParseError
@@ -107,6 +117,7 @@ def test_pipeline_marks_failed_on_parse_error(repo, tmp_path, monkeypatch) -> No
     path = files_dir / "paper.pdf"
     path.write_bytes(b"%PDF fake")
     document = repo.create_knowledge_document(
+        kb_id=kb["id"],
         uploader_id="admin-1",
         title="论文",
         file_name="paper.pdf",
@@ -114,6 +125,7 @@ def test_pipeline_marks_failed_on_parse_error(repo, tmp_path, monkeypatch) -> No
         size_bytes=path.stat().st_size,
         file_path=str(path),
     )
+    repo.update_knowledge_document(document["id"], status="pending")
     job_row = repo.create_knowledge_job(doc_id=document["id"], user_id="admin-1")
     assert repo.list_stale_running_knowledge_jobs(time.time() + 1) == []  # queued ≠ running stale
 
@@ -136,6 +148,22 @@ def test_pipeline_failed_when_document_missing(repo) -> None:
     assert pipeline.run_job(job, "worker-1", config=_config()) == "failed"
 
 
+def test_pipeline_refuses_document_not_pending(repo, kb, tmp_path) -> None:
+    """uploaded 文档的 job 属于误入队：job 失败终结，文档状态保持 uploaded。"""
+    from server.knowledge import pipeline
+
+    document = _make_md_document(repo, kb, tmp_path, _MD_BODY, status="uploaded")
+    job_row = repo.create_knowledge_job(doc_id=document["id"], user_id="admin-1")
+    job = {"job_id": job_row["id"], "doc_id": document["id"], "user_id": "admin-1"}
+
+    assert pipeline.run_job(job, "worker-1", config=_config()) == "failed"
+
+    assert repo.get_knowledge_document(document["id"])["status"] == "uploaded"
+    assert repo.list_knowledge_chunks(document["id"]) == []
+    failed_job = repo.get_knowledge_job(job_row["id"])
+    assert failed_job["status"] == "failed"
+
+
 # ------------------------------------------------------------ sync_service
 
 
@@ -150,7 +178,7 @@ class _FakeEs:
         self.calls.append(("es.delete", field, value))
 
     def bulk_insert(self, index, docs, *, id_field=None):
-        self.calls.append(("es.bulk", [d["id"] for d in docs]))
+        self.calls.append(("es.bulk", [d["id"] for d in docs], docs))
         return {"success": len(docs), "failed": 0, "total": len(docs)}
 
 
@@ -165,7 +193,9 @@ class _FakeMilvus:
         self.calls.append(("milvus.create", name))
 
     def batch_insert_data(self, collection, rows, batch_size=1000):
-        self.calls.append(("milvus.insert", [r["id"] for r in rows], len(rows[0]["vector"])))
+        self.calls.append(
+            ("milvus.insert", [r["id"] for r in rows], len(rows[0]["vector"]), rows)
+        )
         return len(rows)
 
 
@@ -174,10 +204,10 @@ class _FakeEmbedder:
         return [[float(i)] * 4 for i, _ in enumerate(texts)]
 
 
-def test_sync_service_delete_then_write_both_engines(repo, tmp_path, monkeypatch) -> None:
+def test_sync_service_delete_then_write_both_engines(repo, kb, tmp_path, monkeypatch) -> None:
     from server.knowledge import sync_service
 
-    document = _make_md_document(repo, tmp_path, _MD_BODY)
+    document = _make_md_document(repo, kb, tmp_path, _MD_BODY)
     repo.replace_knowledge_chunks(
         document["id"],
         "design.md",
@@ -200,8 +230,11 @@ def test_sync_service_delete_then_write_both_engines(repo, tmp_path, monkeypatch
     assert kinds.index("milvus.delete") < kinds.index("milvus.insert")
     insert = next(c for c in calls if c[0] == "milvus.insert")
     assert insert[2] == 4  # 向量维度与配置一致
+    # 投影 payload 冗余 kb_id（后续按库检索过滤用）
+    assert {r["kb_id"] for r in insert[3]} == {kb["id"]}
     bulk = next(c for c in calls if c[0] == "es.bulk")
     assert len(bulk[1]) == 2
+    assert {d["kb_id"] for d in bulk[2]} == {kb["id"]}
 
     # 重跑幂等：再次 delete 先于再次 bulk
     calls.clear()
@@ -210,10 +243,11 @@ def test_sync_service_delete_then_write_both_engines(repo, tmp_path, monkeypatch
     assert kinds.index("es.delete") < kinds.index("es.bulk")
 
 
-def test_sync_service_empty_document_only_deletes(repo, monkeypatch) -> None:
+def test_sync_service_empty_document_only_deletes(repo, kb, monkeypatch) -> None:
     from server.knowledge import sync_service
 
     document = repo.create_knowledge_document(
+        kb_id=kb["id"],
         uploader_id="admin-1",
         title="空文档",
         file_name="empty.md",

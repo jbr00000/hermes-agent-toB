@@ -123,6 +123,10 @@ dependencies = [
   "tiktoken==0.13.0",
   "pymilvus==2.5.18",
   "openpyxl==3.1.5",
+  # mineru_mode=vlm: mineru-vl-utils drives a vLLM-served MinerU2.5 VLM over
+  # its OpenAI-compatible API; pymupdf renders PDF pages to images locally.
+  "mineru-vl-utils==1.2.1",
+  "pymupdf==1.28.2",
   "pywinpty>=2.0.0,<3; sys_platform == 'win32'",
   # Image resize recovery for the vision tools. Pillow shrinks oversized images
   # (>5 MB or >8000px) at embed time; without it the byte AND pixel-dimension

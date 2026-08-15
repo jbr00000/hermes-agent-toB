@@ -64,6 +64,7 @@ import { PetFloat } from './components/pet/PetFloat'
 import { Markdown } from './components/Markdown'
 import { Badge, DataTable, formatBytes, InfoRow, PageHeader, Td, Th } from './components/ui'
 import { KnowledgeBaseView } from './components/knowledge/KnowledgeBaseView'
+import { KnowledgeBaseListView } from './components/knowledge/KnowledgeBaseListView'
 import { DocumentDetailView } from './components/knowledge/DocumentDetailView'
 import {
   activeTabIdAtom,
@@ -109,6 +110,7 @@ function typeIcon(type: TabType): LucideIcon {
     case 'chat':
       return MessageSquareText
     case 'knowledgeBase':
+    case 'knowledgeBaseDetail':
       return Database
     case 'document':
       return FileText
@@ -775,7 +777,7 @@ function Sidebar({
         )}
 
         <NavGroup title="业务资源">
-          <NavButton active={activeTab?.type === 'knowledgeBase'} icon={Database} label="知识库" onClick={() => openTab('knowledgeBase', 'main', '知识库')} />
+          <NavButton active={activeTab?.type === 'knowledgeBase' || activeTab?.type === 'knowledgeBaseDetail' || activeTab?.type === 'document'} icon={Database} label="知识库" onClick={() => openTab('knowledgeBase', 'main', '知识库')} />
           <NavButton active={activeTab?.type === 'memory'} icon={Brain} label="记忆中心" onClick={() => openTab('memory', 'main', '记忆中心')} />
         </NavGroup>
 
@@ -1016,8 +1018,9 @@ function TabContent({
       />
     )
   }
-  if (tab.type === 'knowledgeBase') return <KnowledgeBaseView isAdmin={isAdmin} onOpenTab={onOpenTab} />
-  if (tab.type === 'document') return <DocumentDetailView documentId={tab.refId} />
+  if (tab.type === 'knowledgeBase') return <KnowledgeBaseListView isAdmin={isAdmin} onOpenTab={onOpenTab} />
+  if (tab.type === 'knowledgeBaseDetail') return <KnowledgeBaseView kbId={tab.refId} isAdmin={isAdmin} onOpenTab={onOpenTab} />
+  if (tab.type === 'document') return <DocumentDetailView documentId={tab.refId} onOpenTab={onOpenTab} />
   if (tab.type === 'memory') return <MemoryView />
   if (tab.type === 'users') return <UsersView />
   if (tab.type === 'security') return <SecurityView />

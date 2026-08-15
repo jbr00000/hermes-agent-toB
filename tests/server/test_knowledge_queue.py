@@ -99,6 +99,7 @@ def test_enqueue_api_embedded_worker_runs_pipeline(store, tmp_path, monkeypatch)
     path = files_dir / "doc.md"
     path.write_text("# 标题\n\n正文内容，足够长到不会被合并掉。" * 10, encoding="utf-8")
     document = repo.create_knowledge_document(
+        kb_id=repo.get_or_create_default_knowledge_base(creator_id="admin-1")["id"],
         uploader_id="admin-1",
         title="文档",
         file_name="doc.md",
@@ -106,6 +107,8 @@ def test_enqueue_api_embedded_worker_runs_pipeline(store, tmp_path, monkeypatch)
         size_bytes=path.stat().st_size,
         file_path=str(path),
     )
+    # 上传与解析已解耦：enqueue 前先由 parse/retry 入口置 pending（此处模拟）
+    repo.update_knowledge_document(document["id"], status="pending")
 
     job = queue.enqueue_knowledge_job(doc_id=document["id"], user_id="admin-1")
     assert job["status"] == "queued"

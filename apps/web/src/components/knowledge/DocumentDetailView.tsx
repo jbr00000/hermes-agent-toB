@@ -1,11 +1,18 @@
 import { useQuery } from '@tanstack/react-query'
-import { FileText } from 'lucide-react'
+import { ChevronRight, FileText } from 'lucide-react'
 import { api, ApiError } from '../../api'
+import type { TabType } from '../../types'
 import { formatBytes, InfoRow, PageHeader } from '../ui'
 import { StatusBadge } from './StatusBadge'
 
 /** 文档详情：元信息 + 分块预览（#/标题/token 数/内容截断）。 */
-export function DocumentDetailView({ documentId }: { documentId: string }) {
+export function DocumentDetailView({
+  documentId,
+  onOpenTab,
+}: {
+  documentId: string
+  onOpenTab: (type: TabType, refId: string, title: string) => void
+}) {
   const docQuery = useQuery({
     queryKey: ['knowledgeDocument', documentId],
     queryFn: () => api.getKnowledgeDocument(documentId),
@@ -20,8 +27,14 @@ export function DocumentDetailView({ documentId }: { documentId: string }) {
     queryFn: () => api.listKnowledgeChunks(documentId),
     retry: false,
   })
+  const basesQuery = useQuery({
+    queryKey: ['knowledgeBases'],
+    queryFn: () => api.listKnowledgeBases(),
+    retry: false,
+  })
   const doc = docQuery.data
   const chunks = chunksQuery.data ?? []
+  const base = doc ? basesQuery.data?.find((item) => item.id === doc.kbId) : undefined
 
   if (docQuery.isPending) {
     return <div className="p-8 text-sm text-zinc-400">加载中…</div>
@@ -39,6 +52,24 @@ export function DocumentDetailView({ documentId }: { documentId: string }) {
     <div className="flex h-full min-h-0 flex-col">
       <PageHeader icon={FileText} title={doc.title} subtitle={doc.fileName} />
       <div className="thin-scrollbar min-w-0 flex-1 overflow-y-auto p-6">
+        <div className="mb-4 flex items-center gap-1 text-xs text-zinc-500">
+          <button className="hover:text-info" onClick={() => onOpenTab('knowledgeBase', 'main', '知识库')}>
+            知识库
+          </button>
+          <ChevronRight size={12} className="text-zinc-300" />
+          {base ? (
+            <button
+              className="hover:text-info"
+              onClick={() => onOpenTab('knowledgeBaseDetail', base.id, base.name)}
+            >
+              {base.name}
+            </button>
+          ) : (
+            <span>所属知识库</span>
+          )}
+          <ChevronRight size={12} className="text-zinc-300" />
+          <span className="truncate text-zinc-700">{doc.title}</span>
+        </div>
         <div className="border-y border-line py-4">
           <div className="mb-3 flex items-center justify-between">
             <div className="text-sm font-semibold">构建状态</div>
