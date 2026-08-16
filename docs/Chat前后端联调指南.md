@@ -40,12 +40,18 @@ HERMES_AGENT_MAX_ATTEMPTS=3
 DEEPSEEK_API_KEY=<api-key>
 ```
 
-首次启动或模型表结构变化后，先执行迁移：
+首次启动必须执行迁移；之后**每次拉取到含新 Alembic 迁移的代码（`server/migrations/versions/` 出现新文件）都要先再跑一次，再重启服务**：
 
 ```powershell
 $env:HERMES_HOME = (Resolve-Path .hermes-dev).Path
 D:\Anaconda\envs\hermes\Scripts\alembic.exe upgrade head
 ```
+
+> 典型事故（2026-08 实际踩过）：代码给 `messages` 表加了 `metadata_json` 列但忘了跑迁移，
+> MySQL 直接报 `1054 Unknown column 'messages.metadata_json'`，表现为**问答请求 500、
+> 历史会话打不开**。补跑一次 `alembic upgrade head` 即可恢复，服务进程无需重启。
+> （SQLite 零配置路径有自动加列 shim；MySQL 路径按设计必须显式迁移，保证可审计。）
+> 一句话：拉代码后看到 versions/ 里有新文件 → 先迁移，再重启。
 
 生产和正常联调必须配置 Redis 并启动独立 `server.worker`。仅单进程开发测试可显式设置 `HERMES_ALLOW_EMBEDDED_AGENT_WORKER=1`；默认值为 `0`，避免部署时静默退化为进程内队列。
 
