@@ -94,6 +94,44 @@ class MilvusClient:
         collection.delete(expr=f'doc_id == "{escape_milvus_string(doc_id)}"')
         collection.flush()
 
+    def search(
+        self,
+        collection_name: str,
+        query_vector: list[float],
+        *,
+        topk: int,
+        kb_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """COSINE ANN search; returns [{id, doc_id, chunk_title, score}] (score 越大越相似).
+
+        Missing collection is treated as empty (nothing synced yet).
+        """
+        if not self.has_collection(collection_name):
+            return []
+        collection = self.get_collection(collection_name)
+        collection.load()
+        expr = f'kb_id == "{escape_milvus_string(kb_id)}"' if kb_id else None
+        results = collection.search(
+            data=[list(query_vector)],
+            anns_field="vector",
+            param={"metric_type": "COSINE"},
+            limit=topk,
+            output_fields=["id", "doc_id", "chunk_title"],
+            expr=expr,
+        )
+        hits: list[dict[str, Any]] = []
+        for hit in results[0] if results else []:
+            entity = getattr(hit, "entity", None)
+            hits.append(
+                {
+                    "id": str(hit.id),
+                    "doc_id": str(entity.get("doc_id") or "") if entity is not None else "",
+                    "chunk_title": str(entity.get("chunk_title") or "") if entity is not None else "",
+                    "score": float(hit.distance or 0.0),
+                }
+            )
+        return hits
+
     def drop_collection(self, collection_name: str) -> None:
         pymilvus = _pymilvus()
         if self.has_collection(collection_name):

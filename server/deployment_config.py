@@ -58,6 +58,21 @@ class SemanticChunkingConfig:
 
 
 @dataclass(frozen=True)
+class KnowledgeRetrievalConfig:
+    """Hybrid retrieval tuning (ES BM25 + Milvus vector → RRF+weighted fusion).
+
+    Defaults follow the reference project (lone-ai core/nlp/search.py):
+    ``final = 0.3*RRF + 0.7*(vector_weight*vector_norm + (1-vector_weight)*es_norm)``.
+    """
+
+    topk: int = 6  # 最终返回给模型的分块数
+    es_candidates: int = 30  # ES 路召回数（融合前）
+    vector_candidates: int = 30  # Milvus 路召回数（融合前）
+    rrf_k: int = 60  # RRF 常数
+    vector_weight: float = 0.6  # 加权融合中向量路权重（ES 路 = 1 - 该值）
+
+
+@dataclass(frozen=True)
 class KnowledgeDeploymentConfig:
     """Enterprise knowledge-base construction (parse → chunk → embed → ES/Milvus).
 
@@ -78,6 +93,7 @@ class KnowledgeDeploymentConfig:
     # semantic = 句级 embedding 相似度找话题切换点（分块时多一轮 embedding 调用）
     chunk_mode: str = "structural"
     semantic: SemanticChunkingConfig = field(default_factory=SemanticChunkingConfig)
+    retrieval: KnowledgeRetrievalConfig = field(default_factory=KnowledgeRetrievalConfig)
     chunk_size: int = 400
     chunk_overlap: int = 64
     min_chunk_tokens: int = 50  # 短于此 token 数的尾块并入前一块（表格块除外）
@@ -191,6 +207,7 @@ def load_deployment_config(path: str | os.PathLike[str] | None = None) -> Deploy
     data_permissions = _as_dict(raw.get("data_permissions"))
     embedding = _as_dict(knowledge.get("embedding"))
     semantic = _as_dict(knowledge.get("semantic"))
+    retrieval = _as_dict(knowledge.get("retrieval"))
     features = {"host_terminal": False}
     for key, value in _as_dict(raw.get("features")).items():
         if key in features:
@@ -245,6 +262,13 @@ def load_deployment_config(path: str | os.PathLike[str] | None = None) -> Deploy
                 filter_window=_positive_int(semantic.get("filter_window"), 5),
                 filter_polyorder=_positive_int(semantic.get("filter_polyorder"), 3),
                 filter_tolerance=_unit_float(semantic.get("filter_tolerance"), 0.2),
+            ),
+            retrieval=KnowledgeRetrievalConfig(
+                topk=_positive_int(retrieval.get("topk"), 6),
+                es_candidates=_positive_int(retrieval.get("es_candidates"), 30),
+                vector_candidates=_positive_int(retrieval.get("vector_candidates"), 30),
+                rrf_k=_positive_int(retrieval.get("rrf_k"), 60),
+                vector_weight=_unit_float(retrieval.get("vector_weight"), 0.6),
             ),
             chunk_size=_positive_int(knowledge.get("chunk_size"), 400),
             chunk_overlap=_positive_int(knowledge.get("chunk_overlap"), 64),

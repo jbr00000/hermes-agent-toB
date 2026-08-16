@@ -181,7 +181,16 @@ TOOLSETS = {
         "tools": ["db_query"],
         "includes": []
     },
-    
+
+    "knowledge": {
+        "description": (
+            "Hybrid search over the enterprise knowledge base (deployment-gated: "
+            "hidden unless knowledge.enabled + ES/Milvus/embedding are configured)"
+        ),
+        "tools": ["knowledge_search"],
+        "includes": []
+    },
+
     "memory": {
         "description": "Persistent memory across sessions (personal notes + user profile)",
         "tools": ["memory"],

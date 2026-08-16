@@ -2563,6 +2563,23 @@ class StorageRepository:
             )
             return _knowledge_chunk_dict(row) if row is not None else None
 
+    def get_knowledge_chunks_by_ids(self, chunk_ids: list[str]) -> list[dict[str, Any]]:
+        """Fetch chunks by id (retrieval hydration: MySQL is the source of truth).
+
+        Returns rows in the SAME order as ``chunk_ids``; unknown ids are skipped.
+        """
+        if not chunk_ids:
+            return []
+        with session_scope() as session:
+            rows = session.scalars(
+                select(KnowledgeChunk).where(
+                    KnowledgeChunk.tenant_id == tenant_id(),
+                    KnowledgeChunk.id.in_([str(cid) for cid in chunk_ids]),
+                )
+            ).all()
+            by_id = {row.id: _knowledge_chunk_dict(row) for row in rows}
+            return [by_id[cid] for cid in chunk_ids if cid in by_id]
+
     def update_knowledge_chunk(self, chunk_id: str, **changes: Any) -> dict[str, Any] | None:
         """White-list single-chunk update (manual correction / enable-toggle).
 

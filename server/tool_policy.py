@@ -31,15 +31,22 @@ def resolve_toolsets(
     "controlled" 受控写入：agent 拿到 terminal 工具集，但每条 terminal/process
     命令在执行前都要经 server.tool_gate 的 pre_tool_call 钩子等待用户在
     Web 上批准（运行中途 human-in-the-loop）。browser 仍属 full 专属。
+
+    "knowledge" 工具集（knowledge_search）是只读检索，chat/plan/execute 全
+    部放行——未配置知识库后端时 check_fn 会隐藏工具，加在这里是 no-op。
+    mode="knowledge"（知识库问答）是专用模式：只挂 knowledge 工具集，由
+    agent_factory 的 RAG prompt 约束"先检索、再作答、标引用"。
     """
     normalized_mode = (mode or "execute").strip().lower()
+    if normalized_mode == "knowledge":
+        return ["knowledge"]
     if normalized_mode in {"chat", "plan"}:
-        return ["db", "web"]
+        return ["db", "web", "knowledge"]
     if permission_mode == "full":
-        toolsets = ["db", "terminal", "web"]
+        toolsets = ["db", "terminal", "web", "knowledge"]
         if (features or {}).get("browser_automation"):
             toolsets.append("browser")
         return toolsets
     if permission_mode == "controlled":
-        return ["db", "terminal", "web"]
-    return ["db", "web"]
+        return ["db", "terminal", "web", "knowledge"]
+    return ["db", "web", "knowledge"]

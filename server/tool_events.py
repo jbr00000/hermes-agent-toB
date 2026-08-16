@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 ToolRiskLevel = Literal["read", "controlled_write", "high_risk", "unknown"]
 
-_READ_TOOLS = {"db_query"}
+_READ_TOOLS = {"db_query", "knowledge_search"}
 _HIGH_RISK_TOOLS = {"terminal", "process", "code_execution"}
 _CONTROLLED_WRITE_PREFIXES = ("write_", "create_", "update_", "delete_", "patch_")
 
