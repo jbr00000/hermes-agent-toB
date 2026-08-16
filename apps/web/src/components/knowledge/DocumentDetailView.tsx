@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronRight, Download, FileText, Pencil, RefreshCw, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Download, FileText, Pencil, RefreshCw, X } from 'lucide-react'
 import { api, ApiError } from '../../api'
 import type { KnowledgeChunk, TabType } from '../../types'
 import { Badge, cn, formatBytes, PageHeader, Toggle } from '../ui'
@@ -8,6 +8,7 @@ import { Markdown } from '../Markdown'
 import { StatusBadge } from './StatusBadge'
 
 /** 文档详情双栏视图：左栏分块卡片（admin 可编辑/启停），右栏原始文件预览。 */
+const CHUNK_PAGE_SIZE = 10
 export function DocumentDetailView({
   documentId,
   isAdmin,
@@ -46,6 +47,13 @@ export function DocumentDetailView({
   const fileExt = doc?.fileExt ?? ''
   // 上传落盘后任何状态都能预览原文；分块只有 ready 后才可编辑
   const canEdit = Boolean(isAdmin && doc?.status === 'ready')
+
+  // 分块前端分页：每页 10 块；换文档时回到第一页
+  const [page, setPage] = useState(1)
+  useEffect(() => setPage(1), [documentId])
+  const totalPages = Math.max(1, Math.ceil(chunks.length / CHUNK_PAGE_SIZE))
+  const currentPage = Math.min(page, totalPages)
+  const pagedChunks = chunks.slice((currentPage - 1) * CHUNK_PAGE_SIZE, currentPage * CHUNK_PAGE_SIZE)
 
   // 编辑态放组件本地 state（不从 query data 派生）：别的卡片 invalidate 不会冲掉草稿
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -248,7 +256,7 @@ export function DocumentDetailView({
               </div>
             ) : (
               <div className="space-y-3">
-                {chunks.map((chunk) =>
+                {pagedChunks.map((chunk) =>
                   editingId === chunk.id ? (
                     <article key={chunk.id} className="rounded-md border border-ink/30 bg-panel p-3">
                       <div className="mb-2 text-xs font-semibold text-zinc-700">块 {chunk.docPos + 1}（编辑中）</div>
@@ -304,6 +312,31 @@ export function DocumentDetailView({
               </div>
             )}
           </div>
+          {chunks.length > CHUNK_PAGE_SIZE && (
+            <footer className="flex items-center justify-between border-t border-line px-4 py-2">
+              <span className="text-xs text-zinc-400">
+                第 {currentPage} / {totalPages} 页
+              </span>
+              <div className="flex items-center gap-1">
+                <button
+                  className="flex h-7 items-center gap-0.5 rounded border border-line px-2 text-xs text-zinc-600 hover:bg-field disabled:cursor-not-allowed disabled:opacity-40"
+                  disabled={currentPage <= 1}
+                  onClick={() => setPage(currentPage - 1)}
+                >
+                  <ChevronLeft size={12} />
+                  上一页
+                </button>
+                <button
+                  className="flex h-7 items-center gap-0.5 rounded border border-line px-2 text-xs text-zinc-600 hover:bg-field disabled:cursor-not-allowed disabled:opacity-40"
+                  disabled={currentPage >= totalPages}
+                  onClick={() => setPage(currentPage + 1)}
+                >
+                  下一页
+                  <ChevronRight size={12} />
+                </button>
+              </div>
+            </footer>
+          )}
         </section>
 
         {/* 右：文档原始内容 */}
