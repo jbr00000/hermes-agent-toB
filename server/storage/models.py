@@ -100,6 +100,9 @@ class Message(Base):
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="completed")
     model_run_id: Mapped[str | None] = mapped_column(String(64), index=True)
     duration_ms: Mapped[int | None] = mapped_column(Integer)
+    # 结构化附件（如知识库问答的引用列表 citations），JSON 文本；
+    # 命名避开 SQLAlchemy 保留字 metadata
+    metadata_json: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[float] = mapped_column(Double, nullable=False)
 
 

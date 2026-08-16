@@ -201,6 +201,17 @@ def _knowledge_document_dict(row: KnowledgeDocument) -> dict[str, Any]:
     }
 
 
+def _parse_message_metadata(raw: str | None) -> dict[str, Any] | None:
+    """Decode Message.metadata_json; malformed payloads degrade to None."""
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 def _knowledge_chunk_dict(row: KnowledgeChunk) -> dict[str, Any]:
     return {
         "id": row.id,
@@ -1718,6 +1729,7 @@ class StorageRepository:
         status: str = "completed",
         model_run_id: str | None = None,
         duration_ms: int | None = None,
+        metadata: dict[str, Any] | None = None,
         created_at: float | None = None,
     ) -> dict[str, Any]:
         now = created_at or time.time()
@@ -1747,6 +1759,9 @@ class StorageRepository:
                 status=status,
                 model_run_id=model_run_id,
                 duration_ms=duration_ms,
+                metadata_json=(
+                    json.dumps(metadata, ensure_ascii=False) if metadata is not None else None
+                ),
                 created_at=now,
             )
             session.add(row)
@@ -1760,6 +1775,7 @@ class StorageRepository:
                 "status": status,
                 "model_run_id": model_run_id,
                 "duration_ms": duration_ms,
+                "metadata": metadata,
                 "timestamp": now,
                 "created_at": now,
                 "sequence_no": sequence,
@@ -1809,6 +1825,7 @@ class StorageRepository:
                     "status": row.status,
                     "model_run_id": row.model_run_id,
                     "duration_ms": row.duration_ms,
+                    "metadata": _parse_message_metadata(row.metadata_json),
                     "timestamp": row.created_at,
                     "created_at": row.created_at,
                     "sequence_no": row.sequence_no,

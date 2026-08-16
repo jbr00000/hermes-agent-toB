@@ -51,7 +51,7 @@ agent:
     assert captured["provider"] == "custom"
     assert captured["model"] == "llama-3.3"
     assert captured["reasoning_config"] == {"enabled": True, "effort": "low"}
-    assert captured["enabled_toolsets"] == ["db", "terminal", "web"]
+    assert captured["enabled_toolsets"] == ["db", "terminal", "web", "knowledge"]
     assert captured["tool_start_callback"] is callback
 
 
@@ -78,7 +78,7 @@ model: deepseek-v4-pro
 
     build_agent(session_id="s1", user_id="u1", mode="plan")
 
-    assert captured["enabled_toolsets"] == ["db", "web"]
+    assert captured["enabled_toolsets"] == ["db", "web", "knowledge"]
     assert "PLAN mode" in captured["ephemeral_system_prompt"]
     assert "Docker-sandboxed terminal" in captured["ephemeral_system_prompt"]
     assert "remember this" in captured["ephemeral_system_prompt"]
@@ -117,4 +117,4 @@ mcp_servers:
     build_agent(session_id="s1", user_id="u1", mode="execute")
 
     assert registered == []
-    assert captured["enabled_toolsets"] == ["db", "web"]
+    assert captured["enabled_toolsets"] == ["db", "web", "knowledge"]

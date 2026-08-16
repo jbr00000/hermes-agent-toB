@@ -30,6 +30,8 @@ class ChatRequest(BaseModel):
     request_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
     interaction_type: Literal["chat", "agent"] | None = None
     mode: Optional[str] = None
+    # 知识库问答模式（interaction_type=chat + mode=knowledge）可选的选库限定
+    kb_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
 
 
 _active_agents: dict[str, tuple[str, object]] = {}
@@ -63,6 +65,44 @@ def _agent_runtime_metadata(agent, mode: str | None) -> dict:
     }
 
 
+_CITATION_SNIPPET_CHARS = 200
+
+
+def _extract_citations(result: Any) -> list[dict[str, Any]]:
+    """Parse a knowledge_search tool result into citation cards (前端引用卡片).
+
+    Deterministic companion of the model's 【N】 markers: the model cites by
+    ``num``; the UI renders these cards regardless of what the model wrote.
+    """
+    parsed = result
+    if isinstance(result, str):
+        try:
+            parsed = json.loads(result)
+        except (TypeError, json.JSONDecodeError):
+            return []
+    if not isinstance(parsed, dict):
+        return []
+    chunks = parsed.get("chunks")
+    if not isinstance(chunks, list):
+        return []
+    citations: list[dict[str, Any]] = []
+    for chunk in chunks:
+        if not isinstance(chunk, dict):
+            continue
+        citations.append(
+            {
+                "num": chunk.get("num"),
+                "chunk_id": chunk.get("chunk_id"),
+                "doc_id": chunk.get("doc_id"),
+                "doc_name": chunk.get("doc_name") or "",
+                "chunk_title": chunk.get("chunk_title") or "",
+                "snippet": str(chunk.get("content") or "")[:_CITATION_SNIPPET_CHARS],
+                "score": chunk.get("score"),
+            }
+        )
+    return citations
+
+
 def _interrupt_local_agent(request_id: str, user_id: str) -> bool:
     with _active_agents_lock:
         active = _active_agents.get(request_id)
@@ -92,6 +132,28 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
             detail=f"feature '{required_feature}' is disabled for this user",
         )
 
+    # 知识库问答模式：chat 交互 + mode=knowledge（+ 可选 kb_id 选库限定）。
+    # 校验全部前置——被拒的请求不能留下任何存储副作用。
+    requested_knowledge_mode = (
+        interaction_type == "chat" and (req.mode or "").strip().lower() == "knowledge"
+    )
+    if req.kb_id and not requested_knowledge_mode:
+        raise HTTPException(status_code=400, detail="kb_id 仅知识库问答模式可用")
+    knowledge_base: dict[str, Any] | None = None
+    if requested_knowledge_mode:
+        if not auth.user_features(user).get("knowledge", True):
+            raise HTTPException(
+                status_code=403, detail="feature 'knowledge' is disabled for this user"
+            )
+        from server.deployment_config import load_deployment_config
+
+        if not load_deployment_config().knowledge.enabled:
+            raise HTTPException(status_code=409, detail="知识库未启用")
+        if req.kb_id:
+            knowledge_base = repository.get_knowledge_base(req.kb_id)
+            if knowledge_base is None:
+                raise HTTPException(status_code=404, detail="知识库不存在")
+
     if req.session_id:
         from server.sessions import assert_session_owned
 
@@ -110,8 +172,12 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
         )["id"]
 
     if interaction_type == "chat":
-        effective_mode = "chat"
-        mode_state = {"state": "chat", "tool_mode": "chat"}
+        if requested_knowledge_mode:
+            effective_mode = "knowledge"
+            mode_state = {"state": "knowledge", "tool_mode": "knowledge"}
+        else:
+            effective_mode = "chat"
+            mode_state = {"state": "chat", "tool_mode": "chat"}
     else:
         from server.sessions import resolve_chat_mode
 
@@ -128,7 +194,7 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
         if task is not None
         else {"mode": "read"}
     )
-    permission_mode = "read" if effective_mode in {"chat", "plan"} else permission["mode"]
+    permission_mode = "read" if effective_mode in {"chat", "plan", "knowledge"} else permission["mode"]
     sandbox_task_id = None
     if task is not None:
         from server.sandbox import task_sandbox_key
@@ -181,6 +247,8 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
     tool_statuses: dict[str, str] = {}
     tool_started_at: dict[str, float] = {}
     tool_status_lock = threading.Lock()
+    # knowledge_search 命中的分块 → 引用卡片（chunk_id 去重，保序；重复命中挪到末尾）
+    citations_by_chunk: dict[str, dict[str, Any]] = {}
 
     def emit(event: str, data: dict) -> int:
         nonlocal event_sequence
@@ -265,6 +333,23 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
                 "duration_ms": duration_ms,
             },
         )
+        # 引用产出与 emit_tool_event 无关（chat 模式下后者提前 return）：
+        # knowledge_search 一完成就推送当前累计的引用列表，前端流式渲染卡片。
+        if tool_name == "knowledge_search" and not failed:
+            for citation in _extract_citations(result):
+                chunk_id = str(citation.get("chunk_id") or "")
+                if not chunk_id:
+                    continue
+                citations_by_chunk.pop(chunk_id, None)
+                citations_by_chunk[chunk_id] = citation
+            if citations_by_chunk:
+                emit(
+                    "citations",
+                    {
+                        "chunks": list(citations_by_chunk.values()),
+                        "request_id": request_id,
+                    },
+                )
 
     def on_tool_progress(*args: Any, **kwargs: Any) -> None:
         event_name = str(args[0]) if args else "tool.progress"
@@ -348,6 +433,10 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
                 prefill_messages=history,
                 mode=effective_mode,
                 permission_mode=permission_mode,
+                knowledge_kb_id=knowledge_base["id"] if knowledge_base else None,
+                knowledge_kb_name=(
+                    str(knowledge_base.get("name") or "") if knowledge_base else None
+                ),
                 tool_progress_callback=on_tool_progress,
                 tool_start_callback=on_tool_start,
                 tool_complete_callback=on_tool_complete,
@@ -400,6 +489,11 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
                 status=assistant_status,
                 model_run_id=request_id,
                 duration_ms=duration_ms,
+                metadata=(
+                    {"citations": list(citations_by_chunk.values())}
+                    if citations_by_chunk
+                    else None
+                ),
             )
             if final and assistant_status == "completed":
                 # Users with the memory feature off should not silently

@@ -11,6 +11,8 @@ def build_agent(
     prefill_messages=None,
     mode: str = None,
     permission_mode: str = "read",
+    knowledge_kb_id: str | None = None,
+    knowledge_kb_name: str | None = None,
     tool_progress_callback=None,
     tool_start_callback=None,
     tool_complete_callback=None,
@@ -32,11 +34,15 @@ def build_agent(
     toolset + a system-prompt instructing it to produce a plan and NOT execute
     changes.
 
+    knowledge mode: 知识库问答。只挂 knowledge 工具集（tool_policy 决定），
+    此处注入 RAG 约束 prompt；``knowledge_kb_id`` 非空时把检索限定到该库
+    （prompt 钉住 + 工具侧校验 kb 存在；模型漏传时退化为全库检索）。
+
     Args:
         session_id: unique session id.
         user_id: authenticated user id.
         prefill_messages: prior turns (OpenAI format) for session resume.
-        mode: "chat" | "plan" | "execute" | None.
+        mode: "chat" | "knowledge" | "plan" | "execute" | None.
     """
     os.environ.setdefault("HERMES_HEADLESS", "1")
 
@@ -48,6 +54,7 @@ def build_agent(
 
     is_plan = mode == "plan"
     is_chat = mode == "chat"
+    is_knowledge = mode == "knowledge"
     features = get_features()
     runtime_config = load_runtime_config()
     # Extension tools remain disabled until each deployment tool declares a
@@ -87,6 +94,24 @@ def build_agent(
             "resources. If the request requires a side effect, explain that it must be "
             "continued as an Agent task."
         )
+    if is_knowledge:
+        parts.append(
+            "当前是知识库问答模式。规则：\n"
+            "1. 必须先用 knowledge_search 检索，再严格基于检索到的分块内容回答；"
+            "不得使用工具之外的自有知识补充事实。\n"
+            "2. 引用来源时在句末标注【N】，N 为工具返回结果中该分块的 num。"
+            "一个事实来自多个分块时可连标，如【1】【3】。\n"
+            "3. 检索结果为空或与问题不相关时，明确回答「知识库中未找到相关内容」，"
+            "不得编造。\n"
+            "4. 多个分块内容冲突时，指出差异并分别标注来源，不要擅自取舍。\n"
+            "5. 用中文回答，先给结论再给依据。"
+        )
+        if knowledge_kb_id:
+            label = knowledge_kb_name or knowledge_kb_id
+            parts.append(
+                f'用户选择了知识库「{label}」：调用 knowledge_search 时必须传 '
+                f'kb_id="{knowledge_kb_id}"，不要检索其他库。'
+            )
     ephemeral = "\n\n".join(parts) if parts else None
 
     return AIAgent(
