@@ -368,20 +368,6 @@ class StorageRepository:
                 or 0
             )
 
-    def get_oldest_active_admin(self) -> dict[str, Any] | None:
-        with session_scope() as session:
-            row = session.scalar(
-                select(User)
-                .where(
-                    User.tenant_id == tenant_id(),
-                    User.role == "admin",
-                    User.status == "active",
-                )
-                .order_by(User.created_at)
-                .limit(1)
-            )
-            return _user_dict(row) if row is not None else None
-
     def create_auth_session(
         self,
         user_id: str,
@@ -2566,6 +2552,56 @@ class StorageRepository:
                 .order_by(KnowledgeChunk.doc_pos)
             ).all()
             return [_knowledge_chunk_dict(row) for row in rows]
+
+    def get_knowledge_chunk(self, chunk_id: str) -> dict[str, Any] | None:
+        with session_scope() as session:
+            row = session.scalar(
+                select(KnowledgeChunk).where(
+                    KnowledgeChunk.tenant_id == tenant_id(),
+                    KnowledgeChunk.id == chunk_id,
+                )
+            )
+            return _knowledge_chunk_dict(row) if row is not None else None
+
+    def update_knowledge_chunk(self, chunk_id: str, **changes: Any) -> dict[str, Any] | None:
+        """White-list single-chunk update (manual correction / enable-toggle).
+
+        Chunk count never changes here, so neither ``document.chunk_count`` nor
+        the base's denormalized ``chunk_count`` need maintenance.
+        """
+        allowed = {"content", "chunk_title", "is_use", "token_num"}
+        with session_scope() as session:
+            row = session.scalar(
+                select(KnowledgeChunk).where(
+                    KnowledgeChunk.tenant_id == tenant_id(),
+                    KnowledgeChunk.id == chunk_id,
+                )
+            )
+            if row is None:
+                return None
+            for key, value in changes.items():
+                if key in allowed:
+                    setattr(row, key, value)
+            session.flush()
+            return _knowledge_chunk_dict(row)
+
+    def get_active_knowledge_job(self, doc_id: str) -> dict[str, Any] | None:
+        """A queued/running job for this document, if any (edit-conflict check).
+
+        A re-parse job rewrites all chunks wholesale, so manual edits must be
+        rejected while one is in flight.
+        """
+        with session_scope() as session:
+            row = session.scalar(
+                select(KnowledgeJob)
+                .where(
+                    KnowledgeJob.tenant_id == tenant_id(),
+                    KnowledgeJob.doc_id == doc_id,
+                    KnowledgeJob.status.in_(("queued", "running")),
+                )
+                .order_by(KnowledgeJob.created_at.desc())
+            )
+            return _knowledge_job_dict(row) if row is not None else None
 
     def create_knowledge_job(
         self, *, doc_id: str, user_id: str, payload: dict[str, Any] | None = None

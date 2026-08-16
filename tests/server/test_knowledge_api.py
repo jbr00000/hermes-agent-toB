@@ -45,7 +45,15 @@ def _admin_and_user(client: TestClient) -> tuple[dict[str, str], dict[str, str]]
     client.post(
         "/users", headers=admin, json={"username": "regular", "password": "password-123"}
     )
-    return admin, _login(client, "regular", "password-123")
+    user = _login(client, "regular", "password-123")
+    # 新建用户带强制改密标记（白名单外 403）；走真实改密流程清掉。
+    changed = client.post(
+        "/auth/change-password",
+        headers=user,
+        json={"old_password": "password-123", "new_password": "password-456"},
+    )
+    assert changed.status_code == 200, changed.text
+    return admin, {"Authorization": f"Bearer {changed.json()['access_token']}"}
 
 
 _MD = "# 标题\n\n正文内容，足够长以避免被尾块合并规则吞掉。" * 10
@@ -297,3 +305,229 @@ def test_retry_rejects_active_document(monkeypatch, tmp_path) -> None:
     # uploaded 状态不能 retry（它还没被解析过，用批量 parse 入口）
     response = client.post(f"/knowledge/documents/{doc_id}/retry", headers=admin)
     assert response.status_code == 409
+
+
+# ---------------------------------------------------------------- 分块编辑 / 重新同步
+
+
+def _ready_doc_with_chunks(
+    client: TestClient, admin: dict[str, str], kb_id: str
+) -> tuple[dict, list[dict]]:
+    """测试环境无 ES 配置，pipeline 走不到 ready——用 repository 直写构造。"""
+    document = _upload(client, admin, kb_id)["document"]
+    from server.storage import get_repository
+
+    repo = get_repository()
+    repo.replace_knowledge_chunks(
+        document["id"],
+        document["file_name"],
+        [
+            {"chunk_title": "第一章", "content": "第一段原始内容", "doc_pos": 0, "token_num": 3},
+            {"chunk_title": None, "content": "第二段原始内容", "doc_pos": 1, "token_num": 3},
+        ],
+    )
+    repo.update_knowledge_document(document["id"], status="ready", chunk_count=2)
+    chunks = client.get(
+        f"/knowledge/documents/{document['id']}/chunks", headers=admin
+    ).json()["chunks"]
+    assert len(chunks) == 2
+    return document, chunks
+
+
+def _fake_sync(monkeypatch, *, fail: bool = False) -> list[str]:
+    """打桩 synchronize_document（路由是函数内 lazy import，打模块属性即可生效）。"""
+    calls: list[str] = []
+
+    def fake(doc_id: str, *, config=None) -> int:
+        calls.append(doc_id)
+        if fail:
+            raise RuntimeError("ES 不可用")
+        return 2
+
+    monkeypatch.setattr("server.knowledge.sync_service.synchronize_document", fake)
+    return calls
+
+
+def test_chunk_update_requires_admin(monkeypatch, tmp_path) -> None:
+    client = _client(monkeypatch, tmp_path)
+    admin, user = _admin_and_user(client)
+    base = _create_base(client, admin)
+    document, chunks = _ready_doc_with_chunks(client, admin, base["id"])
+    _fake_sync(monkeypatch)
+    url = f"/knowledge/documents/{document['id']}/chunks/{chunks[0]['id']}"
+
+    assert client.patch(url, json={"content": "改"}).status_code == 401
+    assert client.patch(url, headers=user, json={"content": "改"}).status_code == 403
+    assert client.post(f"/knowledge/documents/{document['id']}/resync").status_code == 401
+    assert (
+        client.post(f"/knowledge/documents/{document['id']}/resync", headers=user).status_code
+        == 403
+    )
+
+
+def test_chunk_update_content_recounts_tokens(monkeypatch, tmp_path) -> None:
+    client = _client(monkeypatch, tmp_path)
+    admin, _ = _admin_and_user(client)
+    base = _create_base(client, admin)
+    document, chunks = _ready_doc_with_chunks(client, admin, base["id"])
+    sync_calls = _fake_sync(monkeypatch)
+
+    from server.knowledge.chunker import count_tokens
+
+    new_content = "OCR 识别错了，这是人工修正后的内容。"
+    response = client.patch(
+        f"/knowledge/documents/{document['id']}/chunks/{chunks[0]['id']}",
+        headers=admin,
+        json={"content": new_content},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["synced"] is True
+    assert body["sync_error"] is None
+    assert body["chunk"]["content"] == new_content
+    assert body["chunk"]["token_num"] == count_tokens(new_content)
+    assert sync_calls == [document["id"]]  # 恰好整文档重同步一次
+
+    # DB（事实源）已改
+    reread = client.get(
+        f"/knowledge/documents/{document['id']}/chunks", headers=admin
+    ).json()["chunks"]
+    assert reread[0]["content"] == new_content
+
+
+def test_chunk_update_toggle_is_use_and_clear_title(monkeypatch, tmp_path) -> None:
+    client = _client(monkeypatch, tmp_path)
+    admin, user = _admin_and_user(client)
+    base = _create_base(client, admin)
+    document, chunks = _ready_doc_with_chunks(client, admin, base["id"])
+    _fake_sync(monkeypatch)
+    url = f"/knowledge/documents/{document['id']}/chunks/{chunks[0]['id']}"
+
+    response = client.patch(url, headers=admin, json={"is_use": False})
+    assert response.status_code == 200
+    assert response.json()["chunk"]["is_use"] is False
+
+    # 显式 null = 清除标题（区别于"不传"）
+    assert chunks[0]["chunk_title"] == "第一章"
+    response = client.patch(url, headers=admin, json={"chunk_title": None})
+    assert response.status_code == 200
+    assert response.json()["chunk"]["chunk_title"] is None
+
+    # 普通用户也能读到启停/标题变化（读接口不分角色）
+    reread = client.get(
+        f"/knowledge/documents/{document['id']}/chunks", headers=user
+    ).json()["chunks"]
+    assert reread[0]["is_use"] is False
+    assert reread[0]["chunk_title"] is None
+
+
+def test_chunk_update_sync_failure_returns_synced_false(monkeypatch, tmp_path) -> None:
+    """MySQL 是事实源：投影失败不让编辑失败。"""
+    client = _client(monkeypatch, tmp_path)
+    admin, _ = _admin_and_user(client)
+    base = _create_base(client, admin)
+    document, chunks = _ready_doc_with_chunks(client, admin, base["id"])
+    _fake_sync(monkeypatch, fail=True)
+
+    response = client.patch(
+        f"/knowledge/documents/{document['id']}/chunks/{chunks[0]['id']}",
+        headers=admin,
+        json={"content": "修正后的内容"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["synced"] is False
+    assert body["sync_error"]
+    # DB 已改
+    reread = client.get(
+        f"/knowledge/documents/{document['id']}/chunks", headers=admin
+    ).json()["chunks"]
+    assert reread[0]["content"] == "修正后的内容"
+
+
+def test_chunk_update_rejects_non_ready_and_active_job(monkeypatch, tmp_path) -> None:
+    client = _client(monkeypatch, tmp_path)
+    admin, _ = _admin_and_user(client)
+    base = _create_base(client, admin)
+    _fake_sync(monkeypatch)
+
+    # uploaded 文档没有 chunks——先在 uploaded 文档上铺 chunks 验证状态门控
+    document, chunks = _ready_doc_with_chunks(client, admin, base["id"])
+    from server.storage import get_repository
+
+    repo = get_repository()
+    repo.update_knowledge_document(document["id"], status="uploaded")
+    url = f"/knowledge/documents/{document['id']}/chunks/{chunks[0]['id']}"
+    response = client.patch(url, headers=admin, json={"content": "改"})
+    assert response.status_code == 409
+
+    # ready 但有 queued job（重解析会整文档重写 chunks，编辑会被覆盖）
+    repo.update_knowledge_document(document["id"], status="ready")
+    repo.create_knowledge_job(doc_id=document["id"], user_id="admin")
+    response = client.patch(url, headers=admin, json={"content": "改"})
+    assert response.status_code == 409
+    assert "重建" in response.json()["detail"]
+
+
+def test_chunk_update_validation(monkeypatch, tmp_path) -> None:
+    client = _client(monkeypatch, tmp_path)
+    admin, _ = _admin_and_user(client)
+    base = _create_base(client, admin)
+    document, chunks = _ready_doc_with_chunks(client, admin, base["id"])
+    other_document, other_chunks = _ready_doc_with_chunks(client, admin, base["id"])
+    sync_calls = _fake_sync(monkeypatch)
+    url = f"/knowledge/documents/{document['id']}/chunks/{chunks[0]['id']}"
+
+    assert client.patch(url, headers=admin, json={"content": ""}).status_code == 422
+    assert client.patch(url, headers=admin, json={"content": None}).status_code == 400
+    assert client.patch(url, headers=admin, json={"content": "   "}).status_code == 400
+    assert client.patch(url, headers=admin, json={}).status_code == 400
+    # 跨文档猜 chunk id → 404；doc/chunk 不存在 → 404
+    assert (
+        client.patch(
+            f"/knowledge/documents/{document['id']}/chunks/{other_chunks[0]['id']}",
+            headers=admin,
+            json={"content": "改"},
+        ).status_code
+        == 404
+    )
+    assert (
+        client.patch(
+            f"/knowledge/documents/missing/chunks/{chunks[0]['id']}",
+            headers=admin,
+            json={"content": "改"},
+        ).status_code
+        == 404
+    )
+    assert (
+        client.patch(url, headers=admin, json={"chunk_title": "x" * 513}).status_code == 422
+    )
+    assert sync_calls == []  # 全部被拦在校验层，没触发同步
+    assert other_document["id"] != document["id"]
+
+
+def test_resync_document(monkeypatch, tmp_path) -> None:
+    client = _client(monkeypatch, tmp_path)
+    admin, _ = _admin_and_user(client)
+    base = _create_base(client, admin)
+    document, _ = _ready_doc_with_chunks(client, admin, base["id"])
+    sync_calls = _fake_sync(monkeypatch)
+
+    response = client.post(f"/knowledge/documents/{document['id']}/resync", headers=admin)
+    assert response.status_code == 200, response.text
+    assert response.json() == {"doc_id": document["id"], "chunks": 2}
+    assert sync_calls == [document["id"]]
+
+    # 同步失败 → 502；非 ready → 409；文档不存在 → 404
+    _fake_sync(monkeypatch, fail=True)
+    response = client.post(f"/knowledge/documents/{document['id']}/resync", headers=admin)
+    assert response.status_code == 502
+
+    from server.storage import get_repository
+
+    get_repository().update_knowledge_document(document["id"], status="failed")
+    response = client.post(f"/knowledge/documents/{document['id']}/resync", headers=admin)
+    assert response.status_code == 409
+    assert (
+        client.post("/knowledge/documents/missing/resync", headers=admin).status_code == 404
+    )

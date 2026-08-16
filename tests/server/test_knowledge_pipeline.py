@@ -243,6 +243,36 @@ def test_sync_service_delete_then_write_both_engines(repo, kb, tmp_path, monkeyp
     assert kinds.index("es.delete") < kinds.index("es.bulk")
 
 
+def test_sync_service_skips_disabled_chunks(repo, kb, tmp_path, monkeypatch) -> None:
+    """is_use=False 的 chunk 不进投影；删除仍先于写入（读序调整不改行为）。"""
+    from server.knowledge import sync_service
+
+    document = _make_md_document(repo, kb, tmp_path, _MD_BODY)
+    repo.replace_knowledge_chunks(
+        document["id"],
+        "design.md",
+        [
+            {"chunk_title": "一", "content": "启用内容", "doc_pos": 0, "token_num": 10},
+            {"chunk_title": "二", "content": "停用内容", "doc_pos": 1, "token_num": 10},
+        ],
+    )
+    disabled_id = repo.list_knowledge_chunks(document["id"])[1]["id"]
+    repo.update_knowledge_chunk(disabled_id, is_use=False)
+
+    calls: list = []
+    monkeypatch.setattr(sync_service, "get_es_client", lambda cfg=None: _FakeEs(calls))
+    monkeypatch.setattr(sync_service, "get_milvus_client", lambda cfg=None: _FakeMilvus(calls))
+    monkeypatch.setattr(sync_service, "get_embedder", lambda cfg=None: _FakeEmbedder())
+
+    count = sync_service.synchronize_document(document["id"], config=_config())
+
+    assert count == 1
+    kinds = [c[0] for c in calls]
+    assert kinds.index("es.delete") < kinds.index("es.bulk")
+    bulk = next(c for c in calls if c[0] == "es.bulk")
+    assert [d["chunk_content"] for d in bulk[2]] == ["启用内容"]
+
+
 def test_sync_service_empty_document_only_deletes(repo, kb, monkeypatch) -> None:
     from server.knowledge import sync_service
 

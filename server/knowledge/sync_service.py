@@ -35,15 +35,15 @@ def synchronize_document(
     """Project one document's chunks into ES + Milvus. Returns chunk count."""
     cfg = config or load_deployment_config().knowledge
     repository = get_repository()
-    chunks = [c for c in repository.list_knowledge_chunks(doc_id) if c.get("is_use", True)]
 
     es_client = get_es_client(cfg)
     milvus_client = get_milvus_client(cfg)
 
-    # 幂等：先清后写
+    # 幂等：先清后写。删除先于读快照，把"读到旧快照再写回"的并发窗口缩到最小。
     es_client.create_index(index=CHUNK_INDEX_NAME, mappings=chunk_index_mappings())
     es_client.delete_by_term(CHUNK_INDEX_NAME, "doc_id", doc_id)
     milvus_client.delete_by_doc_id(CHUNK_COLLECTION_NAME, doc_id)
+    chunks = [c for c in repository.list_knowledge_chunks(doc_id) if c.get("is_use", True)]
     if not chunks:
         return 0
 

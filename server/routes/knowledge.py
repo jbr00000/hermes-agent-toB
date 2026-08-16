@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+import threading
 import uuid
 
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
@@ -24,6 +25,7 @@ from pydantic import BaseModel, Field
 from hermes_constants import get_hermes_home
 from server.deployment_config import KnowledgeDeploymentConfig, load_deployment_config
 from server.deps import get_current_user, require_admin, require_feature
+from server.knowledge.chunker import count_tokens
 from server.knowledge.parser_client import SUPPORTED_EXTS
 from server.knowledge.queue import enqueue_knowledge_job
 from server.storage import get_repository
@@ -32,14 +34,32 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 
-# 查看是受 per-user「knowledge」功能开关控制；变更仍由角色(admin)控制。
+# 查看与变更都受 per-user「knowledge」功能开关控制（对 admin 同样生效），
+# 与 memory/tasks 的整路由门控语义一致；变更仍额外要求 admin 角色。
 _read_router = APIRouter(dependencies=[Depends(require_feature("knowledge"))])
-_admin_router = APIRouter(dependencies=[Depends(require_admin)])
+_admin_router = APIRouter(
+    dependencies=[Depends(require_admin), Depends(require_feature("knowledge"))]
+)
 
 _FILES_DIR = Path("knowledge") / "files"
 
 # 可以被显式触发解析的状态：待解析的 uploaded + 失败重试的 failed。
 _PARSEABLE_STATUSES = frozenset({"uploaded", "failed"})
+
+# synchronize_document 的读-删-写不是原子的；同一文档的并发重同步（两次
+# chunk 编辑撞车）可能让后写者用旧快照覆盖新内容。进程内 per-doc 锁串行化
+# 即可（单进程部署；多进程/多实例的残余窗口接受，可用 resync 兜底修复）。
+_SYNC_LOCKS: dict[str, threading.Lock] = {}
+_SYNC_LOCKS_GUARD = threading.Lock()
+
+
+def _doc_sync_lock(doc_id: str) -> threading.Lock:
+    with _SYNC_LOCKS_GUARD:
+        lock = _SYNC_LOCKS.get(doc_id)
+        if lock is None:
+            lock = threading.Lock()
+            _SYNC_LOCKS[doc_id] = lock
+        return lock
 
 
 class KnowledgeBaseCreate(BaseModel):
@@ -54,6 +74,12 @@ class KnowledgeBaseUpdate(BaseModel):
 
 class ParseRequest(BaseModel):
     document_ids: list[str] = Field(min_length=1, max_length=200)
+
+
+class KnowledgeChunkUpdate(BaseModel):
+    content: str | None = Field(default=None, min_length=1, max_length=100_000)
+    chunk_title: str | None = Field(default=None, max_length=512)
+    is_use: bool | None = None
 
 
 def _knowledge_config() -> KnowledgeDeploymentConfig:
@@ -408,6 +434,116 @@ def retry_document(
         error=None,
     )
     return {"document_id": doc_id, "job_id": job_id}
+
+
+def _synchronize_locked(doc_id: str) -> int:
+    """Run the doc-level ES/Milvus re-projection under the per-doc lock."""
+    from server.knowledge.sync_service import synchronize_document
+
+    with _doc_sync_lock(doc_id):
+        return synchronize_document(doc_id)
+
+
+@_admin_router.patch("/documents/{doc_id}/chunks/{chunk_id}")
+def update_chunk(
+    doc_id: str,
+    chunk_id: str,
+    body: KnowledgeChunkUpdate,
+    _: KnowledgeDeploymentConfig = Depends(_knowledge_config),
+    user: dict = Depends(get_current_user),
+):
+    """人工修正分块内容/标题或启停分块。
+
+    MySQL 是事实源：先落库，再整文档重建 ES/Milvus 投影。投影失败（ES/
+    Milvus/embedding 不可用）不让编辑失败——返回 synced=false，可用
+    ``POST /documents/{doc_id}/resync`` 事后兜底。
+    """
+    repository = get_repository()
+    document = _document_or_404(doc_id)
+    if document["status"] != "ready":
+        raise HTTPException(
+            status_code=409,
+            detail=f"文档当前状态（{document['status']}）不可编辑分块",
+        )
+    chunk = repository.get_knowledge_chunk(chunk_id)
+    if chunk is None or chunk["doc_id"] != doc_id:
+        raise HTTPException(status_code=404, detail="chunk not found")
+    if repository.get_active_knowledge_job(doc_id) is not None:
+        # 重解析 job 会整文档删+重写 chunks，人工编辑会被无声覆盖
+        raise HTTPException(status_code=409, detail="文档正在重建中，请稍后重试")
+
+    fields = body.model_fields_set
+    changes: dict[str, object] = {}
+    if "content" in fields:
+        if body.content is None or not body.content.strip():
+            raise HTTPException(status_code=400, detail="content 不能为空")
+        changes["content"] = body.content
+        changes["token_num"] = count_tokens(body.content)
+    if "chunk_title" in fields:
+        changes["chunk_title"] = body.chunk_title  # None = 清除标题
+    if body.is_use is not None:
+        changes["is_use"] = body.is_use
+    if not changes:
+        raise HTTPException(status_code=400, detail="没有需要更新的字段")
+
+    updated = repository.update_knowledge_chunk(chunk_id, **changes)
+    assert updated is not None  # 上面已确认存在
+
+    synced = True
+    sync_error: str | None = None
+    try:
+        _synchronize_locked(doc_id)
+    except Exception as exc:
+        synced = False
+        sync_error = str(exc)[:500]
+        logger.warning("chunk %s 已保存但索引同步失败（doc %s）: %s", chunk_id, doc_id, exc)
+    repository.record_audit_event(
+        event_type="knowledge_chunk_update",
+        conversation_id=None,
+        user_id=user["id"],
+        status="completed",
+        mode=None,
+        metadata={
+            "doc_id": doc_id,
+            "chunk_id": chunk_id,
+            "fields": sorted(k for k in changes if k != "token_num"),
+            "synced": synced,
+        },
+        error=None,
+    )
+    return {"chunk": updated, "synced": synced, "sync_error": sync_error}
+
+
+@_admin_router.post("/documents/{doc_id}/resync")
+def resync_document(
+    doc_id: str,
+    _: KnowledgeDeploymentConfig = Depends(_knowledge_config),
+    user: dict = Depends(get_current_user),
+):
+    """只重建 ES/Milvus 投影（不重解析、不动 chunks）——编辑同步失败的修复手段。"""
+    repository = get_repository()
+    document = _document_or_404(doc_id)
+    if document["status"] != "ready":
+        raise HTTPException(
+            status_code=409,
+            detail=f"文档当前状态（{document['status']}）不可重新同步",
+        )
+    try:
+        synced_chunks = _synchronize_locked(doc_id)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail=f"索引同步失败: {str(exc)[:500]}"
+        ) from exc
+    repository.record_audit_event(
+        event_type="knowledge_resync",
+        conversation_id=None,
+        user_id=user["id"],
+        status="completed",
+        mode=None,
+        metadata={"doc_id": doc_id, "chunks": synced_chunks},
+        error=None,
+    )
+    return {"doc_id": doc_id, "chunks": synced_chunks}
 
 
 router.include_router(_read_router)
