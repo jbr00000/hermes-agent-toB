@@ -1203,7 +1203,7 @@ function TabContent({
   }
   if (tab.type === 'document') {
     if (!user.features.knowledge) return <NoAccess feature="知识库" />
-    return <DocumentDetailView documentId={tab.refId} onOpenTab={onOpenTab} />
+    return <DocumentDetailView documentId={tab.refId} isAdmin={isAdmin} onOpenTab={onOpenTab} />
   }
   if (tab.type === 'memory') {
     if (!user.features.memory) return <NoAccess feature="记忆中心" />

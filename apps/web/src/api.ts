@@ -1003,6 +1003,45 @@ export const api = {
     if (!response.ok) throw await parseError(response)
   },
 
+  /** 人工编辑分块（admin）。只序列化显式传入的键；chunkTitle: null = 清除标题。
+   *  synced=false 表示 DB 已改但 ES/Milvus 投影失败（可用 resync 兜底）。 */
+  async updateKnowledgeChunk(
+    docId: string,
+    chunkId: string,
+    patch: { content?: string; chunkTitle?: string | null; isUse?: boolean },
+  ): Promise<{ chunk: KnowledgeChunk; synced: boolean; syncError: string | null }> {
+    const payload: Record<string, unknown> = {}
+    if (patch.content !== undefined) payload.content = patch.content
+    if (patch.chunkTitle !== undefined) payload.chunk_title = patch.chunkTitle
+    if (patch.isUse !== undefined) payload.is_use = patch.isUse
+    const response = await apiFetch(
+      `/knowledge/documents/${encodeURIComponent(docId)}/chunks/${encodeURIComponent(chunkId)}`,
+      { method: 'PATCH', body: JSON.stringify(payload) },
+    )
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as {
+      chunk: BackendKnowledgeChunk
+      synced: boolean
+      sync_error: string | null
+    }
+    return { chunk: toKnowledgeChunk(body.chunk), synced: body.synced, syncError: body.sync_error }
+  },
+
+  /** 只重建 ES/Milvus 投影（不重解析、不动分块）——synced=false 的修复手段。 */
+  async resyncKnowledgeDocument(docId: string): Promise<void> {
+    const response = await apiFetch(`/knowledge/documents/${encodeURIComponent(docId)}/resync`, {
+      method: 'POST',
+    })
+    if (!response.ok) throw await parseError(response)
+  },
+
+  /** 原始上传文件（Blob；走 fetch 是因为 iframe/img 带不了 Bearer 头）。 */
+  async fetchKnowledgeDocumentFile(docId: string): Promise<Blob> {
+    const response = await apiFetch(`/knowledge/documents/${encodeURIComponent(docId)}/file`)
+    if (!response.ok) throw await parseError(response)
+    return response.blob()
+  },
+
   // ---------------------------------------------------------- 用户管理（superadmin）
 
   async listUsers(): Promise<AdminUserRow[]> {

@@ -46,6 +46,45 @@ export function Badge({ children, className }: { children: React.ReactNode; clas
   return <span className={cn('inline-flex h-6 items-center rounded px-2 text-xs font-medium', className)}>{children}</span>
 }
 
+/** 开关（启用/停用）：button role="switch"，纸面 token。 */
+export function Toggle({
+  checked,
+  disabled,
+  onChange,
+  label,
+}: {
+  checked: boolean
+  disabled?: boolean
+  onChange: (value: boolean) => void
+  label?: string
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label ?? (checked ? '停用' : '启用')}
+      disabled={disabled}
+      onClick={(event) => {
+        event.stopPropagation()
+        onChange(!checked)
+      }}
+      className={cn(
+        'relative h-5 w-9 shrink-0 rounded-full transition-colors',
+        checked ? 'bg-ink' : 'bg-zinc-300',
+        disabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer',
+      )}
+    >
+      <span
+        className={cn(
+          'absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform',
+          checked && 'translate-x-4',
+        )}
+      />
+    </button>
+  )
+}
+
 export function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between gap-4 text-sm">
