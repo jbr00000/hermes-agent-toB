@@ -20,6 +20,7 @@ import threading
 import uuid
 
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from hermes_constants import get_hermes_home
@@ -196,6 +197,31 @@ def list_chunks(
 ):
     _document_or_404(doc_id)
     return {"chunks": get_repository().list_knowledge_chunks(doc_id)}
+
+
+_FILE_MEDIA_TYPES = {
+    ".pdf": "application/pdf",
+    ".md": "text/markdown",
+    ".txt": "text/plain",
+}
+
+
+@_read_router.get("/documents/{doc_id}/file")
+def get_document_file(
+    doc_id: str,
+    _: KnowledgeDeploymentConfig = Depends(_knowledge_config),
+):
+    """原始上传文件（前端双栏视图的右侧"文档原始内容"用它做预览/下载）。"""
+    document = _document_or_404(doc_id)
+    path = _abs_file_path(document).resolve()
+    if not path.exists():
+        raise HTTPException(status_code=410, detail="原始文件已丢失，请重新上传")
+    return FileResponse(
+        path,
+        media_type=_FILE_MEDIA_TYPES.get(document["file_ext"]),
+        filename=document["file_name"],
+        content_disposition_type="inline",
+    )
 
 
 # ------------------------------------------------------------------ 管理组：知识库

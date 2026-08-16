@@ -531,3 +531,25 @@ def test_resync_document(monkeypatch, tmp_path) -> None:
     assert (
         client.post("/knowledge/documents/missing/resync", headers=admin).status_code == 404
     )
+
+
+def test_get_document_file(monkeypatch, tmp_path) -> None:
+    client = _client(monkeypatch, tmp_path)
+    admin, user = _admin_and_user(client)
+    base = _create_base(client, admin)
+    document = _upload(client, admin, base["id"])["document"]
+
+    # 登录即可读（普通用户 200），内容与上传字节一致，带 inline 文件名
+    response = client.get(f"/knowledge/documents/{document['id']}/file", headers=user)
+    assert response.status_code == 200
+    assert response.content == _MD.encode("utf-8")
+    assert "filename" in response.headers["content-disposition"]
+
+    assert client.get(f"/knowledge/documents/{document['id']}/file").status_code == 401
+    assert client.get("/knowledge/documents/missing/file", headers=user).status_code == 404
+
+    # 磁盘文件丢失 → 410
+    from hermes_constants import get_hermes_home
+
+    (get_hermes_home() / document["file_path"]).unlink()
+    assert client.get(f"/knowledge/documents/{document['id']}/file", headers=user).status_code == 410
