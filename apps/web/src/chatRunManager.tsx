@@ -1,6 +1,6 @@
 import React from 'react'
 import type { QueryClient } from '@tanstack/react-query'
-import { api } from './api'
+import { api, toKnowledgeCitations } from './api'
 import type { ActiveModelRun, ChatMessage, ConversationDetail } from './types'
 
 export type ChatRunStatus =
@@ -109,7 +109,11 @@ export class ChatRunManager {
     sessionIds.forEach((sessionId) => this.notify(sessionId))
   }
 
-  start(sessionId: string, message: string): string {
+  start(
+    sessionId: string,
+    message: string,
+    options?: { knowledgeQa?: { kbId: string | null } | null },
+  ): string {
     const current = this.getSnapshot(sessionId)
     if (isChatRunActive(current)) throw new Error('当前问答正在生成')
 
@@ -166,7 +170,7 @@ export class ChatRunManager {
           }
         : detail
     ))
-    void this.consume(sessionId, requestId, message, controller)
+    void this.consume(sessionId, requestId, message, controller, options?.knowledgeQa ?? null)
     return requestId
   }
 
@@ -259,6 +263,7 @@ export class ChatRunManager {
     requestId: string,
     message: string,
     controller: AbortController,
+    knowledgeQa: { kbId: string | null } | null = null,
   ): Promise<void> {
     let terminalEventReceived = false
     try {
@@ -312,7 +317,19 @@ export class ChatRunManager {
           const error = typeof event.message === 'string' ? event.message : '回答生成失败'
           this.markFailed(sessionId, error)
         },
-      }, controller.signal)
+        onEvent: (eventName, event) => {
+          // 知识库问答：knowledge_search 一完成，服务端就推送累计引用列表 ——
+          // 直接挂到流式气泡上，让引用卡片随回答一起出现（持久化兜底在 final 消息的 metadata）
+          if (eventName !== 'citations') return
+          const citations = toKnowledgeCitations(event.chunks)
+          if (citations.length === 0) return
+          this.update(sessionId, (snapshot) => ({
+            ...snapshot,
+            updatedAt: Date.now(),
+            assistantMessage: { ...snapshot.assistantMessage, citations },
+          }))
+        },
+      }, controller.signal, knowledgeQa)
       if (!terminalEventReceived && isChatRunActive(this.getSnapshot(sessionId))) {
         this.markFailed(sessionId, '流式连接已结束，正在同步服务端状态')
       }

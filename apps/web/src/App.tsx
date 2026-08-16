@@ -73,6 +73,8 @@ import {
   attachedFilesAtom,
   chatAttachedFilesAtom,
   createTab,
+  knowledgeQaEnabledAtom,
+  knowledgeQaKbIdAtom,
   petVisibleAtom,
   selectedSpaceAtom,
   tabId,
@@ -85,6 +87,8 @@ import type {
   ChatMessage,
   ConversationSummary,
   AuthUser,
+  KnowledgeBase,
+  KnowledgeCitation,
   KnowledgeDocument,
   KnowledgeSpace,
   MemoryCandidate,
@@ -1178,7 +1182,7 @@ function TabContent({
   const isAdmin = user.role === 'admin' || user.role === 'superadmin'
   if (tab.type === 'agent') {
     if (!user.features.agent) return <NoAccess feature="Agent 任务" />
-    return <AgentView key={tab.refId} taskId={tab.refId} title={tab.title} onDeleted={onTaskDeleted} />
+    return <AgentView key={tab.refId} taskId={tab.refId} title={tab.title} onDeleted={onTaskDeleted} onOpenTab={onOpenTab} />
   }
   if (tab.type === 'chat') {
     if (!user.features.chat) return <NoAccess feature="Chat 问数" />
@@ -1187,6 +1191,8 @@ function TabContent({
         key={tab.refId}
         sessionId={tab.refId}
         title={tab.title}
+        knowledgeEnabled={user.features.knowledge}
+        onOpenTab={onOpenTab}
         onConversationUpdated={onConversationUpdated}
         onConversationArchived={onConversationArchived}
         onPromote={() => onCreateAgentTask(`${tab.title} · 执行`)}
@@ -1247,17 +1253,24 @@ function EmptyWorkspace({ onNewTask }: { onNewTask: () => void }) {
 function ChatView({
   sessionId,
   title,
+  knowledgeEnabled,
+  onOpenTab,
   onPromote,
   onConversationUpdated,
   onConversationArchived,
 }: {
   sessionId: string
   title: string
+  /** 用户 knowledge feature：控制知识库问答入口与引用卡片的可点击性 */
+  knowledgeEnabled: boolean
+  onOpenTab: (type: TabType, refId: string, title: string) => void
   onPromote: () => void
   onConversationUpdated: (sessionId: string, title: string) => void
   onConversationArchived: (sessionId: string) => void
 }) {
   const [files, setFiles] = useAtom(chatAttachedFilesAtom)
+  const [knowledgeQaEnabled] = useAtom(knowledgeQaEnabledAtom)
+  const [knowledgeQaKbId] = useAtom(knowledgeQaKbIdAtom)
   const queryClient = useQueryClient()
   const chatRunManager = useChatRunManager()
   const run = useChatRun(sessionId)
@@ -1266,6 +1279,17 @@ function ChatView({
     queryFn: () => api.getConversation(sessionId),
     refetchInterval: (result) => result.state.data?.activeRun ? 1000 : false,
   })
+  // 选库下拉的库清单（与知识库管理页共用 queryKey 缓存）；404 = 部署未启用知识库
+  const knowledgeBasesQuery = useQuery({
+    queryKey: ['knowledgeBases'],
+    queryFn: () => api.listKnowledgeBases(),
+    retry: false,
+    enabled: knowledgeEnabled,
+  })
+  const knowledgeDeploymentMissing = knowledgeBasesQuery.error instanceof ApiError
+    && knowledgeBasesQuery.error.status === 404
+  const knowledgeQaAvailable = knowledgeEnabled && !knowledgeDeploymentMissing
+  const knowledgeQaActive = knowledgeQaAvailable && knowledgeQaEnabled
   const [draft, setDraft] = React.useState('')
   const [actionError, setActionError] = React.useState<string | null>(null)
   const [menuOpen, setMenuOpen] = React.useState(false)
@@ -1406,13 +1430,15 @@ function ChatView({
     const text = draft.trim()
     if (!text || isRunning) return
     try {
-      chatRunManager.start(sessionId, text)
+      chatRunManager.start(sessionId, text, {
+        knowledgeQa: knowledgeQaActive ? { kbId: knowledgeQaKbId } : null,
+      })
       setDraft('')
       setActionError(null)
     } catch (error) {
       setActionError(error instanceof Error ? error.message : '无法启动 Chat 服务')
     }
-  }, [chatRunManager, draft, isRunning, sessionId])
+  }, [chatRunManager, draft, isRunning, knowledgeQaActive, knowledgeQaKbId, sessionId])
 
   const stopMessage = React.useCallback(() => {
     const requestId = run?.requestId ?? query.data?.activeRun?.id
@@ -1540,7 +1566,13 @@ function ChatView({
               <div className="mt-1 text-xs text-zinc-500">输入问题，我陪你一起找答案。</div>
             </div>
           ) : (
-            displayMessages.map((message) => <MessageBubble key={message.id} message={message} />)
+            displayMessages.map((message) => (
+              <MessageBubble
+                key={message.id}
+                message={message}
+                onOpenTab={knowledgeEnabled ? onOpenTab : undefined}
+              />
+            ))
           )}
           {streamError && (
             <div className="border-y border-red-100 bg-red-50 px-3 py-2 text-sm text-danger" role="alert">
@@ -1563,14 +1595,16 @@ function ChatView({
               }
             }}
             className="block min-h-[82px] w-full resize-none bg-transparent px-4 py-3 text-sm outline-none"
-            placeholder="输入问题，Chat 模式只会读取授权数据"
+            placeholder={knowledgeQaActive ? '知识库问答：回答将严格基于知识库内容并标注来源' : '输入问题，Chat 模式只会读取授权数据'}
           />
           <div className="flex items-center justify-between gap-2 border-t border-line px-2 py-2 sm:px-3">
             <div className="flex min-w-0 items-center gap-1">
               <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(event) => addFiles(event.target.files)} />
               <IconButton label="添加只读附件" icon={Paperclip} onClick={() => fileInputRef.current?.click()} />
               <IconButton label="语音输入" icon={Mic} />
-              <IconButton label="选择知识库" icon={Database} />
+              {knowledgeQaAvailable && (
+                <KnowledgeQaPicker bases={knowledgeBasesQuery.data ?? []} />
+              )}
               <span className="ml-1 hidden truncate text-xs text-zinc-500 sm:inline">{files.length} 个问答文件</span>
             </div>
             <button
@@ -1637,7 +1671,7 @@ function ChatView({
   )
 }
 
-function AgentView({ taskId, title, onDeleted }: { taskId: string; title: string; onDeleted: (taskId: string) => void }) {
+function AgentView({ taskId, title, onDeleted, onOpenTab }: { taskId: string; title: string; onDeleted: (taskId: string) => void; onOpenTab: (type: TabType, refId: string, title: string) => void }) {
   const [files, setFiles] = useAtom(attachedFilesAtom)
   const queryClient = useQueryClient()
   const agentRunManager = useAgentRunManager()
@@ -1838,7 +1872,7 @@ function AgentView({ taskId, title, onDeleted }: { taskId: string; title: string
               <div className="mt-1 text-xs text-zinc-500">输入目标后，Agent 会先生成可审批的执行计划。</div>
             </div>
           ) : (
-            messages.map((message) => <MessageBubble key={message.id} message={message} />)
+            messages.map((message) => <MessageBubble key={message.id} message={message} onOpenTab={onOpenTab} />)
           )}
           <ToolEventTimeline events={toolEvents} activeRunId={run?.requestId ?? task?.currentRunId ?? null} />
           {pendingApprovals.length > 0 && (
@@ -1896,7 +1930,14 @@ function AgentView({ taskId, title, onDeleted }: { taskId: string; title: string
   )
 }
 
-const MessageBubble = React.memo(function MessageBubble({ message }: { message: ChatMessage }) {
+const MessageBubble = React.memo(function MessageBubble({
+  message,
+  onOpenTab,
+}: {
+  message: ChatMessage
+  /** 引用卡片点击跳转文档详情；不传（无 knowledge feature）时卡片降级为纯文本 */
+  onOpenTab?: (type: TabType, refId: string, title: string) => void
+}) {
   const assistant = message.role === 'assistant'
   const system = message.role === 'system'
   const thinking = assistant && message.status === 'streaming'
@@ -1921,6 +1962,9 @@ const MessageBubble = React.memo(function MessageBubble({ message }: { message: 
         ) : (
           <div className="whitespace-pre-wrap break-words">{message.content || '...'}</div>
         )}
+        {assistant && !system && message.citations && message.citations.length > 0 && (
+          <CitationCards citations={message.citations} onOpenTab={onOpenTab} />
+        )}
         <div className={cn('mt-2 text-[11px]', assistant || system ? 'text-zinc-400' : 'text-white/60')}>
           {thinking && message.thinkingStartedAt ? (
             <ElapsedThinkingTime startedAt={message.thinkingStartedAt} />
@@ -1935,6 +1979,146 @@ const MessageBubble = React.memo(function MessageBubble({ message }: { message: 
     </div>
   )
 })
+
+/** 知识库问答的"参考来源"卡片列表：文档名 + 分块标题 + 摘要 + 序号 badge。 */
+function CitationCards({
+  citations,
+  onOpenTab,
+}: {
+  citations: KnowledgeCitation[]
+  onOpenTab?: (type: TabType, refId: string, title: string) => void
+}) {
+  return (
+    <div className="mt-3 border-t border-line pt-2">
+      <div className="mb-1.5 text-[11px] font-medium text-zinc-400">参考来源</div>
+      <div className="space-y-1.5">
+        {citations.map((citation, index) => {
+          const clickable = Boolean(onOpenTab && citation.docId)
+          const body = (
+            <div className="flex items-start gap-2">
+              <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-sm bg-[#e4f3ec] text-[10px] font-semibold text-[#237a57]">
+                {citation.num ?? index + 1}
+              </span>
+              <span className="min-w-0">
+                <span className="block truncate text-xs font-medium text-ink">
+                  {citation.docName || '未命名文档'}
+                  {citation.chunkTitle && <span className="font-normal text-zinc-500"> · {citation.chunkTitle}</span>}
+                </span>
+                {citation.snippet && (
+                  <span className="mt-0.5 line-clamp-2 block text-xs leading-5 text-zinc-500">{citation.snippet}</span>
+                )}
+              </span>
+            </div>
+          )
+          const className = cn(
+            'w-full rounded-md border border-line bg-[#fcfcfd] px-2.5 py-2 text-left',
+            clickable && 'transition hover:border-[#237a57]/40 hover:bg-[#f2f9f6]',
+          )
+          return clickable ? (
+            <button
+              key={citation.chunkId || index}
+              type="button"
+              className={className}
+              title="查看文档详情"
+              onClick={() => onOpenTab?.('document', citation.docId, citation.docName || '文档详情')}
+            >
+              {body}
+            </button>
+          ) : (
+            <div key={citation.chunkId || index} className={className}>{body}</div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+/** Chat 输入框的知识库问答开关 + 选库下拉（全部知识库 / 指定库）。 */
+function KnowledgeQaPicker({ bases }: { bases: KnowledgeBase[] }) {
+  const [enabled, setEnabled] = useAtom(knowledgeQaEnabledAtom)
+  const [kbId, setKbId] = useAtom(knowledgeQaKbIdAtom)
+  const [open, setOpen] = React.useState(false)
+  const rootRef = React.useRef<HTMLDivElement | null>(null)
+
+  React.useEffect(() => {
+    if (!open) return
+    const onPointerDown = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    return () => document.removeEventListener('mousedown', onPointerDown)
+  }, [open])
+
+  // 库被删除后本地残留的 kbId 自动回退为"全部知识库"
+  const selectedBase = kbId ? bases.find((base) => base.id === kbId) : null
+  React.useEffect(() => {
+    if (kbId && bases.length > 0 && !selectedBase) setKbId(null)
+  }, [bases.length, kbId, selectedBase, setKbId])
+  const selectedName = selectedBase?.name ?? '全部知识库'
+
+  const itemClass = 'flex h-9 w-full items-center gap-2 rounded px-2.5 text-left text-sm hover:bg-field'
+  return (
+    <div className="relative" ref={rootRef}>
+      <button
+        type="button"
+        title="知识库问答"
+        className={cn(
+          'flex h-8 items-center gap-1.5 rounded-md px-2 text-xs transition',
+          enabled ? 'bg-[#e4f3ec] font-medium text-[#237a57]' : 'text-zinc-500 hover:bg-field hover:text-ink',
+        )}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <Database size={16} />
+        {enabled && <span className="max-w-32 truncate">{selectedName}</span>}
+        <ChevronDown size={12} className={cn('transition', open && 'rotate-180')} />
+      </button>
+      {open && (
+        <div className="absolute bottom-10 left-0 z-20 w-60 rounded-md border border-line bg-panel p-1 shadow-card">
+          <button type="button" className={itemClass} onClick={() => setEnabled((current) => !current)}>
+            <span className={cn(
+              'flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border',
+              enabled ? 'border-[#237a57] bg-[#237a57] text-white' : 'border-line bg-panel',
+            )}>
+              {enabled && <Check size={12} />}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-sm">知识库问答</span>
+              <span className="block text-[11px] text-zinc-400">严格基于知识库回答并标注来源</span>
+            </span>
+          </button>
+          {enabled && (
+            <>
+              <div className="my-1 border-t border-line" />
+              <div className="px-2.5 pb-1 pt-0.5 text-[11px] text-zinc-400">检索范围</div>
+              <button
+                type="button"
+                className={cn(itemClass, kbId === null && 'bg-field font-medium')}
+                onClick={() => { setKbId(null); setOpen(false) }}
+              >
+                <Database size={14} className="shrink-0 text-zinc-400" />
+                全部知识库
+              </button>
+              {bases.map((base) => (
+                <button
+                  key={base.id}
+                  type="button"
+                  className={cn(itemClass, kbId === base.id && 'bg-field font-medium')}
+                  onClick={() => { setKbId(base.id); setOpen(false) }}
+                >
+                  <FileText size={14} className="shrink-0 text-zinc-400" />
+                  <span className="truncate">{base.name}</span>
+                </button>
+              ))}
+              {bases.length === 0 && (
+                <div className="px-2.5 py-1.5 text-xs text-zinc-400">还没有知识库，请先在知识库页面创建</div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
 
 function ThinkingBubble({ message }: { message: ChatMessage }) {
   const displayTime = message.createdAt || new Date(

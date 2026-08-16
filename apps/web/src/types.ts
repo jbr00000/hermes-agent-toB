@@ -147,6 +147,17 @@ export interface ConversationSummary {
   pinned?: boolean
 }
 
+/** 知识库问答引用卡片 —— 对应 server citations SSE 事件 / 消息 metadata.citations 的一项 */
+export interface KnowledgeCitation {
+  num: number | null
+  chunkId: string
+  docId: string
+  docName: string
+  chunkTitle: string
+  snippet: string
+  score: number | null
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant' | 'system'
@@ -156,6 +167,8 @@ export interface ChatMessage {
   modelRunId?: string
   durationMs?: number
   thinkingStartedAt?: number
+  /** 知识库问答的引用来源（assistant 消息；流式中由 citations 事件填充，刷新后由 metadata 回填） */
+  citations?: KnowledgeCitation[]
 }
 
 export interface ActiveModelRun {

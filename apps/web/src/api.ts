@@ -8,6 +8,7 @@ import type {
   ConversationDetail,
   ConversationSummary,
   KnowledgeBase,
+  KnowledgeCitation,
   KnowledgeChunk,
   KnowledgeDocument,
   KnowledgeStats,
@@ -67,6 +68,16 @@ interface BackendSession {
   updated_at: number
 }
 
+interface BackendKnowledgeCitation {
+  num?: number | null
+  chunk_id?: string
+  doc_id?: string
+  doc_name?: string
+  chunk_title?: string
+  snippet?: string
+  score?: number | null
+}
+
 interface BackendMessage {
   id: string
   role: ChatMessage['role']
@@ -76,6 +87,7 @@ interface BackendMessage {
   duration_ms?: number
   created_at?: number
   timestamp?: number
+  metadata?: { citations?: BackendKnowledgeCitation[] } | null
 }
 
 interface BackendModelRun {
@@ -367,7 +379,27 @@ function toAuditEvent(row: BackendAuditEvent): AuditEvent {
   }
 }
 
+/** citations SSE 事件与消息 metadata 共用的引用卡片映射（后端字段为 snake_case）。 */
+export function toKnowledgeCitations(raw: unknown): KnowledgeCitation[] {
+  if (!Array.isArray(raw)) return []
+  const citations: KnowledgeCitation[] = []
+  for (const item of raw as BackendKnowledgeCitation[]) {
+    if (!item || typeof item !== 'object') continue
+    citations.push({
+      num: typeof item.num === 'number' ? item.num : null,
+      chunkId: String(item.chunk_id ?? ''),
+      docId: String(item.doc_id ?? ''),
+      docName: String(item.doc_name ?? ''),
+      chunkTitle: String(item.chunk_title ?? ''),
+      snippet: String(item.snippet ?? ''),
+      score: typeof item.score === 'number' ? item.score : null,
+    })
+  }
+  return citations
+}
+
 function toMessage(row: BackendMessage): ChatMessage {
+  const citations = toKnowledgeCitations(row.metadata?.citations)
   return {
     id: row.id,
     role: row.role,
@@ -376,6 +408,7 @@ function toMessage(row: BackendMessage): ChatMessage {
     status: row.status,
     modelRunId: row.model_run_id,
     durationMs: row.duration_ms,
+    citations: citations.length > 0 ? citations : undefined,
   }
 }
 
@@ -846,6 +879,7 @@ export const api = {
     message: string,
     handlers: ChatStreamHandlers,
     signal?: AbortSignal,
+    knowledgeQa?: { kbId: string | null } | null,
   ): Promise<void> {
     const response = await apiFetch('/chat', {
       method: 'POST',
@@ -855,6 +889,10 @@ export const api = {
         request_id: requestId,
         interaction_type: 'chat',
         message,
+        // 知识库问答：mode=knowledge（+ 可选 kb_id 选库限定）；未开启时不带这两个字段
+        ...(knowledgeQa
+          ? { mode: 'knowledge', ...(knowledgeQa.kbId ? { kb_id: knowledgeQa.kbId } : {}) }
+          : {}),
       }),
     })
     if (!response.ok) throw await parseError(response)
