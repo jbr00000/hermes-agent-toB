@@ -116,6 +116,9 @@ class KnowledgeDeploymentConfig:
     # api = MinerU FastAPI 封装（POST /file_parse）；vlm = vLLM 裸起的
     # MinerU2.5 VLM（OpenAI 兼容），经 mineru-vl-utils 两段式客户端驱动
     mineru_mode: str = "api"
+    # LibreOffice soffice 可执行文件路径（doc/docx/ppt/pptx/xls 转 PDF 用）。
+    # 空 = 从 PATH 找 soffice；Windows 上 LibreOffice 通常不在 PATH，需显式配置
+    soffice_path: str = ""
     es_url: str = ""
     milvus_uri: str = ""
     embedding: KnowledgeEmbeddingConfig = field(default_factory=KnowledgeEmbeddingConfig)
@@ -286,6 +289,7 @@ def load_deployment_config(path: str | os.PathLike[str] | None = None) -> Deploy
             enabled=bool(knowledge.get("enabled", False)),
             mineru_url=str(knowledge.get("mineru_url") or ""),
             mineru_mode=_mineru_mode(knowledge.get("mineru_mode")),
+            soffice_path=str(knowledge.get("soffice_path") or ""),
             es_url=str(knowledge.get("es_url") or ""),
             milvus_uri=str(knowledge.get("milvus_uri") or ""),
             embedding=KnowledgeEmbeddingConfig(

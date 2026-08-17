@@ -4,6 +4,8 @@
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from server.deployment_config import KnowledgeDeploymentConfig
@@ -287,7 +289,7 @@ def test_parse_docx_converts_via_soffice_then_mineru(tmp_path, monkeypatch) -> N
     path.write_bytes(b"fake-docx")
     calls = {"soffice": None, "mineru": None}
 
-    def fake_convert(p):
+    def fake_convert(p, config):
         calls["soffice"] = p.name
         pdf = tmp_path / "converted.pdf"
         pdf.write_bytes(b"%PDF converted")
@@ -319,7 +321,55 @@ def test_soffice_missing_raises_parse_error(tmp_path, monkeypatch) -> None:
     path = tmp_path / "a.docx"
     path.write_bytes(b"x")
     with pytest.raises(ParseError, match="LibreOffice"):
-        _convert_to_pdf(path)
+        _convert_to_pdf(path, KnowledgeDeploymentConfig(enabled=True))
+
+
+def test_convert_to_pdf_uses_configured_soffice_path(tmp_path, monkeypatch) -> None:
+    """knowledge.soffice_path 配置后作为 argv[0] 调用（Windows 上 LibreOffice 不在 PATH）。"""
+    import subprocess as sp
+
+    seen: dict[str, str] = {}
+
+    def fake_run(argv, *a, **kw):
+        seen["exe"] = argv[0]
+        out_dir = Path(argv[argv.index("--outdir") + 1])
+        (out_dir / "a.pdf").write_bytes(b"%PDF")
+        return sp.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    from server.knowledge.parser_client import _convert_to_pdf
+
+    path = tmp_path / "a.docx"
+    path.write_bytes(b"x")
+    cfg = KnowledgeDeploymentConfig(
+        enabled=True, soffice_path=r"F:\软件安装\LibreOffice\program\soffice.exe"
+    )
+    pdf = _convert_to_pdf(path, cfg)
+
+    assert seen["exe"] == r"F:\软件安装\LibreOffice\program\soffice.exe"
+    assert pdf.name == "a.pdf"
+
+
+def test_convert_to_pdf_falls_back_to_path_soffice(tmp_path, monkeypatch) -> None:
+    """未配置 soffice_path 时回退 PATH 里的 soffice。"""
+    import subprocess as sp
+
+    seen: dict[str, str] = {}
+
+    def fake_run(argv, *a, **kw):
+        seen["exe"] = argv[0]
+        out_dir = Path(argv[argv.index("--outdir") + 1])
+        (out_dir / "a.pdf").write_bytes(b"%PDF")
+        return sp.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    from server.knowledge.parser_client import _convert_to_pdf
+
+    path = tmp_path / "a.docx"
+    path.write_bytes(b"x")
+    _convert_to_pdf(path, KnowledgeDeploymentConfig(enabled=True))
+
+    assert seen["exe"] == "soffice"
 
 
 def test_extract_mineru_payload_rejects_non_dict_items() -> None:

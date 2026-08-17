@@ -63,7 +63,7 @@ def parse_document(path: Path, file_ext: str, config: KnowledgeDeploymentConfig)
     if ext in MINERU_EXTS:
         return _parse_with_mineru(path, config)
     if ext in OFFICE_TO_PDF_EXTS:
-        pdf_path = _convert_to_pdf(path)
+        pdf_path = _convert_to_pdf(path, config)
         try:
             return _parse_with_mineru(pdf_path, config)
         finally:
@@ -219,13 +219,18 @@ def _content_list_to_markdown(content_list: list[dict[str, Any]]) -> str:
     return "\n\n".join(part for part in parts if part)
 
 
-def _convert_to_pdf(path: Path) -> Path:
-    """LibreOffice headless 转 PDF，返回临时 PDF 路径（调用方负责删除）。"""
+def _convert_to_pdf(path: Path, config: KnowledgeDeploymentConfig) -> Path:
+    """LibreOffice headless 转 PDF，返回临时 PDF 路径（调用方负责删除）。
+
+    soffice 位置优先取 ``knowledge.soffice_path``（Windows 上 LibreOffice
+    通常不在 PATH），未配置时回退到 PATH 里的 ``soffice``。
+    """
+    soffice = config.soffice_path or "soffice"
     out_dir = Path(tempfile.mkdtemp(prefix="hermes-kb-office-"))
     try:
         result = subprocess.run(
             [
-                "soffice",
+                soffice,
                 "--headless",
                 "--norestore",
                 "--convert-to",
@@ -239,7 +244,10 @@ def _convert_to_pdf(path: Path) -> Path:
             check=False,
         )
     except FileNotFoundError as exc:
-        raise ParseError("soffice（LibreOffice）不可用，无法转换 Office 文档") from exc
+        raise ParseError(
+            f"soffice（LibreOffice）不可用，无法转换 Office 文档: {soffice}"
+            "（在 deployment.yaml 配置 knowledge.soffice_path 指向 soffice 可执行文件）"
+        ) from exc
     except subprocess.TimeoutExpired as exc:
         raise ParseError(f"LibreOffice 转换超时（{_SOFFICE_TIMEOUT}s）: {path.name}") from exc
     pdf_path = out_dir / f"{path.stem}.pdf"
