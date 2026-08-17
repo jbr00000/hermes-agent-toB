@@ -11,6 +11,7 @@ import type {
   KnowledgeCitation,
   KnowledgeChunk,
   KnowledgeDocument,
+  KnowledgeSearchMode,
   KnowledgeStats,
   PermissionMode,
   SessionSummary,
@@ -879,7 +880,7 @@ export const api = {
     message: string,
     handlers: ChatStreamHandlers,
     signal?: AbortSignal,
-    knowledgeQa?: { kbId: string | null } | null,
+    knowledgeQa?: { kbId: string | null; searchMode?: KnowledgeSearchMode } | null,
   ): Promise<void> {
     const response = await apiFetch('/chat', {
       method: 'POST',
@@ -889,9 +890,16 @@ export const api = {
         request_id: requestId,
         interaction_type: 'chat',
         message,
-        // 知识库问答：mode=knowledge（+ 可选 kb_id 选库限定）；未开启时不带这两个字段
+        // 知识库问答：mode=knowledge（+ 可选 kb_id 选库限定 + search_mode 检索模式）；
+        // 未开启时不带这些字段
         ...(knowledgeQa
-          ? { mode: 'knowledge', ...(knowledgeQa.kbId ? { kb_id: knowledgeQa.kbId } : {}) }
+          ? {
+              mode: 'knowledge',
+              ...(knowledgeQa.kbId ? { kb_id: knowledgeQa.kbId } : {}),
+              ...(knowledgeQa.searchMode && knowledgeQa.searchMode !== 'fast'
+                ? { search_mode: knowledgeQa.searchMode }
+                : {}),
+            }
           : {}),
       }),
     })

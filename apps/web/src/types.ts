@@ -158,6 +158,9 @@ export interface KnowledgeCitation {
   score: number | null
 }
 
+/** 知识库问答检索模式：fast=单次融合检索；precise=轻量模型改写+编排（更慢更准） */
+export type KnowledgeSearchMode = 'fast' | 'precise'
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant' | 'system'

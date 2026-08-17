@@ -1,6 +1,6 @@
 import { atom } from 'jotai'
 import { atomWithStorage } from 'jotai/utils'
-import type { AttachedFile, WorkspaceMode, WorkTab } from './types'
+import type { AttachedFile, KnowledgeSearchMode, WorkspaceMode, WorkTab } from './types'
 
 export const tabsAtom = atom<WorkTab[]>([])
 export const activeTabIdAtom = atom<string | null>(null)
@@ -11,6 +11,8 @@ export const petVisibleAtom = atomWithStorage<boolean>('hermes-pet-visible', tru
 export const knowledgeQaEnabledAtom = atomWithStorage<boolean>('hermes-knowledge-qa-enabled', false, undefined, { getOnInit: true })
 /** 知识库问答的选库限定：null = 全部知识库 */
 export const knowledgeQaKbIdAtom = atomWithStorage<string | null>('hermes-knowledge-qa-kb', null, undefined, { getOnInit: true })
+/** 知识库问答的检索模式：fast 快速（默认）/ precise 精准（轻量模型改写，更慢更准） */
+export const knowledgeQaSearchModeAtom = atomWithStorage<KnowledgeSearchMode>('hermes-knowledge-qa-search-mode', 'fast', undefined, { getOnInit: true })
 export const selectedSpaceAtom = atom<string>('rail')
 export const attachedFilesAtom = atom<AttachedFile[]>([])
 export const chatAttachedFilesAtom = atom<AttachedFile[]>([])

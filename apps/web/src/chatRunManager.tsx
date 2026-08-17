@@ -1,7 +1,7 @@
 import React from 'react'
 import type { QueryClient } from '@tanstack/react-query'
 import { api, toKnowledgeCitations } from './api'
-import type { ActiveModelRun, ChatMessage, ConversationDetail } from './types'
+import type { ActiveModelRun, ChatMessage, ConversationDetail, KnowledgeSearchMode } from './types'
 
 export type ChatRunStatus =
   | 'connecting'
@@ -10,6 +10,12 @@ export type ChatRunStatus =
   | 'completed'
   | 'cancelled'
   | 'failed'
+
+/** 知识库问答选项：kbId=null 检索全部库；searchMode 默认 fast */
+export interface KnowledgeQaOptions {
+  kbId: string | null
+  searchMode?: KnowledgeSearchMode
+}
 
 export interface ChatRunSnapshot {
   sessionId: string
@@ -112,7 +118,7 @@ export class ChatRunManager {
   start(
     sessionId: string,
     message: string,
-    options?: { knowledgeQa?: { kbId: string | null } | null },
+    options?: { knowledgeQa?: KnowledgeQaOptions | null },
   ): string {
     const current = this.getSnapshot(sessionId)
     if (isChatRunActive(current)) throw new Error('当前问答正在生成')
@@ -263,7 +269,7 @@ export class ChatRunManager {
     requestId: string,
     message: string,
     controller: AbortController,
-    knowledgeQa: { kbId: string | null } | null = null,
+    knowledgeQa: KnowledgeQaOptions | null = null,
   ): Promise<void> {
     let terminalEventReceived = false
     try {

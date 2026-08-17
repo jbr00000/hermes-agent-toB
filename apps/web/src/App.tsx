@@ -75,6 +75,7 @@ import {
   createTab,
   knowledgeQaEnabledAtom,
   knowledgeQaKbIdAtom,
+  knowledgeQaSearchModeAtom,
   petVisibleAtom,
   selectedSpaceAtom,
   tabId,
@@ -1271,6 +1272,7 @@ function ChatView({
   const [files, setFiles] = useAtom(chatAttachedFilesAtom)
   const [knowledgeQaEnabled] = useAtom(knowledgeQaEnabledAtom)
   const [knowledgeQaKbId] = useAtom(knowledgeQaKbIdAtom)
+  const [knowledgeQaSearchMode] = useAtom(knowledgeQaSearchModeAtom)
   const queryClient = useQueryClient()
   const chatRunManager = useChatRunManager()
   const run = useChatRun(sessionId)
@@ -1431,14 +1433,16 @@ function ChatView({
     if (!text || isRunning) return
     try {
       chatRunManager.start(sessionId, text, {
-        knowledgeQa: knowledgeQaActive ? { kbId: knowledgeQaKbId } : null,
+        knowledgeQa: knowledgeQaActive
+          ? { kbId: knowledgeQaKbId, searchMode: knowledgeQaSearchMode }
+          : null,
       })
       setDraft('')
       setActionError(null)
     } catch (error) {
       setActionError(error instanceof Error ? error.message : '无法启动 Chat 服务')
     }
-  }, [chatRunManager, draft, isRunning, knowledgeQaActive, knowledgeQaKbId, sessionId])
+  }, [chatRunManager, draft, isRunning, knowledgeQaActive, knowledgeQaKbId, knowledgeQaSearchMode, sessionId])
 
   const stopMessage = React.useCallback(() => {
     const requestId = run?.requestId ?? query.data?.activeRun?.id
@@ -2037,6 +2041,7 @@ function CitationCards({
 function KnowledgeQaPicker({ bases }: { bases: KnowledgeBase[] }) {
   const [enabled, setEnabled] = useAtom(knowledgeQaEnabledAtom)
   const [kbId, setKbId] = useAtom(knowledgeQaKbIdAtom)
+  const [searchMode, setSearchMode] = useAtom(knowledgeQaSearchModeAtom)
   const [open, setOpen] = React.useState(false)
   const rootRef = React.useRef<HTMLDivElement | null>(null)
 
@@ -2070,6 +2075,9 @@ function KnowledgeQaPicker({ bases }: { bases: KnowledgeBase[] }) {
       >
         <Database size={16} />
         {enabled && <span className="max-w-32 truncate">{selectedName}</span>}
+        {enabled && searchMode === 'precise' && (
+          <span className="rounded-sm bg-[#237a57] px-1 py-px text-[10px] font-medium text-white">精准</span>
+        )}
         <ChevronDown size={12} className={cn('transition', open && 'rotate-180')} />
       </button>
       {open && (
@@ -2088,6 +2096,29 @@ function KnowledgeQaPicker({ bases }: { bases: KnowledgeBase[] }) {
           </button>
           {enabled && (
             <>
+              <div className="my-1 border-t border-line" />
+              <div className="px-2.5 pb-1 pt-0.5 text-[11px] text-zinc-400">检索模式</div>
+              <div className="mx-1 mb-1 flex rounded-md bg-field p-0.5">
+                {([
+                  { value: 'fast' as const, label: '快速', hint: '单次检索，即时回答' },
+                  { value: 'precise' as const, label: '精准', hint: '先理解问题再检索，更慢更准' },
+                ]).map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    title={option.hint}
+                    className={cn(
+                      'flex h-7 flex-1 items-center justify-center rounded text-xs transition',
+                      searchMode === option.value
+                        ? 'bg-panel font-medium text-[#237a57] shadow-sm'
+                        : 'text-zinc-500 hover:text-ink',
+                    )}
+                    onClick={() => setSearchMode(option.value)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
               <div className="my-1 border-t border-line" />
               <div className="px-2.5 pb-1 pt-0.5 text-[11px] text-zinc-400">检索范围</div>
               <button
