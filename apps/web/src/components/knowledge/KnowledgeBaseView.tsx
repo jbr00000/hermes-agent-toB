@@ -1,9 +1,10 @@
 import * as React from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Database, FileText, LoaderCircle, Play, RotateCcw, Trash2 } from 'lucide-react'
+import { ArrowLeft, Database, LoaderCircle, Play, RotateCcw, Trash2 } from 'lucide-react'
 import { api, ApiError } from '../../api'
 import type { KnowledgeDocument, TabType } from '../../types'
 import { DataTable, formatBytes, PageHeader, Td, Th } from '../ui'
+import { FormatIcon } from './FormatIcon'
 import { StatusBadge } from './StatusBadge'
 import { ACCEPTED_EXTS, UploadButton } from './UploadButton'
 
@@ -329,7 +330,7 @@ function DocumentRow({
           className="flex w-full min-w-0 max-w-full items-center gap-2 overflow-hidden text-left font-medium hover:text-info"
           onClick={onOpen}
         >
-          <FileText size={15} className="shrink-0 text-zinc-400" />
+          <FormatIcon ext={doc.fileExt} />
           <span className="min-w-0 flex-1 truncate">{doc.title}</span>
         </button>
       </Td>

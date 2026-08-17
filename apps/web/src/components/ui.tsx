@@ -42,8 +42,8 @@ export function Td({ children, className }: { children: React.ReactNode; classNa
   return <td className={cn('min-w-0 px-3 py-3 align-middle text-sm text-zinc-700', className)}>{children}</td>
 }
 
-export function Badge({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <span className={cn('inline-flex h-6 items-center rounded px-2 text-xs font-medium', className)}>{children}</span>
+export function Badge({ children, className, title }: { children: React.ReactNode; className?: string; title?: string }) {
+  return <span title={title} className={cn('inline-flex h-6 items-center rounded px-2 text-xs font-medium', className)}>{children}</span>
 }
 
 /** 开关（启用/停用）：button role="switch"，纸面 token。 */
