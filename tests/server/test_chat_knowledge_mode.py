@@ -7,20 +7,28 @@ import uuid
 from fastapi.testclient import TestClient
 
 
-def _client(monkeypatch, tmp_path, *, knowledge_enabled: bool = False) -> TestClient:
+def _client(
+    monkeypatch, tmp_path, *, knowledge_enabled: bool = False, aux_llm: bool = False
+) -> TestClient:
     home = tmp_path / "hermes_home"
     home.mkdir()
     if knowledge_enabled:
-        (home / "deployment.yaml").write_text(
+        yaml_text = (
             "knowledge:\n"
             "  enabled: true\n"
             "  es_url: http://elasticsearch:19200\n"
             "  milvus_uri: http://milvus:19530\n"
             "  embedding:\n"
             "    base_url: http://llm-gw.internal/v1\n"
-            "    model: bge-m3\n",
-            encoding="utf-8",
+            "    model: bge-m3\n"
         )
+        if aux_llm:
+            yaml_text += (
+                "  aux_llm:\n"
+                "    base_url: http://llm-gw.internal/v1\n"
+                "    model: qwen-27B-FP8\n"
+            )
+        (home / "deployment.yaml").write_text(yaml_text, encoding="utf-8")
     monkeypatch.setenv("HERMES_HOME", str(home))
     monkeypatch.setenv("HERMES_ADMIN_PASSWORD", "correct-horse-battery-staple")
     monkeypatch.delenv("HERMES_DATABASE_URL", raising=False)
@@ -381,6 +389,181 @@ def test_cited_num_variants(monkeypatch, tmp_path) -> None:
     )
     citations = detail["messages"][-1]["metadata"]["citations"]
     assert [c["chunk_id"] for c in citations] == ["c1", "c2"]
+
+
+def test_search_mode_rejected_outside_knowledge_mode(monkeypatch, tmp_path) -> None:
+    client = _client(monkeypatch, tmp_path, knowledge_enabled=True)
+    headers = _login(client, "admin", "correct-horse-battery-staple")
+
+    denied = client.post(
+        "/chat",
+        headers=headers,
+        json={"message": "hi", "interaction_type": "chat", "search_mode": "precise"},
+    )
+    assert denied.status_code == 400
+
+
+def test_precise_mode_degrades_to_fast_without_aux_llm(monkeypatch, tmp_path) -> None:
+    """未配置辅助模型时 precise 静默降级 fast（不算错误）。"""
+    client = _client(monkeypatch, tmp_path, knowledge_enabled=True)  # 无 aux_llm 段
+    headers = _login(client, "admin", "correct-horse-battery-staple")
+    session_id = _chat_session(client, headers)
+
+    captured: dict[str, object] = {}
+
+    from server.knowledge import request_context
+
+    class FakeAgent:
+        provider = "custom"
+        model = "test-model"
+        reasoning_config = {"enabled": False}
+        enabled_toolsets = ["knowledge"]
+
+        def chat(self, message, stream_callback=None):
+            captured["message"] = message
+            captured["search_mode"] = request_context.get_search_mode()
+            return "知识库中未找到相关内容。"
+
+        def interrupt(self, message=None):
+            pass
+
+    import server.agent_factory as agent_factory
+
+    monkeypatch.setattr(agent_factory, "build_agent", lambda **kwargs: FakeAgent())
+
+    response = client.post(
+        "/chat",
+        headers=headers,
+        json={
+            "session_id": session_id,
+            "request_id": f"req-{uuid.uuid4().hex[:8]}",
+            "interaction_type": "chat",
+            "mode": "knowledge",
+            "search_mode": "precise",
+            "message": "报销流程？",
+        },
+    )
+    assert response.status_code == 200
+    assert captured["search_mode"] == "fast"  # 降级
+    assert captured["message"] == "报销流程？"  # 无改写钉注，原文直发
+
+
+def test_precise_mode_rewrites_followup_query(monkeypatch, tmp_path) -> None:
+    """精准模式：有历史时先用轻量模型改写，改写结果缀在当前 user 轮次尾部。"""
+    client = _client(monkeypatch, tmp_path, knowledge_enabled=True, aux_llm=True)
+    headers = _login(client, "admin", "correct-horse-battery-staple")
+    session_id = _chat_session(client, headers)
+
+    from server.storage import get_repository
+
+    repository = get_repository()
+    repository.append_message(session_id, "user", "报销流程是什么？")
+    repository.append_message(session_id, "assistant", "报销分三步【1】……")
+
+    captured: dict[str, object] = {}
+
+    from server.knowledge import request_context
+
+    class FakeAgent:
+        provider = "custom"
+        model = "test-model"
+        reasoning_config = {"enabled": False}
+        enabled_toolsets = ["knowledge"]
+
+        def chat(self, message, stream_callback=None):
+            captured["message"] = message
+            captured["search_mode"] = request_context.get_search_mode()
+            return "额度上限是 5000 元【1】。"
+
+        def interrupt(self, message=None):
+            pass
+
+    import server.agent_factory as agent_factory
+    import server.knowledge.query_rewrite as query_rewrite
+
+    monkeypatch.setattr(agent_factory, "build_agent", lambda **kwargs: FakeAgent())
+    rewrite_calls: list[dict] = []
+
+    def fake_rewrite(query, history, *, config):
+        rewrite_calls.append({"query": query, "history": history})
+        return "财务制度的报销额度上限是多少？"
+
+    monkeypatch.setattr(query_rewrite, "rewrite_query_with_history", fake_rewrite)
+
+    response = client.post(
+        "/chat",
+        headers=headers,
+        json={
+            "session_id": session_id,
+            "request_id": f"req-{uuid.uuid4().hex[:8]}",
+            "interaction_type": "chat",
+            "mode": "knowledge",
+            "search_mode": "precise",
+            "message": "那额度上限呢？",
+        },
+    )
+    assert response.status_code == 200
+    assert captured["search_mode"] == "precise"
+    # 改写结果以轮次内提示缀在原问题尾部发给模型（不动 system prompt）
+    message = str(captured["message"])
+    assert message.startswith("那额度上限呢？")
+    assert "财务制度的报销额度上限是多少？" in message
+    # 改写拿到了追问原文与会话历史
+    assert rewrite_calls[0]["query"] == "那额度上限呢？"
+    assert any(m["role"] == "assistant" for m in rewrite_calls[0]["history"])
+    # 落库的 user 消息仍是用户原文
+    detail = client.get(f"/sessions/{session_id}", headers=headers).json()
+    assert detail["messages"][-2]["content"] == "那额度上限呢？"
+
+
+def test_fast_mode_skips_rewrite(monkeypatch, tmp_path) -> None:
+    """默认 fast：不调用改写、消息原文直发。"""
+    client = _client(monkeypatch, tmp_path, knowledge_enabled=True, aux_llm=True)
+    headers = _login(client, "admin", "correct-horse-battery-staple")
+    session_id = _chat_session(client, headers)
+
+    captured: dict[str, object] = {}
+
+    from server.knowledge import request_context
+
+    class FakeAgent:
+        provider = "custom"
+        model = "test-model"
+        reasoning_config = {"enabled": False}
+        enabled_toolsets = ["knowledge"]
+
+        def chat(self, message, stream_callback=None):
+            captured["message"] = message
+            captured["search_mode"] = request_context.get_search_mode()
+            return "好的"
+
+        def interrupt(self, message=None):
+            pass
+
+    import server.agent_factory as agent_factory
+    import server.knowledge.query_rewrite as query_rewrite
+
+    monkeypatch.setattr(agent_factory, "build_agent", lambda **kwargs: FakeAgent())
+    monkeypatch.setattr(
+        query_rewrite,
+        "rewrite_query_with_history",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("fast 不应改写")),
+    )
+
+    response = client.post(
+        "/chat",
+        headers=headers,
+        json={
+            "session_id": session_id,
+            "request_id": f"req-{uuid.uuid4().hex[:8]}",
+            "interaction_type": "chat",
+            "mode": "knowledge",
+            "message": "报销流程？",
+        },
+    )
+    assert response.status_code == 200
+    assert captured["search_mode"] == "fast"
+    assert captured["message"] == "报销流程？"
 
 
 def test_append_message_metadata_roundtrip(monkeypatch, tmp_path) -> None:

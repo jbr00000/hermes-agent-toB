@@ -63,13 +63,16 @@ def knowledge_search(
         except (TypeError, ValueError):
             pass
 
+    from server.knowledge.request_context import get_search_mode
     from server.knowledge.retriever import search_chunks
 
+    search_mode = get_search_mode()
     chunks = search_chunks(text, kb_id=effective_kb, topk=limit, config=cfg)
     if not chunks:
         return tool_result(
             {
                 "query": text,
+                "search_mode": search_mode,
                 "total": 0,
                 "chunks": [],
                 "message": "知识库中未检索到相关内容，请如实告知用户，不要编造。",
@@ -78,6 +81,7 @@ def knowledge_search(
     return tool_result(
         {
             "query": text,
+            "search_mode": search_mode,
             "total": len(chunks),
             "chunks": [
                 {

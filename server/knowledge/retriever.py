@@ -7,6 +7,11 @@ RRF（k 可配）拿排名分，两路原始分各自 min-max 归一化后按权
 ``is_use``（刚停用的块投影里可能还留着）。
 
 单路失败降级为另一路；两路都失败抛 :class:`RetrievalError`，由工具层兜底。
+
+精排（可选）：配置了 ``knowledge.rerank`` 时，融合后先取前 ``rerank.top_k``
+个候选回表，再用 rerank 模型（bge-reranker-v2-m3，协议移植自 lone-ai
+``core/embedding_rerank.py``）对全文重排，最后按 ``retrieval.topk`` 截断。
+rerank 调用失败降级为融合序，不算错误。
 """
 from __future__ import annotations
 
@@ -20,6 +25,7 @@ from . import KnowledgeError
 from .embedder import get_embedder
 from .es_client import CHUNK_INDEX_NAME, get_es_client
 from .milvus_client import CHUNK_COLLECTION_NAME, get_milvus_client
+from .rerank_client import get_reranker, rerank_configured
 
 logger = logging.getLogger(__name__)
 
@@ -60,15 +66,42 @@ def search_chunks(
         rrf_k=tuning.rrf_k,
         vector_weight=tuning.vector_weight,
     )
-    ordered_ids = [chunk_id for chunk_id, _ in fused][:limit]
+    if not fused:
+        return []
+
+    # 精排开启时扩池：融合序前 rerank.top_k 个候选全部回表，用全文重排后再
+    # 截断到 limit；未配置则维持原路径（融合序直接截 limit 个回表）。
+    use_rerank = rerank_configured(cfg)
+    # 候选池至少要有 limit 条：rerank.top_k 配得比 retrieval.topk 还小时，
+    # 否则最终结果会被候选池截断而凑不齐 topk。
+    pool = max(limit, cfg.rerank.top_k) if use_rerank else limit
+    ordered_ids = [chunk_id for chunk_id, _ in fused][:pool]
     if not ordered_ids:
         return []
 
     score_by_id = dict(fused)
+    rows = [
+        row
+        for row in get_repository().get_knowledge_chunks_by_ids(ordered_ids)
+        if row.get("is_use", True)  # 投影滞后：MySQL 里已停用的块不下发
+    ]
+
+    if use_rerank and rows:
+        try:
+            relevance = get_reranker(cfg).rerank(
+                text, [str(row["content"]) for row in rows]
+            )
+            ranked = sorted(zip(relevance, rows), key=lambda pair: pair[0], reverse=True)[:limit]
+            rows = [row for _, row in ranked]
+            score_by_id = {row["id"]: round(float(rel), 6) for rel, row in ranked}
+        except KnowledgeError as exc:
+            logger.warning("knowledge rerank failed, fallback to fused order: %s", exc)
+            rows = rows[:limit]
+    else:
+        rows = rows[:limit]
+
     results: list[dict[str, Any]] = []
-    for row in get_repository().get_knowledge_chunks_by_ids(ordered_ids):
-        if not row.get("is_use", True):
-            continue  # 投影滞后：MySQL 里已停用的块不下发
+    for row in rows:
         results.append(
             {
                 "chunk_id": row["id"],

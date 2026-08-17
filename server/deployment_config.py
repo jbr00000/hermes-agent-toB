@@ -73,6 +73,36 @@ class KnowledgeRetrievalConfig:
 
 
 @dataclass(frozen=True)
+class KnowledgeRerankConfig:
+    """Customer-hosted rerank endpoint (e.g. bge-reranker-v2-m3 on Xinference).
+
+    空 base_url = 未配置 → 检索层自动跳过精排（配置可选，不配不报错）。
+    移植自 lone-ai ``core/embedding_rerank.py`` 的 RerankClient 协议
+    （Jina 风格 POST {base_url}/rerank → results[{index, relevance_score}]）。
+    """
+
+    base_url: str = ""  # 到 /v1 为止，客户端自动拼 /rerank
+    model: str = ""
+    top_k: int = 12  # 融合后进入精排的候选数（最终仍按 retrieval.topk 截断）
+    api_key_env: str = "KNOWLEDGE_RERANK_API_KEY"
+    timeout_seconds: float = 30.0
+
+
+@dataclass(frozen=True)
+class KnowledgeAuxLlmConfig:
+    """轻量辅助模型（OpenAI 兼容）：查询改写/扩展/拆解等检索前后的小任务。
+
+    主模型只生成最终回答；辅助模型承担确定性流水线里的判断步骤。
+    空 base_url = 未配置 → 精准模式自动降级为快速模式行为。
+    """
+
+    base_url: str = ""  # 到 /v1 为止
+    model: str = ""
+    api_key_env: str = "KNOWLEDGE_AUX_LLM_API_KEY"
+    timeout_seconds: float = 30.0
+
+
+@dataclass(frozen=True)
 class KnowledgeDeploymentConfig:
     """Enterprise knowledge-base construction (parse → chunk → embed → ES/Milvus).
 
@@ -94,6 +124,8 @@ class KnowledgeDeploymentConfig:
     chunk_mode: str = "structural"
     semantic: SemanticChunkingConfig = field(default_factory=SemanticChunkingConfig)
     retrieval: KnowledgeRetrievalConfig = field(default_factory=KnowledgeRetrievalConfig)
+    rerank: KnowledgeRerankConfig = field(default_factory=KnowledgeRerankConfig)
+    aux_llm: KnowledgeAuxLlmConfig = field(default_factory=KnowledgeAuxLlmConfig)
     chunk_size: int = 400
     chunk_overlap: int = 64
     min_chunk_tokens: int = 50  # 短于此 token 数的尾块并入前一块（表格块除外）
@@ -170,6 +202,18 @@ def _chunk_mode(value: Any) -> str:
     return mode if mode in ("structural", "semantic") else "structural"
 
 
+def _rerank_base_url(value: Any) -> str:
+    """rerank 端点 base_url：``/v1`` 结尾或带 ``/rerank`` 的全路径两种写法都接受。
+
+    客户端会自己拼 ``/rerank``，所以配置里如果已经带了就先剥掉，避免拼出
+    ``/rerank/rerank``。
+    """
+    url = str(value or "").rstrip("/")
+    if url.endswith("/rerank"):
+        url = url[: -len("/rerank")]
+    return url
+
+
 def _data_permission_roles(value: Any) -> dict[str, list[str]]:
     """{role: [table, ...]}；表名统一小写，非字符串项丢弃。"""
     roles: dict[str, list[str]] = {}
@@ -208,6 +252,8 @@ def load_deployment_config(path: str | os.PathLike[str] | None = None) -> Deploy
     embedding = _as_dict(knowledge.get("embedding"))
     semantic = _as_dict(knowledge.get("semantic"))
     retrieval = _as_dict(knowledge.get("retrieval"))
+    rerank = _as_dict(knowledge.get("rerank"))
+    aux_llm = _as_dict(knowledge.get("aux_llm"))
     features = {"host_terminal": False}
     for key, value in _as_dict(raw.get("features")).items():
         if key in features:
@@ -269,6 +315,19 @@ def load_deployment_config(path: str | os.PathLike[str] | None = None) -> Deploy
                 vector_candidates=_positive_int(retrieval.get("vector_candidates"), 30),
                 rrf_k=_positive_int(retrieval.get("rrf_k"), 60),
                 vector_weight=_unit_float(retrieval.get("vector_weight"), 0.6),
+            ),
+            rerank=KnowledgeRerankConfig(
+                base_url=_rerank_base_url(rerank.get("base_url")),
+                model=str(rerank.get("model") or ""),
+                top_k=_positive_int(rerank.get("top_k"), 12),
+                api_key_env=str(rerank.get("api_key_env") or "KNOWLEDGE_RERANK_API_KEY"),
+                timeout_seconds=_positive_float(rerank.get("timeout_seconds"), 30.0),
+            ),
+            aux_llm=KnowledgeAuxLlmConfig(
+                base_url=str(aux_llm.get("base_url") or "").rstrip("/"),
+                model=str(aux_llm.get("model") or ""),
+                api_key_env=str(aux_llm.get("api_key_env") or "KNOWLEDGE_AUX_LLM_API_KEY"),
+                timeout_seconds=_positive_float(aux_llm.get("timeout_seconds"), 30.0),
             ),
             chunk_size=_positive_int(knowledge.get("chunk_size"), 400),
             chunk_overlap=_positive_int(knowledge.get("chunk_overlap"), 64),

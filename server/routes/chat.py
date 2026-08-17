@@ -33,6 +33,9 @@ class ChatRequest(BaseModel):
     mode: Optional[str] = None
     # 知识库问答模式（interaction_type=chat + mode=knowledge）可选的选库限定
     kb_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    # 知识库问答的检索模式：fast=单次融合检索（默认）；precise=轻量模型
+    # 指代消解 + 后续编排能力（未配置辅助模型时自动降级 fast）
+    search_mode: Optional[Literal["fast", "precise"]] = None
 
 
 _active_agents: dict[str, tuple[str, object]] = {}
@@ -156,7 +159,11 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
     )
     if req.kb_id and not requested_knowledge_mode:
         raise HTTPException(status_code=400, detail="kb_id 仅知识库问答模式可用")
+    if req.search_mode and not requested_knowledge_mode:
+        raise HTTPException(status_code=400, detail="search_mode 仅知识库问答模式可用")
     knowledge_base: dict[str, Any] | None = None
+    knowledge_cfg = None
+    search_mode = "fast"
     if requested_knowledge_mode:
         if not auth.user_features(user).get("knowledge", True):
             raise HTTPException(
@@ -164,12 +171,21 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
             )
         from server.deployment_config import load_deployment_config
 
-        if not load_deployment_config().knowledge.enabled:
+        knowledge_cfg = load_deployment_config().knowledge
+        if not knowledge_cfg.enabled:
             raise HTTPException(status_code=409, detail="知识库未启用")
         if req.kb_id:
             knowledge_base = repository.get_knowledge_base(req.kb_id)
             if knowledge_base is None:
                 raise HTTPException(status_code=404, detail="知识库不存在")
+        from server.knowledge.aux_llm import aux_llm_configured
+        from server.knowledge.request_context import normalize_search_mode
+
+        search_mode = normalize_search_mode(req.search_mode)
+        if search_mode == "precise" and not aux_llm_configured(knowledge_cfg):
+            # 未配置辅助模型：精准模式没有改写/编排能力可挂，静默降级快速
+            logger.info("search_mode=precise 但 aux_llm 未配置，降级为 fast")
+            search_mode = "fast"
 
     if req.session_id:
         from server.sessions import assert_session_owned
@@ -191,7 +207,11 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
     if interaction_type == "chat":
         if requested_knowledge_mode:
             effective_mode = "knowledge"
-            mode_state = {"state": "knowledge", "tool_mode": "knowledge"}
+            mode_state = {
+                "state": "knowledge",
+                "tool_mode": "knowledge",
+                "search_mode": search_mode,
+            }
         else:
             effective_mode = "chat"
             mode_state = {"state": "chat", "tool_mode": "chat"}
@@ -444,6 +464,24 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
                 },
             )
 
+            # 精准模式第 1 步：用会话历史把追问改写成独立检索问题（轻量模型，
+            # 失败/无历史时返回原文）。改写结果不进 system prompt——它是每轮
+            # 都变的内容，放系统提示会让缓存前缀逐轮失效（不变量 1）；改成缀在
+            # 当前 user 轮次尾部（落库消息仍是用户原文），前缀缓存不受影响。
+            knowledge_search_query = None
+            if (
+                effective_mode == "knowledge"
+                and search_mode == "precise"
+                and knowledge_cfg is not None
+            ):
+                from server.knowledge.query_rewrite import rewrite_query_with_history
+
+                rewritten = rewrite_query_with_history(
+                    req.message, history, config=knowledge_cfg
+                )
+                if rewritten and rewritten != req.message.strip():
+                    knowledge_search_query = rewritten
+
             agent = build_agent(
                 session_id=session_id,
                 user_id=user_id,
@@ -489,7 +527,23 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
             chat_kwargs: dict[str, Any] = {"stream_callback": on_delta}
             if sandbox_task_id is not None:
                 chat_kwargs["task_id"] = sandbox_task_id
-            final = agent.chat(req.message, **chat_kwargs) or ""
+            # 本轮检索模式写入请求上下文（同线程的 knowledge_search 工具读取，
+            # 不经模型透传）。非 knowledge 模式恒为 fast。
+            from server.knowledge.request_context import set_search_mode
+
+            set_search_mode(search_mode if effective_mode == "knowledge" else "fast")
+            # 精准模式：把改写后的检索问题缀在当前 user 轮次尾部发给模型
+            # （落库的 user 消息仍是用户原文）。放这里而不是 system prompt——
+            # 系统提示必须全程字节稳定（不变量 3），逐轮变化的内容只能进当前轮。
+            model_message = req.message
+            if knowledge_search_query:
+                model_message = (
+                    f"{req.message}\n\n"
+                    f"（知识库检索提示：该问题已结合对话历史明确为"
+                    f"「{knowledge_search_query}」，调用 knowledge_search 时"
+                    f"请使用该表述作为 query）"
+                )
+            final = agent.chat(model_message, **chat_kwargs) or ""
             cancelled = runtime_store.is_cancelled(request_id)
             with tool_status_lock:
                 unresolved_tool_failure = any(
