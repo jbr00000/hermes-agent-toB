@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import queue
+import re
 import threading
 import time
 import uuid
@@ -101,6 +102,22 @@ def _extract_citations(result: Any) -> list[dict[str, Any]]:
             }
         )
     return citations
+
+
+# 全角【数字】：knowledge 模式 RAG prompt 强制的引用格式。全角括号 + 纯数字在
+# 中文正文、代码、markdown 里几乎不会自然出现（半角 [0] / [text](url) 不匹配），
+# 误匹配率约等于零。支持【1】【1】【3】【1,3】【1、3】等连标写法。
+_CITATION_REF_PATTERN = re.compile(r"【(\d+(?:\s*[,、]\s*\d+)*)】")
+
+
+def _cited_nums(text: str) -> set[int]:
+    """提取回答文本里全部【N】引用编号（模型声称的依据集合）。"""
+    nums: set[int] = set()
+    for match in _CITATION_REF_PATTERN.finditer(text):
+        nums.update(
+            int(part) for part in re.split(r"[,、\s]+", match.group(1)) if part.isdigit()
+        )
+    return nums
 
 
 def _interrupt_local_agent(request_id: str, user_id: str) -> bool:
@@ -482,6 +499,13 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
                 "cancelled" if cancelled else "failed" if unresolved_tool_failure else "completed"
             )
             duration_ms = max(0, int((time.monotonic() - run_started_at) * 1000))
+            citations = list(citations_by_chunk.values())
+            # 卡片与回答口径一致（仅 knowledge 模式，那里【N】是 prompt 硬规则）：
+            # 只保留回答实际标注的来源。模型答"未找到"时不标号 → 卡片清空，
+            # 不会出现"嘴上说没有、卡片却显示一堆"的自相矛盾。
+            if citations and effective_mode == "knowledge":
+                used_nums = _cited_nums(final)
+                citations = [c for c in citations if c.get("num") in used_nums]
             assistant_message = repository.append_message(
                 session_id,
                 "assistant",
@@ -489,11 +513,7 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
                 status=assistant_status,
                 model_run_id=request_id,
                 duration_ms=duration_ms,
-                metadata=(
-                    {"citations": list(citations_by_chunk.values())}
-                    if citations_by_chunk
-                    else None
-                ),
+                metadata={"citations": citations} if citations else None,
             )
             if final and assistant_status == "completed":
                 # Users with the memory feature off should not silently

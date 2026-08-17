@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 
 from fastapi.testclient import TestClient
 
@@ -263,6 +264,123 @@ def test_plain_chat_has_no_kb_scoping(monkeypatch, tmp_path) -> None:
 
     detail = client.get(f"/sessions/{session_id}", headers=headers).json()
     assert detail["messages"][-1]["metadata"] is None
+
+
+def _two_chunk_tool_result() -> str:
+    return json.dumps(
+        {
+            "query": "报销",
+            "total": 2,
+            "chunks": [
+                {
+                    "num": 1,
+                    "chunk_id": "c1",
+                    "doc_id": "d1",
+                    "doc_name": "财务制度.pdf",
+                    "chunk_title": "报销流程",
+                    "content": "第一步填写报销单",
+                    "score": 0.62,
+                },
+                {
+                    "num": 2,
+                    "chunk_id": "c2",
+                    "doc_id": "d2",
+                    "doc_name": "考勤制度.pdf",
+                    "chunk_title": "请假",
+                    "content": "请假需提前一天",
+                    "score": 0.31,
+                },
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+
+def _run_knowledge_chat(
+    monkeypatch,
+    tmp_path,
+    *,
+    tool_result: str,
+    answer: str,
+) -> dict:
+    """knowledge 模式跑一次问答（FakeAgent 固定检索结果与回答），返回会话详情。"""
+    client = _client(monkeypatch, tmp_path, knowledge_enabled=True)
+    headers = _login(client, "admin", "correct-horse-battery-staple")
+    session_id = _chat_session(client, headers)
+
+    captured: dict[str, object] = {}
+
+    class FakeAgent:
+        provider = "custom"
+        model = "test-model"
+        reasoning_config = {"enabled": False}
+        enabled_toolsets = ["knowledge"]
+
+        def chat(self, message, stream_callback=None):
+            captured["tool_complete_callback"](
+                "tc-1", "knowledge_search", {"query": "报销"}, tool_result
+            )
+            return answer
+
+        def interrupt(self, message=None):
+            pass
+
+    import server.agent_factory as agent_factory
+
+    monkeypatch.setattr(
+        agent_factory,
+        "build_agent",
+        lambda **kwargs: captured.update(kwargs) or FakeAgent(),
+    )
+
+    response = client.post(
+        "/chat",
+        headers=headers,
+        json={
+            "session_id": session_id,
+            "request_id": f"req-{uuid.uuid4().hex[:8]}",
+            "interaction_type": "chat",
+            "mode": "knowledge",
+            "message": "报销流程是什么？",
+        },
+    )
+    assert response.status_code == 200
+    return client.get(f"/sessions/{session_id}", headers=headers).json()
+
+
+def test_citations_filtered_to_cited_nums(monkeypatch, tmp_path) -> None:
+    """卡片与回答口径一致：工具返回 2 块但回答只标【1】→ 持久化只留 chunk 1。"""
+    detail = _run_knowledge_chat(
+        monkeypatch,
+        tmp_path,
+        tool_result=_two_chunk_tool_result(),
+        answer="报销第一步是填写报销单【1】。",
+    )
+    citations = detail["messages"][-1]["metadata"]["citations"]
+    assert [c["chunk_id"] for c in citations] == ["c1"]
+
+
+def test_citations_cleared_when_answer_admits_not_found(monkeypatch, tmp_path) -> None:
+    """模型回答"未找到"（不标任何【N】）→ metadata 无 citations，卡片清空。"""
+    detail = _run_knowledge_chat(
+        monkeypatch,
+        tmp_path,
+        tool_result=_two_chunk_tool_result(),
+        answer="知识库中未找到相关内容。",
+    )
+    assert detail["messages"][-1]["metadata"] is None
+
+
+def test_cited_num_variants(monkeypatch, tmp_path) -> None:
+    """【1、2】连标写法同样被识别（保留两块）。"""
+    detail = _run_knowledge_chat(
+        monkeypatch,
+        tmp_path,
+        tool_result=_two_chunk_tool_result(),
+        answer="报销看财务制度【1、2】。",
+    )
+    citations = detail["messages"][-1]["metadata"]["citations"]
+    assert [c["chunk_id"] for c in citations] == ["c1", "c2"]
 
 
 def test_append_message_metadata_roundtrip(monkeypatch, tmp_path) -> None:
