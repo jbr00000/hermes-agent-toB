@@ -227,10 +227,15 @@ def _convert_to_pdf(path: Path, config: KnowledgeDeploymentConfig) -> Path:
     """
     soffice = config.soffice_path or "soffice"
     out_dir = Path(tempfile.mkdtemp(prefix="hermes-kb-office-"))
+    # 每次转换用独立的隔离 profile：共享默认 profile 时，首次运行初始化或
+    # 上一次 soffice 进程未退净都会让转换偶发失败（stderr 为空、不出 PDF），
+    # 隔离 profile 是 headless 自动化的标准做法
+    profile_uri = (out_dir / "lo-profile").resolve().as_uri()
     try:
         result = subprocess.run(
             [
                 soffice,
+                f"-env:UserInstallation={profile_uri}",
                 "--headless",
                 "--norestore",
                 "--convert-to",
@@ -252,8 +257,14 @@ def _convert_to_pdf(path: Path, config: KnowledgeDeploymentConfig) -> Path:
         raise ParseError(f"LibreOffice 转换超时（{_SOFFICE_TIMEOUT}s）: {path.name}") from exc
     pdf_path = out_dir / f"{path.stem}.pdf"
     if result.returncode != 0 or not pdf_path.exists():
-        detail = result.stderr.decode("utf-8", errors="replace")[:500]
-        raise ParseError(f"LibreOffice 转换失败: {path.name}: {detail}")
+        # Windows 上 LibreOffice 的错误提示可能走 stdout，两路都收
+        detail = (
+            result.stderr.decode("utf-8", errors="replace")
+            or result.stdout.decode("utf-8", errors="replace")
+        )[:500]
+        raise ParseError(
+            f"LibreOffice 转换失败（exit={result.returncode}）: {path.name}: {detail or '无错误输出'}"
+        )
     return pdf_path
 
 
