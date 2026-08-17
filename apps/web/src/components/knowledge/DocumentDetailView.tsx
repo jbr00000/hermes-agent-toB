@@ -9,6 +9,8 @@ import { StatusBadge } from './StatusBadge'
 
 /** 文档详情双栏视图：左栏分块卡片（admin 可编辑/启停），右栏原始文件预览。 */
 const CHUNK_PAGE_SIZE = 10
+/** 解析时经 LibreOffice 转出 PDF 的格式——有预览件时按 PDF 渲染 */
+const OFFICE_PREVIEW_EXTS = new Set(['.doc', '.docx', '.ppt', '.pptx', '.xls'])
 export function DocumentDetailView({
   documentId,
   isAdmin,
@@ -95,6 +97,25 @@ export function DocumentDetailView({
       if (blobUrl) URL.revokeObjectURL(blobUrl)
     }
   }, [blobUrl])
+
+  // Office 格式：取解析时留存的转换 PDF 作预览件，同样走 Blob → objectURL
+  const officePreview = OFFICE_PREVIEW_EXTS.has(fileExt)
+  const previewQuery = useQuery({
+    queryKey: ['knowledgeDocPreview', documentId],
+    queryFn: () => api.fetchKnowledgeDocumentFile(documentId, 'preview'),
+    enabled: Boolean(doc) && officePreview,
+    staleTime: Infinity,
+    retry: false,
+  })
+  const previewUrl = useMemo(() => {
+    if (!previewQuery.data) return null
+    return URL.createObjectURL(previewQuery.data)
+  }, [previewQuery.data])
+  useEffect(() => {
+    return () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl)
+    }
+  }, [previewUrl])
 
   const toggleMutation = useMutation({
     mutationFn: ({ chunk, next }: { chunk: KnowledgeChunk; next: boolean }) =>
@@ -362,6 +383,9 @@ export function DocumentDetailView({
               blobUrl={blobUrl}
               text={textQuery.data ?? null}
               textLoading={textQuery.isPending}
+              officePreview={officePreview}
+              previewUrl={previewUrl}
+              previewLoading={previewQuery.isPending}
               onDownload={downloadFile}
             />
           </div>
@@ -416,7 +440,7 @@ function ChunkCard({
   )
 }
 
-/** 右栏原文：按扩展名分发——PDF iframe / md 渲染 / txt 纯文本 / Office 降级下载。 */
+/** 右栏原文：按扩展名分发——PDF iframe / md 渲染 / txt 纯文本 / Office 转换 PDF 预览。 */
 function OriginalContent({
   fileExt,
   loading,
@@ -424,6 +448,9 @@ function OriginalContent({
   blobUrl,
   text,
   textLoading,
+  officePreview,
+  previewUrl,
+  previewLoading,
   onDownload,
 }: {
   fileExt: string
@@ -432,6 +459,9 @@ function OriginalContent({
   blobUrl: string | null
   text: string | null
   textLoading: boolean
+  officePreview: boolean
+  previewUrl: string | null
+  previewLoading: boolean
   onDownload: () => void
 }) {
   const center = 'flex h-full items-center justify-center p-6 text-center text-sm text-zinc-400'
@@ -467,7 +497,34 @@ function OriginalContent({
       </div>
     )
   }
-  // Office / xlsx：浏览器无法直接渲染，降级为下载
+  // Office：解析时留存的转换 PDF 按 PDF 渲染；预览件缺失（未解析/老文档）降级为下载
+  if (officePreview) {
+    if (previewUrl) {
+      return (
+        <iframe
+          src={`${previewUrl}#toolbar=0&navpanes=0&view=FitH`}
+          className="h-full w-full"
+          title="文档预览（PDF 转换件）"
+        />
+      )
+    }
+    if (previewLoading) return <div className={center}>加载预览中…</div>
+    return (
+      <div className={center}>
+        <div>
+          <FileText size={28} className="mx-auto mb-2 text-zinc-300" />
+          <p className="mb-3">预览件尚未生成，重新解析该文档后自动可用</p>
+          <button
+            className="h-8 rounded-md border border-line px-3 text-sm text-zinc-600 hover:bg-field"
+            onClick={onDownload}
+          >
+            下载原文件
+          </button>
+        </div>
+      </div>
+    )
+  }
+  // xlsx 等：浏览器无法直接渲染，降级为下载
   return (
     <div className={center}>
       <div>

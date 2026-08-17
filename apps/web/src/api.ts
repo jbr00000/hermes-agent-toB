@@ -264,11 +264,23 @@ export class ApiError extends Error {
 }
 
 async function parseError(response: Response): Promise<ApiError> {
+  const fallback = `请求失败 (${response.status})`
   try {
-    const body = await response.json() as { detail?: string }
-    return new ApiError(response.status, body.detail ?? `请求失败 (${response.status})`)
+    const body = await response.json() as { detail?: unknown }
+    const detail = body.detail
+    if (typeof detail === 'string') return new ApiError(response.status, detail)
+    // FastAPI 422：detail 是 [{loc, msg, ...}] 校验错误数组，不能直接当字符串展示
+    if (Array.isArray(detail)) {
+      const messages = detail
+        .map((item) => (item && typeof item === 'object' && 'msg' in item
+          ? String((item as { msg?: unknown }).msg)
+          : null))
+        .filter((msg): msg is string => Boolean(msg))
+      if (messages.length > 0) return new ApiError(response.status, messages.join('；'))
+    }
+    return new ApiError(response.status, fallback)
   } catch {
-    return new ApiError(response.status, `请求失败 (${response.status})`)
+    return new ApiError(response.status, fallback)
   }
 }
 
@@ -319,10 +331,12 @@ async function apiFetch(path: string, init: RequestInit = {}, retry = true): Pro
 }
 
 function formatTime(timestamp: number): string {
-  return new Date(timestamp * 1000).toLocaleTimeString('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  const value = new Date(timestamp * 1000)
+  // 跨天的记录只显示 HH:MM 会误导（侧栏"昨天/更早"分组），带上月日
+  const sameDay = value.toDateString() === new Date().toDateString()
+  return value.toLocaleString('zh-CN', sameDay
+    ? { hour: '2-digit', minute: '2-digit' }
+    : { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
 function conversationPeriod(timestamp: number): ConversationSummary['period'] {
@@ -706,9 +720,6 @@ export const api = {
   },
 
   async getConversation(sessionId: string): Promise<ConversationDetail> {
-    if (sessionId.startsWith('draft-')) {
-      return { messages: [], status: 'idle', activeRun: null }
-    }
     const response = await apiFetch(`/sessions/${encodeURIComponent(sessionId)}`)
     if (!response.ok) throw await parseError(response)
     const body = await response.json() as {
@@ -921,11 +932,9 @@ export const api = {
       features: { host_terminal?: boolean }
       data_permissions?: { enabled?: boolean; allowed_tables?: string[] | null }
     }
+    // 只透传后端真实返回的字段；provider/model 后端不提供，前端不得编造展示
     return {
       host_terminal: Boolean(body.features.host_terminal),
-      sandbox: 'docker',
-      provider: 'deepseek',
-      model: 'deepseek-v4-pro',
       dataPermissions: {
         enabled: Boolean(body.data_permissions?.enabled),
         allowedTables: body.data_permissions?.allowed_tables ?? null,
@@ -1081,9 +1090,11 @@ export const api = {
     if (!response.ok) throw await parseError(response)
   },
 
-  /** 原始上传文件（Blob；走 fetch 是因为 iframe/img 带不了 Bearer 头）。 */
-  async fetchKnowledgeDocumentFile(docId: string): Promise<Blob> {
-    const response = await apiFetch(`/knowledge/documents/${encodeURIComponent(docId)}/file`)
+  /** 原始上传文件（Blob；走 fetch 是因为 iframe/img 带不了 Bearer 头）。
+      variant=preview 取 Office 文档解析时留存的转换 PDF。 */
+  async fetchKnowledgeDocumentFile(docId: string, variant: 'original' | 'preview' = 'original'): Promise<Blob> {
+    const query = variant === 'preview' ? '?variant=preview' : ''
+    const response = await apiFetch(`/knowledge/documents/${encodeURIComponent(docId)}/file${query}`)
     if (!response.ok) throw await parseError(response)
     return response.blob()
   },

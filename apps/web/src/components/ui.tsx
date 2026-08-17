@@ -1,6 +1,6 @@
 /** 共享 UI 基础件：从 App.tsx 下沉，供知识库等视图复用（保持纸面风格 token）。 */
 import * as React from 'react'
-import { History, type LucideIcon } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 
 export function cn(...classes: Array<string | false | null | undefined>): string {
   return classes.filter(Boolean).join(' ')
@@ -18,10 +18,6 @@ export function PageHeader({ icon: Icon, title, subtitle }: { icon: LucideIcon; 
           <div className="truncate text-xs text-zinc-500">{subtitle}</div>
         </div>
       </div>
-      <button className="flex h-8 items-center gap-2 rounded-md border border-line px-3 text-sm hover:bg-field">
-        <History size={15} />
-        历史
-      </button>
     </header>
   )
 }
