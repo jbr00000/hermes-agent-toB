@@ -111,6 +111,11 @@ def _abs_file_path(document: dict) -> Path:
     return file_path
 
 
+def _abs_preview_path(document: dict) -> Path:
+    """Office 文档的预览件（解析时 LibreOffice 转出的 PDF）：与原件同 stem 的 .pdf。"""
+    return _abs_file_path(document).with_suffix(".pdf")
+
+
 def _enqueue_for_parse(document: dict, user: dict, *, count_retry: bool = False) -> str:
     """把一份 uploaded/failed 文档置 pending 并入队；队列不可用时回滚状态。
 
@@ -155,6 +160,8 @@ def _cleanup_document_artifacts(document: dict) -> None:
             "knowledge doc %s ES/Milvus 清理失败（继续删除 DB 记录）", document["id"]
         )
     _abs_file_path(document).unlink(missing_ok=True)
+    # Office 预览件（转换 PDF）一并清理；原件本身就是 .pdf 时两者同路径，missing_ok 幂等
+    _abs_preview_path(document).unlink(missing_ok=True)
 
 
 # ------------------------------------------------------------------ 只读组
@@ -209,10 +216,30 @@ _FILE_MEDIA_TYPES = {
 @_read_router.get("/documents/{doc_id}/file")
 def get_document_file(
     doc_id: str,
+    variant: str = "original",
     _: KnowledgeDeploymentConfig = Depends(_knowledge_config),
 ):
-    """原始上传文件（前端双栏视图的右侧"文档原始内容"用它做预览/下载）。"""
+    """文档文件（前端双栏视图的右侧预览/下载）。
+
+    ``variant=original``（默认）返回原始上传文件；``variant=preview`` 返回
+    Office 文档解析时留存的转换 PDF（pdf/md/txt 等可直接渲染格式没有预览件）。
+    """
+    if variant not in ("original", "preview"):
+        raise HTTPException(status_code=400, detail=f"未知 variant: {variant}")
     document = _document_or_404(doc_id)
+    if variant == "preview":
+        path = _abs_preview_path(document).resolve()
+        if not path.exists():
+            raise HTTPException(
+                status_code=404,
+                detail="该文档没有预览件（Office 文档重新解析后自动生成）",
+            )
+        return FileResponse(
+            path,
+            media_type="application/pdf",
+            filename=f"{Path(document['file_name']).stem}.pdf",
+            content_disposition_type="inline",
+        )
     path = _abs_file_path(document).resolve()
     if not path.exists():
         raise HTTPException(status_code=410, detail="原始文件已丢失，请重新上传")

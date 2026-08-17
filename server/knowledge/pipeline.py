@@ -88,7 +88,13 @@ def _run_pipeline(
         from hermes_constants import get_hermes_home
 
         file_path = get_hermes_home() / file_path
-    parsed = parse_document(file_path, str(document["file_ext"]), cfg)
+    # Office 文档的 LibreOffice 转换 PDF 留作前端预览件：<同 stem>.pdf，与原件同目录
+    parsed = parse_document(
+        file_path,
+        str(document["file_ext"]),
+        cfg,
+        preview_dest=file_path.with_suffix(".pdf"),
+    )
     embed_batch = None
     semantic_cfg = None
     if cfg.chunk_mode == "semantic":

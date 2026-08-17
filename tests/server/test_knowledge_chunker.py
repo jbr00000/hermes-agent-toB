@@ -310,6 +310,59 @@ def test_parse_docx_converts_via_soffice_then_mineru(tmp_path, monkeypatch) -> N
     assert parsed.parser == "mineru"
 
 
+def test_parse_office_moves_preview_pdf_to_dest(tmp_path, monkeypatch) -> None:
+    """传 preview_dest：转换 PDF 挪作预览件，转换临时目录整体清理。"""
+    path = tmp_path / "报告.docx"
+    path.write_bytes(b"fake-docx")
+    conv_dir = tmp_path / "hermes-kb-office-test"  # 与 _convert_to_pdf 的 mkdtemp 前缀约定一致
+    conv_dir.mkdir()
+
+    def fake_convert(p, config):
+        pdf = conv_dir / "报告.pdf"
+        pdf.write_bytes(b"%PDF converted")
+        (conv_dir / "lo-profile").mkdir()  # 隔离 profile 目录也应被清掉
+        return pdf
+
+    from server.knowledge.parser_client import ParsedDoc
+
+    monkeypatch.setattr("server.knowledge.parser_client._convert_to_pdf", fake_convert)
+    monkeypatch.setattr(
+        "server.knowledge.parser_client._parse_with_mineru",
+        lambda pdf_path, config: ParsedDoc(
+            content_md="m", content_list=[{"type": "text", "text": "t"}], parser="mineru"
+        ),
+    )
+
+    preview_dest = tmp_path / "files" / "hash123.pdf"
+    parse_document(path, ".docx", _mineru_config(), preview_dest=preview_dest)
+
+    assert preview_dest.read_bytes() == b"%PDF converted"
+    assert not conv_dir.exists()  # 临时目录（含 profile）已清理
+
+
+def test_parse_office_keeps_preview_even_when_mineru_fails(tmp_path, monkeypatch) -> None:
+    """MinerU 失败时预览件仍保留（PDF 本身有效），异常照常抛出。"""
+    path = tmp_path / "报告.docx"
+    path.write_bytes(b"fake-docx")
+
+    def fake_convert(p, config):
+        pdf = tmp_path / "conv.pdf"
+        pdf.write_bytes(b"%PDF converted")
+        return pdf
+
+    monkeypatch.setattr("server.knowledge.parser_client._convert_to_pdf", fake_convert)
+
+    def boom(pdf_path, config):
+        raise ParseError("MinerU down")
+
+    monkeypatch.setattr("server.knowledge.parser_client._parse_with_mineru", boom)
+
+    preview_dest = tmp_path / "files" / "hash123.pdf"
+    with pytest.raises(ParseError, match="MinerU down"):
+        parse_document(path, ".docx", _mineru_config(), preview_dest=preview_dest)
+    assert preview_dest.read_bytes() == b"%PDF converted"
+
+
 def test_soffice_missing_raises_parse_error(tmp_path, monkeypatch) -> None:
     import subprocess as sp
 

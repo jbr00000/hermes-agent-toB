@@ -553,3 +553,44 @@ def test_get_document_file(monkeypatch, tmp_path) -> None:
 
     (get_hermes_home() / document["file_path"]).unlink()
     assert client.get(f"/knowledge/documents/{document['id']}/file", headers=user).status_code == 410
+
+
+def test_get_document_file_preview_variant(monkeypatch, tmp_path) -> None:
+    """variant=preview：Office 文档解析时留存的转换 PDF（与原件同 stem 的 .pdf）。"""
+    client = _client(monkeypatch, tmp_path)
+    admin, user = _admin_and_user(client)
+    base = _create_base(client, admin)
+    uploaded = client.post(
+        f"/knowledge/bases/{base['id']}/documents",
+        headers=admin,
+        files={"file": ("报告.doc", b"fake-doc-bytes", "application/msword")},
+    )
+    assert uploaded.status_code == 202, uploaded.text
+    document = uploaded.json()["document"]
+
+    from hermes_constants import get_hermes_home
+
+    original = get_hermes_home() / document["file_path"]
+    preview = original.with_suffix(".pdf")
+
+    # 预览件还没生成（未解析）→ 404；未知 variant → 400；原始文件不受影响
+    assert client.get(
+        f"/knowledge/documents/{document['id']}/file?variant=preview", headers=user
+    ).status_code == 404
+    assert client.get(
+        f"/knowledge/documents/{document['id']}/file?variant=bogus", headers=user
+    ).status_code == 400
+    assert client.get(f"/knowledge/documents/{document['id']}/file", headers=user).status_code == 200
+
+    preview.write_bytes(b"%PDF preview")
+    response = client.get(
+        f"/knowledge/documents/{document['id']}/file?variant=preview", headers=user
+    )
+    assert response.status_code == 200
+    assert response.content == b"%PDF preview"
+    assert response.headers["content-type"].startswith("application/pdf")
+
+    # 删除文档时原件与预览件一并清理
+    assert client.delete(f"/knowledge/documents/{document['id']}", headers=admin).status_code == 200
+    assert not original.exists()
+    assert not preview.exists()

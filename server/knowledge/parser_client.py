@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 import html
 import logging
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 from typing import Any
@@ -53,8 +54,18 @@ class ParsedDoc:
     parser: str = "local"
 
 
-def parse_document(path: Path, file_ext: str, config: KnowledgeDeploymentConfig) -> ParsedDoc:
-    """Parse one file into a ParsedDoc. ``file_ext`` is lowercase, with the dot."""
+def parse_document(
+    path: Path,
+    file_ext: str,
+    config: KnowledgeDeploymentConfig,
+    *,
+    preview_dest: Path | None = None,
+) -> ParsedDoc:
+    """Parse one file into a ParsedDoc. ``file_ext`` is lowercase, with the dot.
+
+    Office 格式会经 LibreOffice 转出一份临时 PDF：传了 ``preview_dest`` 就把
+    它挪到该路径留作前端预览件（即使 MinerU 随后失败也保留），否则删掉。
+    """
     ext = file_ext.lower()
     if ext in TEXT_EXTS:
         return _parse_text(path, ext)
@@ -67,7 +78,15 @@ def parse_document(path: Path, file_ext: str, config: KnowledgeDeploymentConfig)
         try:
             return _parse_with_mineru(pdf_path, config)
         finally:
-            pdf_path.unlink(missing_ok=True)
+            if preview_dest is not None and pdf_path.exists():
+                preview_dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(pdf_path), preview_dest)
+            # 转换临时目录（含隔离 profile）整体清掉；目录名不匹配约定时
+            # 只删 PDF 本身——绝不 rmtree 一个不确定来源的目录
+            if pdf_path.parent.name.startswith("hermes-kb-office-"):
+                shutil.rmtree(pdf_path.parent, ignore_errors=True)
+            else:
+                pdf_path.unlink(missing_ok=True)
     raise ParseError(f"不支持的文件格式: {ext}（支持 {sorted(SUPPORTED_EXTS)}）")
 
 
@@ -220,7 +239,10 @@ def _content_list_to_markdown(content_list: list[dict[str, Any]]) -> str:
 
 
 def _convert_to_pdf(path: Path, config: KnowledgeDeploymentConfig) -> Path:
-    """LibreOffice headless 转 PDF，返回临时 PDF 路径（调用方负责删除）。
+    """LibreOffice headless 转 PDF，返回临时 PDF 路径。
+
+    返回的 PDF 位于独立的 ``hermes-kb-office-*`` 临时目录（含隔离 profile），
+    调用方负责移动/删除 PDF 并清理该目录。
 
     soffice 位置优先取 ``knowledge.soffice_path``（Windows 上 LibreOffice
     通常不在 PATH），未配置时回退到 PATH 里的 ``soffice``。
