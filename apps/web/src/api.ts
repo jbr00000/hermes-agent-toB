@@ -263,6 +263,16 @@ export class ApiError extends Error {
   }
 }
 
+/** 上传查重命中（409 duplicate_document）：matches 按命中层分别给既有文档。 */
+export class DuplicateUploadError extends ApiError {
+  constructor(
+    public matches: { name: KnowledgeDocument | null; content: KnowledgeDocument | null },
+  ) {
+    super(409, '检测到重复文档')
+    this.name = 'DuplicateUploadError'
+  }
+}
+
 async function parseError(response: Response): Promise<ApiError> {
   const fallback = `请求失败 (${response.status})`
   try {
@@ -1016,15 +1026,38 @@ export const api = {
     return body.chunks.map(toKnowledgeChunk)
   },
 
-  async uploadKnowledgeDocument(kbId: string, file: File, title?: string): Promise<KnowledgeDocument> {
+  async uploadKnowledgeDocument(
+    kbId: string,
+    file: File,
+    title?: string,
+    opts?: { force?: boolean },
+  ): Promise<KnowledgeDocument> {
     const form = new FormData()
     form.append('file', file)
     if (title?.trim()) form.append('title', title.trim())
+    if (opts?.force) form.append('force', 'true')
     const response = await apiFetch(
       `/knowledge/bases/${encodeURIComponent(kbId)}/documents`,
       { method: 'POST', body: form },
     )
-    if (!response.ok) throw await parseError(response)
+    if (!response.ok) {
+      // 查重命中：detail 是结构化的 {error, matches}，映射成专用错误给上传 UI 弹框
+      if (response.status === 409) {
+        try {
+          const body = await response.json() as {
+            detail?: { error?: unknown; matches?: { name?: unknown; content?: unknown } }
+          }
+          if (body.detail?.error === 'duplicate_document' && body.detail.matches) {
+            const { name = null, content = null } = body.detail.matches
+            return Promise.reject(new DuplicateUploadError({
+              name: name ? toKnowledgeDocument(name as BackendKnowledgeDocument) : null,
+              content: content ? toKnowledgeDocument(content as BackendKnowledgeDocument) : null,
+            }))
+          }
+        } catch { /* 落回通用错误 */ }
+      }
+      throw await parseError(response)
+    }
     const body = await response.json() as { document: BackendKnowledgeDocument }
     return toKnowledgeDocument(body.document)
   },
