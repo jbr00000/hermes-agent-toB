@@ -65,6 +65,9 @@ export function DocumentDetailView({
   const [draftContent, setDraftContent] = useState('')
   const [notice, setNotice] = useState<string | null>(null)
   const [syncWarn, setSyncWarn] = useState<string | null>(null)
+  // 所有 hook 必须在上方早退（isPending / !doc）之前声明——否则首次打开
+  // 文档详情（无缓存 → 先走早退分支）时 hook 数量变化，React 直接抛错白屏
+  const [downloading, setDownloading] = useState(false)
 
   // 编辑期间文档被重试重建 → 状态离开 ready，草稿对应的 chunk 已失效
   useEffect(() => {
@@ -197,7 +200,6 @@ export function DocumentDetailView({
     )
   }
 
-  const [downloading, setDownloading] = useState(false)
   const downloadFile = async () => {
     if (downloading) return
     setDownloading(true)
