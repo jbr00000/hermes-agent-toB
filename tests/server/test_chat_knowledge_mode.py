@@ -686,7 +686,7 @@ def test_fast_mode_direct_retrieval_injects_chunks(monkeypatch, tmp_path) -> Non
     assert "【2】《考勤制度.pdf》·请假" in message
     assert "第一步填写报销单" in message
 
-    # SSE：检索完成即推 citations（不等模型回答完）
+    # SSE：citations 事件在回答完成后推送，且已按【N】过滤（回答只标【1】）
     lines = response.text.splitlines()
     citation_events = [
         json.loads(lines[index + 1].removeprefix("data: "))
@@ -694,7 +694,7 @@ def test_fast_mode_direct_retrieval_injects_chunks(monkeypatch, tmp_path) -> Non
         if line.startswith("event: citations") and lines[index + 1].startswith("data: ")
     ]
     assert len(citation_events) == 1
-    assert [c["chunk_id"] for c in citation_events[0]["chunks"]] == ["c1", "c2"]
+    assert [c["chunk_id"] for c in citation_events[0]["chunks"]] == ["c1"]
 
     # 落库仍按【N】过滤：回答只标【1】→ 只留 c1
     detail = client.get(f"/sessions/{session_id}", headers=headers).json()

@@ -371,7 +371,8 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
             },
         )
         # 引用产出与 emit_tool_event 无关（chat 模式下后者提前 return）：
-        # knowledge_search 一完成就推送当前累计的引用列表，前端流式渲染卡片。
+        # 这里只累计进 citations_by_chunk；citations 事件等回答完成后按
+        # 【N】过滤统一推送（见下方 final 处理），保证卡片与回答口径一致。
         if tool_name == "knowledge_search" and not failed:
             for citation in _extract_citations(result):
                 chunk_id = str(citation.get("chunk_id") or "")
@@ -379,14 +380,6 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
                     continue
                 citations_by_chunk.pop(chunk_id, None)
                 citations_by_chunk[chunk_id] = citation
-            if citations_by_chunk:
-                emit(
-                    "citations",
-                    {
-                        "chunks": list(citations_by_chunk.values()),
-                        "request_id": request_id,
-                    },
-                )
 
     def on_tool_progress(*args: Any, **kwargs: Any) -> None:
         event_name = str(args[0]) if args else "tool.progress"
@@ -596,14 +589,6 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
                             + "\n\n".join(blocks)
                             + "\n）"
                         )
-                        # 检索一完成就推送引用卡片，随回答流式渲染（与工具路径一致）
-                        emit(
-                            "citations",
-                            {
-                                "chunks": list(citations_by_chunk.values()),
-                                "request_id": request_id,
-                            },
-                        )
                     else:
                         model_message += "\n\n（知识库检索结果：未检索到相关内容）"
             final = agent.chat(model_message, **chat_kwargs) or ""
@@ -623,6 +608,10 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
             if citations and effective_mode == "knowledge":
                 used_nums = _cited_nums(final)
                 citations = [c for c in citations if c.get("num") in used_nums]
+            # 回答完成后统一推引用卡片（已按【N】过滤，与落库口径一致），
+            # 前端收到即在气泡上渲染；不再在检索/工具完成时抢先推送
+            if citations:
+                emit("citations", {"chunks": citations, "request_id": request_id})
             assistant_message = repository.append_message(
                 session_id,
                 "assistant",

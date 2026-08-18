@@ -333,8 +333,8 @@ export class ChatRunManager {
           this.markFailed(sessionId, error)
         },
         onEvent: (eventName, event) => {
-          // 知识库问答：knowledge_search 一完成，服务端就推送累计引用列表 ——
-          // 直接挂到流式气泡上，让引用卡片随回答一起出现（持久化兜底在 final 消息的 metadata）
+          // 知识库问答：服务端在回答完成后推送按【N】过滤的引用列表（final 之前
+          // 到达）——挂到气泡上让卡片随完成态一起出现，持久化兜底在 final 的 metadata
           if (eventName !== 'citations') return
           const citations = toKnowledgeCitations(event.chunks)
           if (citations.length === 0) return
