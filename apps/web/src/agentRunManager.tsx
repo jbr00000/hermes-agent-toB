@@ -1,6 +1,7 @@
 import React from 'react'
 import type { QueryClient } from '@tanstack/react-query'
 import { api } from './api'
+import { mergeRunMessages } from './mergeMessages'
 import type {
   ActiveModelRun,
   AgentTaskDetail,
@@ -82,17 +83,7 @@ export function mergeAgentMessages(
   persistedMessages: ChatMessage[],
   run: AgentRunSnapshot | null,
 ): ChatMessage[] {
-  if (!run) return persistedMessages
-  const messages = [...persistedMessages]
-  if (run.userMessage && !messages.some((message) => message.id === run.userMessage?.id)) {
-    messages.push(run.userMessage)
-  }
-  const assistantPersisted = messages.some((message) => (
-    message.id === run.assistantMessage.id
-    || (message.role === 'assistant' && message.modelRunId === run.requestId)
-  ))
-  if (!assistantPersisted) messages.push(run.assistantMessage)
-  return messages
+  return mergeRunMessages(persistedMessages, run)
 }
 
 function displayTime(timestamp: number): string {
@@ -159,6 +150,7 @@ export class AgentRunManager {
   async cancel(taskId: string): Promise<void> {
     const run = this.runs.get(taskId)
     if (!run || !isAgentRunActive(run.snapshot)) return
+    const previousStatus = run.snapshot.status
     this.update(taskId, (snapshot) => ({
       ...snapshot,
       status: 'cancelling',
@@ -167,10 +159,12 @@ export class AgentRunManager {
     }))
     try {
       await this.agentApi.cancelTask(taskId)
+      // 服务端确认取消后同步断开本地 SSE，避免服务端忽略取消时流继续写
+      this.controllers.get(run.snapshot.requestId)?.abort()
     } catch (error) {
       this.update(taskId, (snapshot) => ({
         ...snapshot,
-        status: 'streaming',
+        status: previousStatus,
         updatedAt: Date.now(),
         error: error instanceof Error ? error.message : '停止任务失败',
       }))
@@ -197,6 +191,12 @@ export class AgentRunManager {
     const activeRun = task.activeRun
     const current = this.runs.get(task.id)
     if (activeRun) {
+      // 用户已取消、服务端尚未确认完：等 activeRun 消失后由下方 persisted 检查清理
+      if (
+        current
+        && current.snapshot.requestId === activeRun.id
+        && (current.snapshot.status === 'cancelled' || current.snapshot.status === 'cancelling')
+      ) return
       if (
         current
         && current.snapshot.source === 'local'
@@ -500,10 +500,24 @@ export class AgentRunManager {
       }
     } catch (error) {
       this.flush(task.id)
-      this.markFailed(
-        task.id,
-        error instanceof Error ? error.message : '无法连接 Agent 服务',
-      )
+      if (controller.signal.aborted) {
+        // 本地主动断开（用户取消 / 登出 clearAll）：不是失败，落成取消态等快照兜底
+        this.update(task.id, (snapshot) => (
+          isAgentRunActive(snapshot)
+            ? {
+                ...snapshot,
+                status: 'cancelled',
+                updatedAt: Date.now(),
+                assistantMessage: { ...snapshot.assistantMessage, status: 'cancelled' },
+              }
+            : snapshot
+        ))
+      } else {
+        this.markFailed(
+          task.id,
+          error instanceof Error ? error.message : '无法连接 Agent 服务',
+        )
+      }
     } finally {
       if (this.controllers.get(requestId) === controller) this.controllers.delete(requestId)
       await Promise.all([
@@ -544,12 +558,13 @@ export class AgentRunManager {
     }))
   }
 
+  // 只标记本次运行失败：taskStatus / permissionMode 是业务状态，以服务端为准——
+  // 瞬态断流（"流式连接已结束"）可经 reconcile 自愈，不能顺手把任务打成 failed、
+  // 把权限降回 read，否则右栏与计划面板会闪错误状态
   private markFailed(taskId: string, error: string): void {
     this.update(taskId, (snapshot) => ({
       ...snapshot,
       status: 'failed',
-      taskStatus: 'failed',
-      permissionMode: 'read',
       updatedAt: Date.now(),
       error,
       assistantMessage: {

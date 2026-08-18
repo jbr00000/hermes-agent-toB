@@ -2,8 +2,28 @@
 import * as React from 'react'
 import type { LucideIcon } from 'lucide-react'
 
+export const CORTEX_MARK_URL = '/assets/cortex-logo-mark.svg'
+
 export function cn(...classes: Array<string | false | null | undefined>): string {
   return classes.filter(Boolean).join(' ')
+}
+
+export function IconButton({ label, icon: Icon, onClick }: { label: string; icon: LucideIcon; onClick?: () => void }) {
+  return (
+    <button title={label} className="flex h-8 w-8 items-center justify-center rounded-md text-zinc-500 hover:bg-field hover:text-ink" onClick={onClick}>
+      <Icon size={16} />
+    </button>
+  )
+}
+
+export function MessageSkeleton() {
+  return (
+    <div className="space-y-3">
+      {[0, 1, 2].map((item) => (
+        <div key={item} className="h-16 animate-pulse rounded-md bg-field" />
+      ))}
+    </div>
+  )
 }
 
 export function PageHeader({ icon: Icon, title, subtitle }: { icon: LucideIcon; title: string; subtitle: string }) {
@@ -94,4 +114,14 @@ export function formatBytes(size: number): string {
   if (size < 1024) return `${size} B`
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
   return `${(size / 1024 / 1024).toFixed(1)} MB`
+}
+
+/** 知识库列表/详情共用的「月-日 时:分」格式化 */
+export function formatDateTime(timestampMs: number): string {
+  return new Date(timestampMs).toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 }

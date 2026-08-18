@@ -1,0 +1,311 @@
+import * as React from 'react'
+import { useAtom } from 'jotai'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { CircleStop, Database, Mic, Paperclip, Send, Trash2 } from 'lucide-react'
+import { api } from '../../api'
+import {
+  isAgentRunActive,
+  mergeAgentMessages,
+  useAgentRun,
+  useAgentRunManager,
+} from '../../agentRunManager'
+import { attachedFilesAtom } from '../../state'
+import type { AgentTaskDetail, AttachedFile, PermissionMode, TabType } from '../../types'
+import { MessageBubble } from '../chat/MessageBubble'
+import { ConfirmDialog } from '../ConfirmDialog'
+import { cn, IconButton, MessageSkeleton } from '../ui'
+import { PermissionSegment } from './PermissionSegment'
+import { TaskPlanPanel } from './TaskPlanPanel'
+import { ToolApprovalPanel } from './ToolApprovalPanel'
+import { ToolEventTimeline } from './ToolEventTimeline'
+
+export function AgentView({ taskId, title, onDeleted, onOpenTab }: { taskId: string; title: string; onDeleted: (taskId: string) => void; onOpenTab: (type: TabType, refId: string, title: string) => void }) {
+  const [filesByTab, setFilesByTab] = useAtom(attachedFilesAtom)
+  const queryClient = useQueryClient()
+  const agentRunManager = useAgentRunManager()
+  const run = useAgentRun(taskId)
+  const query = useQuery({
+    queryKey: ['task', taskId],
+    queryFn: () => api.getTask(taskId),
+    refetchInterval: (result) => result.state.data?.activeRun ? 1000 : false,
+  })
+  const [draft, setDraft] = React.useState('')
+  const [actionPending, setActionPending] = React.useState(false)
+  const [actionError, setActionError] = React.useState<string | null>(null)
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = React.useState(false)
+  const fileInputRef = React.useRef<HTMLInputElement | null>(null)
+  const scrollRef = React.useRef<HTMLDivElement | null>(null)
+  const restoredScrollRef = React.useRef(false)
+  // 输出流期间是否贴底跟随：用户上滚超过阈值即退出跟随，回到底部自动恢复
+  const shouldFollowOutputRef = React.useRef(true)
+  const wasActiveRef = React.useRef(false)
+
+  // 附件按本任务隔离（atom 是 { [taskId]: 文件列表 }），切任务互不串扰
+  const files = React.useMemo(() => filesByTab[taskId] ?? [], [filesByTab, taskId])
+  const setFiles = React.useCallback((updater: (current: AttachedFile[]) => AttachedFile[]) => {
+    setFilesByTab((current) => ({ ...current, [taskId]: updater(current[taskId] ?? []) }))
+  }, [taskId, setFilesByTab])
+
+  React.useEffect(() => {
+    if (query.data) agentRunManager.reconcileServerState(query.data)
+  }, [agentRunManager, query.data])
+
+  const task = query.data
+  const active = isAgentRunActive(run)
+  const taskStatus = run?.taskStatus ?? task?.status ?? 'draft'
+  const permissionMode = run?.permissionMode ?? task?.permission.mode ?? 'read'
+  const messages = mergeAgentMessages(task?.messages ?? [], run)
+  const toolEvents = React.useMemo(() => {
+    const persisted = task?.events ?? []
+    const live = run?.toolEvents ?? []
+    const ids = new Set(persisted.map((event) => event.id))
+    return [...persisted, ...live.filter((event) => !ids.has(event.id))]
+  }, [run?.toolEvents, task?.events])
+  const pendingApprovals = React.useMemo(
+    () => (run?.toolApprovals ?? []).filter((approval) => approval.status === 'pending'),
+    [run?.toolApprovals],
+  )
+  const approvedPlan = task?.plan?.status === 'approved'
+  const canPlan = !active && Boolean(task) && !approvedPlan && taskStatus !== 'completed'
+
+  React.useLayoutEffect(() => {
+    const element = scrollRef.current
+    if (!element || restoredScrollRef.current || !task) return
+    restoredScrollRef.current = true
+    const saved = agentRunManager.getScrollPosition(taskId)
+    element.scrollTop = active ? element.scrollHeight : Math.min(saved ?? element.scrollHeight, element.scrollHeight)
+    const bottomGap = element.scrollHeight - element.clientHeight - element.scrollTop
+    shouldFollowOutputRef.current = active || bottomGap <= 96
+  }, [active, agentRunManager, task, taskId])
+
+  React.useEffect(() => {
+    restoredScrollRef.current = false
+    shouldFollowOutputRef.current = true
+    wasActiveRef.current = false
+    return () => {
+      const element = scrollRef.current
+      if (element) agentRunManager.setScrollPosition(taskId, element.scrollTop)
+    }
+  }, [agentRunManager, taskId])
+
+  React.useLayoutEffect(() => {
+    const element = scrollRef.current
+    const startedActive = active && !wasActiveRef.current
+    if (element && active && (startedActive || shouldFollowOutputRef.current)) {
+      element.scrollTop = element.scrollHeight
+      shouldFollowOutputRef.current = true
+    }
+    wasActiveRef.current = active
+  }, [active, messages.length, run?.assistantMessage.content, toolEvents.length, pendingApprovals.length])
+
+  const sendPlanRequest = React.useCallback(() => {
+    const text = draft.trim()
+    if (!text || !task || !canPlan) return
+    setDraft('')
+    setActionError(null)
+    try {
+      agentRunManager.startPlan(task, text)
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : '无法启动规划')
+    }
+  }, [agentRunManager, canPlan, draft, task])
+
+  const changePermission = React.useCallback(async (mode: PermissionMode) => {
+    if (!task || active) return
+    setActionPending(true)
+    setActionError(null)
+    try {
+      const permission = await api.setTaskPermission(task.id, mode)
+      queryClient.setQueryData<AgentTaskDetail>(['task', task.id], (current) => (
+        current ? { ...current, permission } : current
+      ))
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : '权限变更失败')
+    } finally {
+      setActionPending(false)
+    }
+  }, [active, queryClient, task])
+
+  const approvePlan = React.useCallback(async () => {
+    if (!task || active) return
+    setActionPending(true)
+    setActionError(null)
+    try {
+      const updated = await api.approveTask(task.id)
+      queryClient.setQueryData(['task', task.id], updated)
+      await queryClient.invalidateQueries({ queryKey: ['tasks'] })
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : '计划审批失败')
+    } finally {
+      setActionPending(false)
+    }
+  }, [active, queryClient, task])
+
+  const executePlan = React.useCallback(() => {
+    if (!task || active || task.plan?.status !== 'approved') return
+    setActionError(null)
+    try {
+      agentRunManager.startExecute(task)
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : '无法启动执行')
+    }
+  }, [active, agentRunManager, task])
+
+  const stopTask = React.useCallback(() => {
+    void agentRunManager.cancel(taskId).catch((error) => {
+      setActionError(error instanceof Error ? error.message : '停止任务失败')
+    })
+  }, [agentRunManager, taskId])
+
+  const deleteTask = React.useCallback(async () => {
+    if (active) return
+    setActionPending(true)
+    setActionError(null)
+    try {
+      await api.deleteTask(taskId)
+      setDeleteConfirmOpen(false)
+      onDeleted(taskId)
+      void queryClient.invalidateQueries({ queryKey: ['tasks'] })
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : '删除任务失败')
+      setDeleteConfirmOpen(false)
+    } finally {
+      setActionPending(false)
+    }
+  }, [active, onDeleted, queryClient, taskId])
+
+  // 附件仅本地暂存（上传通道未接入），选中即入列，没有"解析中"的假状态
+  const addFiles = (selected: FileList | null) => {
+    if (!selected?.length) return
+    const next = Array.from(selected).map((file) => ({
+      id: `f-${Date.now()}-${file.name}`,
+      name: file.name,
+      size: file.size,
+    }))
+    setFiles((current) => [...current, ...next])
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex min-h-14 items-center justify-between gap-2 border-b border-line px-3 py-2 sm:h-14 sm:px-5 sm:py-0">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold">{title}</div>
+        </div>
+        <div className="flex items-center gap-2">
+          <PermissionSegment
+            value={permissionMode}
+            onChange={(mode) => void changePermission(mode)}
+            compact
+            disabled={active || actionPending}
+          />
+          <button
+            title="删除任务"
+            className="flex h-8 w-8 items-center justify-center rounded-md border border-line text-zinc-500 hover:bg-red-50 hover:text-danger disabled:opacity-40"
+            disabled={active || actionPending}
+            onClick={() => setDeleteConfirmOpen(true)}
+          >
+            <Trash2 size={15} />
+          </button>
+        </div>
+      </div>
+
+      <div
+        ref={scrollRef}
+        className="thin-scrollbar min-h-0 flex-1 overflow-y-auto px-8 py-6"
+        onScroll={(event) => {
+          const element = event.currentTarget
+          const bottomGap = element.scrollHeight - element.clientHeight - element.scrollTop
+          shouldFollowOutputRef.current = bottomGap <= 96
+          if (!active) agentRunManager.setScrollPosition(taskId, element.scrollTop)
+        }}
+      >
+        <div className="mx-auto max-w-4xl space-y-5">
+          <TaskPlanPanel
+            status={taskStatus}
+            plan={task?.plan ?? null}
+            permissionMode={permissionMode}
+            pending={active || actionPending}
+            onApprove={() => void approvePlan()}
+            onExecute={executePlan}
+            onModeChange={(mode) => void changePermission(mode)}
+          />
+          {query.isLoading ? (
+            <MessageSkeleton />
+          ) : query.isError ? (
+            <div className="border-y border-red-100 bg-red-50 px-4 py-8 text-center text-sm text-danger">
+              {query.error instanceof Error ? query.error.message : '任务加载失败'}
+            </div>
+          ) : messages.length === 0 ? (
+            <div className="border-y border-line py-16 text-center">
+              <div className="text-sm font-medium">新任务</div>
+              <div className="mt-1 text-xs text-zinc-500">输入目标后，Agent 会先生成可审批的执行计划。</div>
+            </div>
+          ) : (
+            messages.map((message) => <MessageBubble key={message.id} message={message} onOpenTab={onOpenTab} />)
+          )}
+          <ToolEventTimeline events={toolEvents} activeRunId={run?.requestId ?? task?.currentRunId ?? null} />
+          {pendingApprovals.length > 0 && (
+            <ToolApprovalPanel
+              approvals={pendingApprovals}
+              onDecide={(approvalId, decision) => {
+                void agentRunManager.decideApproval(taskId, approvalId, decision).catch((error) => {
+                  setActionError(error instanceof Error ? error.message : '审批操作失败')
+                })
+              }}
+            />
+          )}
+          {actionError && (
+            <div className="border-l-2 border-danger bg-red-50 px-3 py-2 text-sm text-danger">
+              {actionError}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="border-t border-line bg-[#fbfbfc] px-6 py-4">
+        <div className="mx-auto max-w-4xl">
+          <div className="rounded-md border border-line bg-panel shadow-sm">
+          <textarea
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            className="block min-h-[82px] w-full resize-none bg-transparent px-4 py-3 text-sm outline-none"
+            placeholder={approvedPlan ? '计划已批准，可在上方调整权限后执行' : '输入任务目标，Agent 将先生成执行计划'}
+            disabled={!canPlan}
+          />
+          <div className="flex items-center justify-between border-t border-line px-3 py-2">
+            <div className="flex items-center gap-1.5">
+              <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(event) => addFiles(event.target.files)} />
+              <IconButton label="添加文件" icon={Paperclip} onClick={() => fileInputRef.current?.click()} />
+              <IconButton label="语音输入" icon={Mic} />
+              <IconButton label="选择知识库" icon={Database} />
+              {files.length > 0 && (
+                <span className="ml-2 text-xs text-zinc-500">{files.length} 个附件（本地暂存，暂不参与执行）</span>
+              )}
+            </div>
+            <button
+              className={cn(
+                'flex h-8 items-center gap-2 rounded-md px-3 text-sm font-medium transition active:scale-[0.98]',
+                active || (canPlan && draft.trim()) ? 'bg-ink text-white' : 'bg-zinc-200 text-zinc-400',
+              )}
+              disabled={!active && (!canPlan || !draft.trim())}
+              onClick={active ? stopTask : sendPlanRequest}
+            >
+              {active ? <CircleStop size={15} /> : <Send size={15} />}
+              {active ? '停止' : '生成计划'}
+            </button>
+          </div>
+          </div>
+        </div>
+      </div>
+      {deleteConfirmOpen && (
+        <ConfirmDialog
+          title="删除任务"
+          description="确认删除该任务及其对话、计划和工具记录？此操作不可撤销。"
+          pending={actionPending}
+          onConfirm={() => void deleteTask()}
+          onCancel={() => setDeleteConfirmOpen(false)}
+        />
+      )}
+    </div>
+  )
+}

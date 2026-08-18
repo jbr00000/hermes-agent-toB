@@ -1,6 +1,7 @@
 import React from 'react'
 import type { QueryClient } from '@tanstack/react-query'
 import { api, toKnowledgeCitations } from './api'
+import { mergeRunMessages } from './mergeMessages'
 import type { ActiveModelRun, ChatMessage, ConversationDetail, KnowledgeSearchMode } from './types'
 
 export type ChatRunStatus =
@@ -49,19 +50,7 @@ export function mergeChatMessages(
   persistedMessages: ChatMessage[],
   run: ChatRunSnapshot | null,
 ): ChatMessage[] {
-  if (!run) return persistedMessages
-
-  const messages = [...persistedMessages]
-  if (run.userMessage && !messages.some((message) => message.id === run.userMessage?.id)) {
-    messages.push(run.userMessage)
-  }
-
-  const assistantPersisted = messages.some((message) => (
-    message.id === run.assistantMessage.id
-    || (message.role === 'assistant' && message.modelRunId === run.requestId)
-  ))
-  if (!assistantPersisted) messages.push(run.assistantMessage)
-  return messages
+  return mergeRunMessages(persistedMessages, run)
 }
 
 export class ChatRunManager {
@@ -183,6 +172,7 @@ export class ChatRunManager {
   async cancel(sessionId: string): Promise<void> {
     const run = this.runs.get(sessionId)
     if (!run || !isChatRunActive(run.snapshot)) return
+    const previousStatus = run.snapshot.status
     this.update(sessionId, (snapshot) => ({
       ...snapshot,
       status: 'cancelling',
@@ -191,10 +181,13 @@ export class ChatRunManager {
     }))
     try {
       await this.chatApi.cancelChat(run.snapshot.requestId)
+      // 服务端确认取消后同步断开本地 SSE——否则服务端忽略取消时流还在继续写，
+      // UI 却已显示"已取消"
+      this.streamControllers.get(run.snapshot.requestId)?.abort()
     } catch (error) {
       this.update(sessionId, (snapshot) => ({
         ...snapshot,
-        status: 'streaming',
+        status: previousStatus,
         updatedAt: Date.now(),
         error: error instanceof Error ? error.message : '停止生成失败',
       }))
@@ -207,6 +200,15 @@ export class ChatRunManager {
     const current = this.runs.get(sessionId)
 
     if (activeRun) {
+      // 用户已取消、服务端尚未确认完：等 activeRun 消失后由下方 persisted 检查清理，
+      // 不要因为轮询快照滞后把已取消的运行回摆成 streaming
+      if (
+        current
+        && current.snapshot.requestId === activeRun.id
+        && (current.snapshot.status === 'cancelled' || current.snapshot.status === 'cancelling')
+      ) {
+        return
+      }
       if (
         current
         && current.snapshot.source === 'local'
@@ -219,7 +221,8 @@ export class ChatRunManager {
         current
         && current.snapshot.source === 'restored'
         && current.snapshot.requestId === activeRun.id
-        && current.snapshot.sequence > activeRun.sequence
+        && current.snapshot.sequence >= activeRun.sequence
+        && isChatRunActive(current.snapshot)
       ) {
         return
       }
@@ -341,10 +344,25 @@ export class ChatRunManager {
       }
     } catch (error) {
       this.flush(sessionId)
-      this.markFailed(
-        sessionId,
-        error instanceof Error ? error.message : '无法连接 Chat 服务',
-      )
+      if (controller.signal.aborted) {
+        // 本地主动断开（用户取消 / 登出 clearAll）：不是失败。登出时 runs 已清空，
+        // update 自然落空；取消时把状态落成 cancelled，等服务端快照兜底纠正
+        this.update(sessionId, (snapshot) => (
+          isChatRunActive(snapshot)
+            ? {
+                ...snapshot,
+                status: 'cancelled',
+                updatedAt: Date.now(),
+                assistantMessage: { ...snapshot.assistantMessage, status: 'cancelled' },
+              }
+            : snapshot
+        ))
+      } else {
+        this.markFailed(
+          sessionId,
+          error instanceof Error ? error.message : '无法连接 Chat 服务',
+        )
+      }
     } finally {
       if (this.streamControllers.get(requestId) === controller) {
         this.streamControllers.delete(requestId)

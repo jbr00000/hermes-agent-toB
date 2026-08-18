@@ -3,7 +3,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Database, LoaderCircle, Play, RotateCcw, Trash2 } from 'lucide-react'
 import { api, ApiError } from '../../api'
 import type { KnowledgeDocument, TabType } from '../../types'
-import { DataTable, formatBytes, PageHeader, Td, Th } from '../ui'
+import { ConfirmDialog } from '../ConfirmDialog'
+import { DataTable, formatBytes, formatDateTime, PageHeader, Td, Th } from '../ui'
 import { FormatIcon } from './FormatIcon'
 import { StatusBadge } from './StatusBadge'
 import { ACCEPTED_EXTS, UploadButton } from './UploadButton'
@@ -11,15 +12,6 @@ import { ACCEPTED_EXTS, UploadButton } from './UploadButton'
 const ACTIVE_STATUSES = new Set(['pending', 'parsing', 'syncing'])
 // 可被批量解析选中的状态：待解析（uploaded）与失败重试走 retry 接口，这里只放行 uploaded
 const PARSEABLE_STATUSES = new Set(['uploaded', 'failed'])
-
-function formatDateTime(timestampMs: number): string {
-  return new Date(timestampMs).toLocaleString('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
 
 /** 步骤②③：某个知识库的详情。admin 上传文档（只落库不解析），勾选后批量解析；普通用户只读。 */
 export function KnowledgeBaseView({
@@ -38,6 +30,7 @@ export function KnowledgeBaseView({
   const [parsing, setParsing] = React.useState(false)
   const [dragActive, setDragActive] = React.useState(false)
   const [selected, setSelected] = React.useState<Set<string>>(new Set())
+  const [deleteTarget, setDeleteTarget] = React.useState<KnowledgeDocument | null>(null)
   // dragenter/dragleave 会在子元素间抖动，用计数器判定"真的离开了放置区"
   const dragDepth = React.useRef(0)
 
@@ -278,17 +271,25 @@ export function KnowledgeBaseView({
                   }
                   onOpen={() => onOpenTab('document', doc.id, doc.title)}
                   onRetry={() => runAction(() => api.retryKnowledgeDocument(doc.id))}
-                  onDelete={() => {
-                    if (window.confirm(`确定删除「${doc.title}」？分块与索引将一并清除。`)) {
-                      runAction(() => api.deleteKnowledgeDocument(doc.id))
-                    }
-                  }}
+                  onDelete={() => setDeleteTarget(doc)}
                 />
               ))}
             </tbody>
           </DataTable>
         )}
       </section>
+      {deleteTarget && (
+        <ConfirmDialog
+          title={`删除文档「${deleteTarget.title}」`}
+          description="该文档的分块与检索索引将一并清除，不可恢复。"
+          onConfirm={() => {
+            const docId = deleteTarget.id
+            setDeleteTarget(null)
+            runAction(() => api.deleteKnowledgeDocument(docId))
+          }}
+          onCancel={() => setDeleteTarget(null)}
+        />
+      )}
     </div>
   )
 }

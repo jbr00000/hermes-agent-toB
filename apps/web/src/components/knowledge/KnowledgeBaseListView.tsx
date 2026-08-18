@@ -3,16 +3,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Database, LoaderCircle, Plus, Trash2 } from 'lucide-react'
 import { api, ApiError } from '../../api'
 import type { KnowledgeBase, TabType } from '../../types'
-import { DataTable, PageHeader, Td, Th } from '../ui'
-
-function formatDateTime(timestampMs: number): string {
-  return new Date(timestampMs).toLocaleString('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
+import { ConfirmDialog } from '../ConfirmDialog'
+import { DataTable, formatDateTime, PageHeader, Td, Th } from '../ui'
 
 /** 步骤①：知识库列表。admin 可新建/删除（级联）；点击进入库详情做上传与解析。 */
 export function KnowledgeBaseListView({
@@ -25,6 +17,8 @@ export function KnowledgeBaseListView({
   const queryClient = useQueryClient()
   const [actionError, setActionError] = React.useState<string | null>(null)
   const [creating, setCreating] = React.useState(false)
+  const [deleteTarget, setDeleteTarget] = React.useState<KnowledgeBase | null>(null)
+  const [deleting, setDeleting] = React.useState(false)
   const query = useQuery({
     queryKey: ['knowledgeBases'],
     queryFn: () => api.listKnowledgeBases(),
@@ -34,6 +28,23 @@ export function KnowledgeBaseListView({
   const bases = query.data ?? []
 
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ['knowledgeBases'] })
+
+  const confirmDelete = () => {
+    if (!deleteTarget || deleting) return
+    setDeleting(true)
+    setActionError(null)
+    void api
+      .deleteKnowledgeBase(deleteTarget.id)
+      .then(() => {
+        setDeleteTarget(null)
+        invalidate()
+      })
+      .catch((cause: unknown) => {
+        setActionError(cause instanceof ApiError ? cause.message : '删除失败，请重试')
+        setDeleteTarget(null)
+      })
+      .finally(() => setDeleting(false))
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -92,20 +103,7 @@ export function KnowledgeBaseListView({
                   base={base}
                   isAdmin={isAdmin}
                   onOpen={() => onOpenTab('knowledgeBaseDetail', base.id, base.name)}
-                  onDelete={() => {
-                    const hint = base.docCount > 0
-                      ? `确定删除「${base.name}」？库内 ${base.docCount} 个文档及其分块、索引、文件将一并清除，不可恢复。`
-                      : `确定删除「${base.name}」？`
-                    if (window.confirm(hint)) {
-                      setActionError(null)
-                      void api
-                        .deleteKnowledgeBase(base.id)
-                        .then(invalidate)
-                        .catch((cause: unknown) => {
-                          setActionError(cause instanceof ApiError ? cause.message : '删除失败，请重试')
-                        })
-                    }
-                  }}
+                  onDelete={() => setDeleteTarget(base)}
                 />
               ))}
             </tbody>
@@ -120,6 +118,17 @@ export function KnowledgeBaseListView({
             invalidate()
             onOpenTab('knowledgeBaseDetail', base.id, base.name)
           }}
+        />
+      )}
+      {deleteTarget && (
+        <ConfirmDialog
+          title={`删除知识库「${deleteTarget.name}」`}
+          description={deleteTarget.docCount > 0
+            ? `库内 ${deleteTarget.docCount} 个文档及其分块、索引、文件将一并清除，不可恢复。`
+            : '确定删除该知识库？此操作不可恢复。'}
+          pending={deleting}
+          onConfirm={confirmDelete}
+          onCancel={() => setDeleteTarget(null)}
         />
       )}
     </div>

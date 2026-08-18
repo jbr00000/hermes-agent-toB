@@ -11,6 +11,8 @@ import { StatusBadge } from './StatusBadge'
 const CHUNK_PAGE_SIZE = 10
 /** 解析时经 LibreOffice 转出 PDF 的格式——有预览件时按 PDF 渲染 */
 const OFFICE_PREVIEW_EXTS = new Set(['.doc', '.docx', '.ppt', '.pptx', '.xls'])
+/** 原文本身可直接在线预览的格式——只有这些才在进入页面时拉取原始文件，其余按需（点下载时）再拉 */
+const ORIGINAL_PREVIEW_EXTS = new Set(['.pdf', '.md', '.txt'])
 export function DocumentDetailView({
   documentId,
   isAdmin,
@@ -75,7 +77,8 @@ export function DocumentDetailView({
   const fileQuery = useQuery({
     queryKey: ['knowledgeDocFile', documentId],
     queryFn: () => api.fetchKnowledgeDocumentFile(documentId),
-    enabled: Boolean(doc),
+    // Office/xlsx 的右栏走转换 PDF 或下载降级，原文只在点下载时按需拉取，避免白拉大文件
+    enabled: Boolean(doc) && ORIGINAL_PREVIEW_EXTS.has(fileExt),
     staleTime: Infinity,
     retry: false,
   })
@@ -194,15 +197,30 @@ export function DocumentDetailView({
     )
   }
 
-  const downloadFile = () => {
-    const blob = fileQuery.data
-    if (!blob) return
-    const url = URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = doc.fileName
-    anchor.click()
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  const [downloading, setDownloading] = useState(false)
+  const downloadFile = async () => {
+    if (downloading) return
+    setDownloading(true)
+    try {
+      // 未为预览拉过原文时（Office/xlsx），点击下载才按需拉取并回填缓存
+      const blob = fileQuery.data
+        ?? await queryClient.fetchQuery<Blob>({
+          queryKey: ['knowledgeDocFile', documentId],
+          queryFn: () => api.fetchKnowledgeDocumentFile(documentId),
+          staleTime: Infinity,
+          retry: false,
+        })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = doc.fileName
+      anchor.click()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch (error) {
+      setNotice(`下载失败：${error instanceof Error ? error.message : '请重试'}`)
+    } finally {
+      setDownloading(false)
+    }
   }
 
   return (
@@ -364,16 +382,15 @@ export function DocumentDetailView({
         <section className="flex min-h-[360px] flex-col border-t border-line lg:min-h-0 lg:border-t-0">
           <header className="flex items-center justify-between border-b border-line px-4 py-2">
             <span className="text-xs font-semibold text-zinc-500">文档原始内容</span>
-            {fileQuery.data && (
-              <button
-                className="flex h-6 items-center gap-1 rounded border border-line px-2 text-xs text-zinc-500 hover:bg-field hover:text-ink"
-                onClick={downloadFile}
-                title={`下载 ${doc.fileName}`}
-              >
-                <Download size={11} />
-                下载
-              </button>
-            )}
+            <button
+              className="flex h-6 items-center gap-1 rounded border border-line px-2 text-xs text-zinc-500 hover:bg-field hover:text-ink disabled:opacity-50"
+              onClick={() => void downloadFile()}
+              disabled={downloading}
+              title={`下载 ${doc.fileName}`}
+            >
+              <Download size={11} />
+              {downloading ? '下载中…' : '下载'}
+            </button>
           </header>
           <div className="min-h-0 flex-1">
             <OriginalContent
@@ -386,7 +403,7 @@ export function DocumentDetailView({
               officePreview={officePreview}
               previewUrl={previewUrl}
               previewLoading={previewQuery.isPending}
-              onDownload={downloadFile}
+              onDownload={() => void downloadFile()}
             />
           </div>
         </section>

@@ -196,7 +196,6 @@ export interface AttachedFile {
   id: string
   name: string
   size: number
-  status: 'ready' | 'parsing'
 }
 
 export interface KnowledgeSpace {

@@ -5,7 +5,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { KeyRound, LoaderCircle, Pencil, Plus, Power, Trash2, Users, type LucideIcon } from 'lucide-react'
 import { api, ApiError } from '../../api'
 import type { AdminUserRow, AuthUser, UserFeatures, UserRole } from '../../types'
-import { Badge, cn, DataTable, PageHeader, Td, Th } from '../ui'
+import { ConfirmDialog } from '../ConfirmDialog'
+import { Badge, DataTable, PageHeader, Td, Th } from '../ui'
 
 const FEATURE_LABELS: Array<{ key: keyof UserFeatures; label: string }> = [
   { key: 'agent', label: 'Agent 任务' },
@@ -40,6 +41,7 @@ export function UserAdminView({ currentUser }: { currentUser: AuthUser }) {
   const [createOpen, setCreateOpen] = React.useState(false)
   const [resetTarget, setResetTarget] = React.useState<AdminUserRow | null>(null)
   const [featuresTarget, setFeaturesTarget] = React.useState<AdminUserRow | null>(null)
+  const [deleteTarget, setDeleteTarget] = React.useState<AdminUserRow | null>(null)
   const query = useQuery({ queryKey: ['adminUsers'], queryFn: () => api.listUsers(), retry: false })
   const users = query.data ?? []
 
@@ -104,11 +106,7 @@ export function UserAdminView({ currentUser }: { currentUser: AuthUser }) {
                   }
                   onEditFeatures={() => setFeaturesTarget(row)}
                   onResetPassword={() => setResetTarget(row)}
-                  onDelete={() => {
-                    if (window.confirm(`确定删除用户「${row.username}」？该操作不可恢复。`)) {
-                      runAction(() => api.deleteUser(row.id))
-                    }
-                  }}
+                  onDelete={() => setDeleteTarget(row)}
                 />
               ))}
             </tbody>
@@ -139,6 +137,18 @@ export function UserAdminView({ currentUser }: { currentUser: AuthUser }) {
             setFeaturesTarget(null)
             invalidate()
           }}
+        />
+      )}
+      {deleteTarget && (
+        <ConfirmDialog
+          title={`删除用户「${deleteTarget.username}」`}
+          description="该用户的会话、记忆与任务数据将无法恢复。此操作不可撤销。"
+          onConfirm={() => {
+            const userId = deleteTarget.id
+            setDeleteTarget(null)
+            runAction(() => api.deleteUser(userId))
+          }}
+          onCancel={() => setDeleteTarget(null)}
         />
       )}
     </div>
