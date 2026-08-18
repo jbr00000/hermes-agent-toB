@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path
 import threading
@@ -347,10 +348,15 @@ async def upload_document(
     kb_id: str,
     file: UploadFile,
     title: str | None = Form(default=None),
+    force: bool = Form(default=False),
     config: KnowledgeDeploymentConfig = Depends(_knowledge_config),
     user: dict = Depends(get_current_user),
 ):
-    """步骤②：上传文档。只落盘 + 建 uploaded 文档，**不入队解析**。"""
+    """步骤②：上传文档。只落盘 + 建 uploaded 文档，**不入队解析**。
+
+    库内两层查重（同名去扩展名 + 内容 SHA-256），任一层命中返回 409 +
+    结构化 detail；前端弹框确认后带 ``force=true`` 重传即跳过检测。
+    """
     _base_or_404(kb_id)
     file_name = Path(file.filename or "").name  # 剥掉任何路径成分
     file_ext = Path(file_name).suffix.lower()
@@ -368,12 +374,26 @@ async def upload_document(
             status_code=413, detail=f"文件超过大小限制（{config.max_file_mb}MB）"
         )
 
+    file_hash = hashlib.sha256(content).hexdigest()
+    repository = get_repository()
+    if not force:
+        matches = {
+            "name": repository.find_knowledge_document_by_stem(
+                kb_id, Path(file_name).stem
+            ),
+            "content": repository.find_knowledge_document_by_hash(kb_id, file_hash),
+        }
+        if matches["name"] or matches["content"]:
+            raise HTTPException(
+                status_code=409,
+                detail={"error": "duplicate_document", "matches": matches},
+            )
+
     files_dir = get_hermes_home() / _FILES_DIR
     files_dir.mkdir(parents=True, exist_ok=True)
     stored_name = f"{uuid.uuid4().hex}{file_ext}"
     (files_dir / stored_name).write_bytes(content)
 
-    repository = get_repository()
     document = repository.create_knowledge_document(
         kb_id=kb_id,
         uploader_id=user["id"],
@@ -382,6 +402,7 @@ async def upload_document(
         file_ext=file_ext,
         size_bytes=len(content),
         file_path=str(_FILES_DIR / stored_name),
+        file_hash=file_hash,
     )
     repository.record_audit_event(
         event_type="knowledge_upload",

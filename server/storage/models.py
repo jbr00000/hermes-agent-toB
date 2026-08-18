@@ -365,6 +365,7 @@ class KnowledgeDocument(Base):
     __table_args__ = (
         Index("idx_knowledge_docs_tenant_updated", "tenant_id", "updated_at"),
         Index("idx_knowledge_docs_kb", "kb_id"),
+        Index("idx_knowledge_docs_kb_hash", "kb_id", "file_hash"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -376,6 +377,9 @@ class KnowledgeDocument(Base):
     file_ext: Mapped[str] = mapped_column(String(16), nullable=False)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     file_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    # 上传内容的 SHA-256，用于库内查重；存量行（迁移前上传）为 NULL，
+    # 只对新上传生效
+    file_hash: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="uploaded")
     error: Mapped[str | None] = mapped_column(Text)
     parser: Mapped[str | None] = mapped_column(String(16))

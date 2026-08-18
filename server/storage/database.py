@@ -88,6 +88,7 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str, dict | None], ...] = (
     ("users", "features", "JSON", DEFAULT_USER_FEATURES),
     ("users", "must_change_password", "BOOLEAN NOT NULL DEFAULT 0", None),
     ("knowledge_documents", "kb_id", "VARCHAR(36)", None),
+    ("knowledge_documents", "file_hash", "VARCHAR(64)", None),
     ("knowledge_chunks", "kb_id", "VARCHAR(36)", None),
     ("messages", "metadata_json", "TEXT", None),
 )

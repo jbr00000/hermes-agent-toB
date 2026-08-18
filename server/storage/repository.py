@@ -4,6 +4,7 @@ import json
 import os
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import delete, func, select
@@ -190,6 +191,7 @@ def _knowledge_document_dict(row: KnowledgeDocument) -> dict[str, Any]:
         "file_ext": row.file_ext,
         "size_bytes": row.size_bytes,
         "file_path": row.file_path,
+        "file_hash": row.file_hash,
         "status": row.status,
         "error": row.error,
         "parser": row.parser,
@@ -2369,6 +2371,7 @@ class StorageRepository:
         file_ext: str,
         size_bytes: int,
         file_path: str,
+        file_hash: str | None = None,
     ) -> dict[str, Any]:
         """Step ②: store an uploaded file. Status stays ``uploaded`` — parsing
         only starts when an admin explicitly enqueues the document (step ③)."""
@@ -2383,6 +2386,7 @@ class StorageRepository:
             file_ext=file_ext,
             size_bytes=size_bytes,
             file_path=file_path,
+            file_hash=file_hash,
             status="uploaded",
             chunk_count=0,
             retry_count=0,
@@ -2412,6 +2416,51 @@ class StorageRepository:
                 )
             )
             return _knowledge_document_dict(row) if row is not None else None
+
+    def find_knowledge_document_by_hash(
+        self, kb_id: str, file_hash: str
+    ) -> dict[str, Any] | None:
+        """库内内容查重：同 kb_id 且 file_hash 相同的最新一篇文档。"""
+        with session_scope() as session:
+            row = session.scalar(
+                select(KnowledgeDocument)
+                .where(
+                    KnowledgeDocument.tenant_id == tenant_id(),
+                    KnowledgeDocument.kb_id == kb_id,
+                    KnowledgeDocument.file_hash == file_hash,
+                )
+                .order_by(KnowledgeDocument.updated_at.desc())
+                .limit(1)
+            )
+            return _knowledge_document_dict(row) if row is not None else None
+
+    def find_knowledge_document_by_stem(
+        self, kb_id: str, stem: str
+    ) -> dict[str, Any] | None:
+        """库内文件名查重：file_name 去扩展名后（大小写不敏感）相同的最新一篇。
+
+        词干比较在 Python 侧做——跨库（SQLite/MySQL）没有可移植的"去扩展名"
+        字符串函数；单库文档量小，全量取出比较足够。
+        """
+        wanted = stem.strip().lower()
+        if not wanted:
+            return None
+        with session_scope() as session:
+            rows = session.scalars(
+                select(KnowledgeDocument).where(
+                    KnowledgeDocument.tenant_id == tenant_id(),
+                    KnowledgeDocument.kb_id == kb_id,
+                )
+            ).all()
+            matches = [
+                row
+                for row in rows
+                if Path(row.file_name).stem.strip().lower() == wanted
+            ]
+            if not matches:
+                return None
+            matches.sort(key=lambda row: row.updated_at, reverse=True)
+            return _knowledge_document_dict(matches[0])
 
     def list_knowledge_documents(
         self,

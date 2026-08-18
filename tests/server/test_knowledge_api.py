@@ -65,11 +65,20 @@ def _create_base(client: TestClient, headers: dict[str, str], name: str = "规�
     return response.json()["base"]
 
 
-def _upload(client: TestClient, headers: dict[str, str], kb_id: str) -> dict:
+def _upload(
+    client: TestClient,
+    headers: dict[str, str],
+    kb_id: str,
+    *,
+    name: str = "规范.md",
+    content: str = _MD,
+    form: dict[str, str] | None = None,
+) -> dict:
     response = client.post(
         f"/knowledge/bases/{kb_id}/documents",
         headers=headers,
-        files={"file": ("规范.md", _MD.encode("utf-8"), "text/markdown")},
+        files={"file": (name, content.encode("utf-8"), "text/markdown")},
+        data=form,
     )
     assert response.status_code == 202, response.text
     return response.json()
@@ -280,7 +289,7 @@ def test_delete_base_cascades(monkeypatch, tmp_path) -> None:
     admin, user = _admin_and_user(client)
     base = _create_base(client, admin)
     first = _upload(client, admin, base["id"])["document"]
-    second = _upload(client, admin, base["id"])["document"]
+    second = _upload(client, admin, base["id"], name="规范二.md", content=_MD + "二")["document"]
 
     from hermes_constants import get_hermes_home
 
@@ -307,14 +316,110 @@ def test_retry_rejects_active_document(monkeypatch, tmp_path) -> None:
     assert response.status_code == 409
 
 
+# ---------------------------------------------------------------- 上传查重
+
+
+def _upload_raw(
+    client: TestClient,
+    headers: dict[str, str],
+    kb_id: str,
+    *,
+    name: str,
+    content: str,
+    form: dict[str, str] | None = None,
+):
+    """不断言状态码的上传（查重测试要看 409）。"""
+    return client.post(
+        f"/knowledge/bases/{kb_id}/documents",
+        headers=headers,
+        files={"file": (name, content.encode("utf-8"), "text/markdown")},
+        data=form,
+    )
+
+
+def test_upload_duplicate_name_conflict(monkeypatch, tmp_path) -> None:
+    """第一层：文件名（去扩展名）相同即冲突——不同扩展名也算。"""
+    client = _client(monkeypatch, tmp_path)
+    admin, _ = _admin_and_user(client)
+    base = _create_base(client, admin)
+    first = _upload(client, admin, base["id"])["document"]
+
+    conflict = _upload_raw(
+        client, admin, base["id"], name="规范.pdf", content="完全不同的内容"
+    )
+    assert conflict.status_code == 409
+    detail = conflict.json()["detail"]
+    assert detail["error"] == "duplicate_document"
+    assert detail["matches"]["name"]["id"] == first["id"]
+    assert detail["matches"]["content"] is None
+
+    # 同名（仅大小写差异）同样命中
+    conflict2 = _upload_raw(
+        client, admin, base["id"], name="规范.MD", content="别的内容"
+    )
+    assert conflict2.status_code == 409
+
+
+def test_upload_duplicate_content_conflict(monkeypatch, tmp_path) -> None:
+    """第二层：文件名不同但内容 SHA-256 相同 → 冲突。"""
+    client = _client(monkeypatch, tmp_path)
+    admin, _ = _admin_and_user(client)
+    base = _create_base(client, admin)
+    first = _upload(client, admin, base["id"])["document"]
+
+    conflict = _upload_raw(client, admin, base["id"], name="换个名字.md", content=_MD)
+    assert conflict.status_code == 409
+    detail = conflict.json()["detail"]
+    assert detail["matches"]["name"] is None
+    assert detail["matches"]["content"]["id"] == first["id"]
+
+
+def test_upload_duplicate_both_and_force_bypass(monkeypatch, tmp_path) -> None:
+    """同名+同内容：两层都命中；force=true 跳过检测照常上传。"""
+    client = _client(monkeypatch, tmp_path)
+    admin, _ = _admin_and_user(client)
+    base = _create_base(client, admin)
+    first = _upload(client, admin, base["id"])["document"]
+
+    conflict = _upload_raw(client, admin, base["id"], name="规范.md", content=_MD)
+    assert conflict.status_code == 409
+    matches = conflict.json()["detail"]["matches"]
+    assert matches["name"]["id"] == first["id"]
+    assert matches["content"]["id"] == first["id"]
+
+    forced = _upload_raw(
+        client, admin, base["id"], name="规范.md", content=_MD, form={"force": "true"}
+    )
+    assert forced.status_code == 202, forced.text
+    assert forced.json()["document"]["id"] != first["id"]
+
+
+def test_upload_same_file_allowed_across_bases(monkeypatch, tmp_path) -> None:
+    """查重范围是库内：另一个库传同名同内容文件不受限。"""
+    client = _client(monkeypatch, tmp_path)
+    admin, _ = _admin_and_user(client)
+    base_a = _create_base(client, admin)
+    base_b = _create_base(client, admin, name="另一个库")
+    _upload(client, admin, base_a["id"])
+
+    other = _upload_raw(client, admin, base_b["id"], name="规范.md", content=_MD)
+    assert other.status_code == 202, other.text
+
+
+
 # ---------------------------------------------------------------- 分块编辑 / 重新同步
 
 
 def _ready_doc_with_chunks(
-    client: TestClient, admin: dict[str, str], kb_id: str
+    client: TestClient,
+    admin: dict[str, str],
+    kb_id: str,
+    *,
+    name: str = "规范.md",
+    content: str = _MD,
 ) -> tuple[dict, list[dict]]:
     """测试环境无 ES 配置，pipeline 走不到 ready——用 repository 直写构造。"""
-    document = _upload(client, admin, kb_id)["document"]
+    document = _upload(client, admin, kb_id, name=name, content=content)["document"]
     from server.storage import get_repository
 
     repo = get_repository()
@@ -474,7 +579,9 @@ def test_chunk_update_validation(monkeypatch, tmp_path) -> None:
     admin, _ = _admin_and_user(client)
     base = _create_base(client, admin)
     document, chunks = _ready_doc_with_chunks(client, admin, base["id"])
-    other_document, other_chunks = _ready_doc_with_chunks(client, admin, base["id"])
+    other_document, other_chunks = _ready_doc_with_chunks(
+        client, admin, base["id"], name="规范乙.md", content=_MD + "乙"
+    )
     sync_calls = _fake_sync(monkeypatch)
     url = f"/knowledge/documents/{document['id']}/chunks/{chunks[0]['id']}"
 
