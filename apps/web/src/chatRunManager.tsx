@@ -1,6 +1,6 @@
 import React from 'react'
 import type { QueryClient } from '@tanstack/react-query'
-import { api, toKnowledgeCitations } from './api'
+import { api, toKnowledgeCitations, toMessage } from './api'
 import { mergeRunMessages } from './mergeMessages'
 import type { ActiveModelRun, ChatMessage, ConversationDetail, KnowledgeSearchMode } from './types'
 
@@ -300,8 +300,11 @@ export class ChatRunManager {
               : event.status === 'failed'
                 ? 'failed' as const
                 : 'completed' as const
+            // final 事件的 message 是后端落库消息原样（snake_case，引用在
+            // metadata.citations）——必须走 toMessage 映射，否则引用卡片会在
+            // 回答完成的瞬间从气泡上消失
             const finalMessage = event.message && typeof event.message !== 'string'
-              ? event.message
+              ? { ...toMessage(event.message as Parameters<typeof toMessage>[0]), status: terminalStatus }
               : {
                   ...snapshot.assistantMessage,
                   content: event.content ?? snapshot.assistantMessage.content,
@@ -319,6 +322,9 @@ export class ChatRunManager {
           this.queryClient.setQueryData<ConversationDetail>(['conversation', sessionId], (detail) => (
             detail ? { ...detail, status: 'idle', activeRun: null } : detail
           ))
+          // final 后回源持久化消息（标题/引用/耗时以服务端为准），避免因缓存
+          // 滞留导致切换会话前后看到的气泡不一致
+          void this.queryClient.invalidateQueries({ queryKey: ['conversation', sessionId] })
         },
         onError: (event) => {
           terminalEventReceived = true

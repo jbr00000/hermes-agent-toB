@@ -17,12 +17,12 @@ import { api } from '../api'
 import { isAgentRunActive, useAgentRun } from '../agentRunManager'
 import { mockApi } from '../mockApi'
 import { attachedFilesAtom, chatAttachedFilesAtom, selectedSpaceAtom } from '../state'
-import type { AgentTaskDetail, KnowledgeDocument, PermissionMode, WorkTab } from '../types'
+import type { AgentTaskDetail, KnowledgeDocument, PermissionMode, TabType, WorkTab } from '../types'
 import { PermissionSegment } from './agent/PermissionSegment'
 import { Badge, cn, formatBytes, InfoRow } from './ui'
 
 /** 右侧上下文面板：agent 标签显示任务上下文，chat 标签显示问答上下文。 */
-export function RightPanel({ activeTab }: { activeTab: WorkTab | null }) {
+export function RightPanel({ activeTab, onOpenTab }: { activeTab: WorkTab | null; onOpenTab?: (type: TabType, refId: string, title: string) => void }) {
   const [filesByTab] = useAtom(attachedFilesAtom)
   const queryClient = useQueryClient()
   const taskId = activeTab?.type === 'agent' ? activeTab.refId : ''
@@ -55,7 +55,7 @@ export function RightPanel({ activeTab }: { activeTab: WorkTab | null }) {
   }
 
   if (activeTab?.type === 'chat') {
-    return <ChatRightPanel sessionId={activeTab.refId} referencedDocs={referencedDocs} />
+    return <ChatRightPanel sessionId={activeTab.refId} referencedDocs={referencedDocs} onOpenTab={onOpenTab} />
   }
 
   return (
@@ -114,7 +114,7 @@ export function RightPanel({ activeTab }: { activeTab: WorkTab | null }) {
   )
 }
 
-function ChatRightPanel({ sessionId, referencedDocs }: { sessionId: string; referencedDocs: KnowledgeDocument[] }) {
+function ChatRightPanel({ sessionId, referencedDocs, onOpenTab }: { sessionId: string; referencedDocs: KnowledgeDocument[]; onOpenTab?: (type: TabType, refId: string, title: string) => void }) {
   const [filesByTab] = useAtom(chatAttachedFilesAtom)
   const [selectedSpace] = useAtom(selectedSpaceAtom)
   const spacesQuery = useQuery({ queryKey: ['spaces'], queryFn: mockApi.listSpaces })
@@ -172,13 +172,19 @@ function ChatRightPanel({ sessionId, referencedDocs }: { sessionId: string; refe
               <div className="py-3 text-xs text-zinc-500">企业知识库暂无可检索文档</div>
             )}
             {referencedDocs.map((doc) => (
-              <div key={doc.id} className="py-2.5 text-sm">
+              <button
+                key={doc.id}
+                type="button"
+                title="查看文档详情"
+                className="block w-full py-2.5 text-left text-sm transition hover:bg-field"
+                onClick={() => onOpenTab?.('document', doc.id, doc.title)}
+              >
                 <div className="truncate font-medium">{doc.title}</div>
                 <div className="mt-1 flex items-center justify-between text-xs text-zinc-500">
                   <span className="truncate">{doc.fileName}</span>
                   <span className="shrink-0">{doc.chunkCount} 个片段</span>
                 </div>
-              </div>
+              </button>
             ))}
           </div>
         </PanelSection>

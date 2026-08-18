@@ -697,7 +697,7 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
               )}
               <PetFloat tab={activeTab} />
             </main>
-            <RightPanel activeTab={activeTab} />
+            <RightPanel activeTab={activeTab} onOpenTab={openTab} />
           </div>
         </div>
       </div>

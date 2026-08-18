@@ -413,7 +413,7 @@ export function toKnowledgeCitations(raw: unknown): KnowledgeCitation[] {
   return citations
 }
 
-function toMessage(row: BackendMessage): ChatMessage {
+export function toMessage(row: BackendMessage): ChatMessage {
   const citations = toKnowledgeCitations(row.metadata?.citations)
   return {
     id: row.id,
