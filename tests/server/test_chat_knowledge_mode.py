@@ -59,6 +59,40 @@ def _chat_session(client: TestClient, headers: dict[str, str]) -> str:
     return created.json()["session"]["id"]
 
 
+def _retrieval_chunk(
+    chunk_id: str = "c1",
+    doc_id: str = "d1",
+    doc_name: str = "财务制度.pdf",
+    chunk_title: str = "报销流程",
+    content: str = "第一步填写报销单",
+    score: float = 0.62,
+) -> dict:
+    """server.knowledge.retriever.search_chunks 的返回项（MySQL 回表后的形状）。"""
+    return {
+        "chunk_id": chunk_id,
+        "doc_id": doc_id,
+        "doc_name": doc_name,
+        "kb_id": "kb-1",
+        "chunk_title": chunk_title,
+        "content": content,
+        "doc_pos": 0,
+        "score": score,
+    }
+
+
+def _patch_fast_retrieval(monkeypatch, *, chunks=None, raises: bool = False) -> None:
+    """固定快速模式的服务端直接检索结果，避免测试真去打 ES/Milvus。"""
+    import server.knowledge.retriever as retriever
+
+    if raises:
+        def failing_search(*_args, **_kwargs):
+            raise RuntimeError("es unreachable")
+
+        monkeypatch.setattr(retriever, "search_chunks", failing_search)
+    else:
+        monkeypatch.setattr(retriever, "search_chunks", lambda *a, **k: list(chunks or []))
+
+
 def _knowledge_tool_result() -> str:
     return json.dumps(
         {
@@ -154,6 +188,8 @@ def test_knowledge_mode_streams_citations_and_persists_metadata(monkeypatch, tmp
     client = _client(monkeypatch, tmp_path, knowledge_enabled=True)
     headers = _login(client, "admin", "correct-horse-battery-staple")
     session_id = _chat_session(client, headers)
+    # 让快速模式的服务端直接检索失败 → 回退到工具路径（本测试验的是工具拦截链路）
+    _patch_fast_retrieval(monkeypatch, raises=True)
 
     from server.storage import get_repository
 
@@ -315,6 +351,8 @@ def _run_knowledge_chat(
     client = _client(monkeypatch, tmp_path, knowledge_enabled=True)
     headers = _login(client, "admin", "correct-horse-battery-staple")
     session_id = _chat_session(client, headers)
+    # 工具路径测试：服务端直接检索置为失败，走 knowledge_search 工具拦截
+    _patch_fast_retrieval(monkeypatch, raises=True)
 
     captured: dict[str, object] = {}
 
@@ -408,6 +446,8 @@ def test_precise_mode_degrades_to_fast_without_aux_llm(monkeypatch, tmp_path) ->
     client = _client(monkeypatch, tmp_path, knowledge_enabled=True)  # 无 aux_llm 段
     headers = _login(client, "admin", "correct-horse-battery-staple")
     session_id = _chat_session(client, headers)
+    # 降级为 fast 后会走服务端直接检索；置空结果让注入内容确定
+    _patch_fast_retrieval(monkeypatch, chunks=[])
 
     captured: dict[str, object] = {}
 
@@ -445,7 +485,10 @@ def test_precise_mode_degrades_to_fast_without_aux_llm(monkeypatch, tmp_path) ->
     )
     assert response.status_code == 200
     assert captured["search_mode"] == "fast"  # 降级
-    assert captured["message"] == "报销流程？"  # 无改写钉注，原文直发
+    # 无改写钉注；fast 直接检索为空时缀"未检索到"说明（原文仍在开头）
+    message = str(captured["message"])
+    assert message.startswith("报销流程？")
+    assert "未检索到相关内容" in message
 
 
 def test_precise_mode_rewrites_followup_query(monkeypatch, tmp_path) -> None:
@@ -517,10 +560,11 @@ def test_precise_mode_rewrites_followup_query(monkeypatch, tmp_path) -> None:
 
 
 def test_fast_mode_skips_rewrite(monkeypatch, tmp_path) -> None:
-    """默认 fast：不调用改写、消息原文直发。"""
+    """默认 fast：不调用改写，直接服务端检索（检索结果为空时注入"未检索到"）。"""
     client = _client(monkeypatch, tmp_path, knowledge_enabled=True, aux_llm=True)
     headers = _login(client, "admin", "correct-horse-battery-staple")
     session_id = _chat_session(client, headers)
+    _patch_fast_retrieval(monkeypatch, chunks=[])
 
     captured: dict[str, object] = {}
 
@@ -563,7 +607,202 @@ def test_fast_mode_skips_rewrite(monkeypatch, tmp_path) -> None:
     )
     assert response.status_code == 200
     assert captured["search_mode"] == "fast"
-    assert captured["message"] == "报销流程？"
+    assert str(captured["message"]).startswith("报销流程？")
+
+
+def test_fast_mode_direct_retrieval_injects_chunks(monkeypatch, tmp_path) -> None:
+    """快速模式：服务端直接检索，分块以【N】块注入当前 user 轮次尾部——
+    模型无需先调 knowledge_search 即可回答，引用卡片照常产出/落库。"""
+    client = _client(monkeypatch, tmp_path, knowledge_enabled=True)
+    headers = _login(client, "admin", "correct-horse-battery-staple")
+    session_id = _chat_session(client, headers)
+
+    from server.storage import get_repository
+
+    repository = get_repository()
+    admin = repository.get_user_by_username("admin")
+    base = repository.create_knowledge_base(name="制度库", creator_id=admin["id"])
+
+    retrieval_calls: list[dict] = []
+
+    import server.knowledge.retriever as retriever
+
+    def fake_search(query, *, kb_id=None, topk=None, config=None):
+        retrieval_calls.append({"query": query, "kb_id": kb_id})
+        return [
+            _retrieval_chunk(chunk_id="c1", score=0.62),
+            _retrieval_chunk(
+                chunk_id="c2", doc_id="d2", doc_name="考勤制度.pdf",
+                chunk_title="请假", content="请假需提前一天", score=0.31,
+            ),
+        ]
+
+    monkeypatch.setattr(retriever, "search_chunks", fake_search)
+
+    captured: dict[str, object] = {}
+
+    class FakeAgent:
+        provider = "custom"
+        model = "test-model"
+        reasoning_config = {"enabled": False}
+        enabled_toolsets = ["knowledge"]
+
+        def chat(self, message, stream_callback=None):
+            captured["message"] = message
+            return "报销第一步是填写报销单【1】。"
+
+        def interrupt(self, message=None):
+            pass
+
+    import server.agent_factory as agent_factory
+
+    monkeypatch.setattr(
+        agent_factory,
+        "build_agent",
+        lambda **kwargs: captured.update(kwargs) or FakeAgent(),
+    )
+
+    response = client.post(
+        "/chat",
+        headers=headers,
+        json={
+            "session_id": session_id,
+            "request_id": "req-fast-direct",
+            "interaction_type": "chat",
+            "mode": "knowledge",
+            "kb_id": base["id"],
+            "message": "报销流程是什么？",
+        },
+    )
+
+    assert response.status_code == 200
+    # 服务端检索用用户原文 + 选定库限定
+    assert retrieval_calls == [{"query": "报销流程是什么？", "kb_id": base["id"]}]
+
+    # 注入：原文开头 + 带编号的来源块缀在尾部（不经工具调用）
+    message = str(captured["message"])
+    assert message.startswith("报销流程是什么？")
+    assert "【1】《财务制度.pdf》·报销流程" in message
+    assert "【2】《考勤制度.pdf》·请假" in message
+    assert "第一步填写报销单" in message
+
+    # SSE：检索完成即推 citations（不等模型回答完）
+    lines = response.text.splitlines()
+    citation_events = [
+        json.loads(lines[index + 1].removeprefix("data: "))
+        for index, line in enumerate(lines)
+        if line.startswith("event: citations") and lines[index + 1].startswith("data: ")
+    ]
+    assert len(citation_events) == 1
+    assert [c["chunk_id"] for c in citation_events[0]["chunks"]] == ["c1", "c2"]
+
+    # 落库仍按【N】过滤：回答只标【1】→ 只留 c1
+    detail = client.get(f"/sessions/{session_id}", headers=headers).json()
+    citations = detail["messages"][-1]["metadata"]["citations"]
+    assert [c["chunk_id"] for c in citations] == ["c1"]
+
+
+def test_fast_mode_retrieval_failure_falls_back_to_tool(monkeypatch, tmp_path) -> None:
+    """服务端直接检索抛错 → 静默回退工具路径（模型自行调 knowledge_search）。"""
+    client = _client(monkeypatch, tmp_path, knowledge_enabled=True)
+    headers = _login(client, "admin", "correct-horse-battery-staple")
+    session_id = _chat_session(client, headers)
+    _patch_fast_retrieval(monkeypatch, raises=True)
+
+    captured: dict[str, object] = {}
+
+    class FakeAgent:
+        provider = "custom"
+        model = "test-model"
+        reasoning_config = {"enabled": False}
+        enabled_toolsets = ["knowledge"]
+
+        def chat(self, message, stream_callback=None):
+            captured["message"] = message
+            captured["tool_complete_callback"](
+                "tc-1", "knowledge_search", {"query": "报销流程"}, _knowledge_tool_result()
+            )
+            return "报销分三步【1】"
+
+        def interrupt(self, message=None):
+            pass
+
+    import server.agent_factory as agent_factory
+
+    monkeypatch.setattr(
+        agent_factory,
+        "build_agent",
+        lambda **kwargs: captured.update(kwargs) or FakeAgent(),
+    )
+
+    response = client.post(
+        "/chat",
+        headers=headers,
+        json={
+            "session_id": session_id,
+            "request_id": "req-fast-fallback",
+            "interaction_type": "chat",
+            "mode": "knowledge",
+            "message": "报销流程是什么？",
+        },
+    )
+
+    assert response.status_code == 200
+    # 检索失败时不注入任何内容，原文直发，由模型走工具
+    assert captured["message"] == "报销流程是什么？"
+    detail = client.get(f"/sessions/{session_id}", headers=headers).json()
+    citations = detail["messages"][-1]["metadata"]["citations"]
+    assert [c["chunk_id"] for c in citations] == ["c1"]
+
+
+def test_fast_mode_empty_result_injects_not_found(monkeypatch, tmp_path) -> None:
+    """检索结果为空：注入"未检索到"说明、不发 citations 事件；模型如实回答
+    未找到时不落 citations metadata。"""
+    client = _client(monkeypatch, tmp_path, knowledge_enabled=True)
+    headers = _login(client, "admin", "correct-horse-battery-staple")
+    session_id = _chat_session(client, headers)
+    _patch_fast_retrieval(monkeypatch, chunks=[])
+
+    captured: dict[str, object] = {}
+
+    class FakeAgent:
+        provider = "custom"
+        model = "test-model"
+        reasoning_config = {"enabled": False}
+        enabled_toolsets = ["knowledge"]
+
+        def chat(self, message, stream_callback=None):
+            captured["message"] = message
+            return "知识库中未找到相关内容。"
+
+        def interrupt(self, message=None):
+            pass
+
+    import server.agent_factory as agent_factory
+
+    monkeypatch.setattr(
+        agent_factory,
+        "build_agent",
+        lambda **kwargs: captured.update(kwargs) or FakeAgent(),
+    )
+
+    response = client.post(
+        "/chat",
+        headers=headers,
+        json={
+            "session_id": session_id,
+            "request_id": "req-fast-empty",
+            "interaction_type": "chat",
+            "mode": "knowledge",
+            "message": "报销流程是什么？",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "（知识库检索结果：未检索到相关内容）" in str(captured["message"])
+    assert "event: citations" not in response.text
+    detail = client.get(f"/sessions/{session_id}", headers=headers).json()
+    assert detail["messages"][-1]["metadata"] is None
 
 
 def test_append_message_metadata_roundtrip(monkeypatch, tmp_path) -> None:

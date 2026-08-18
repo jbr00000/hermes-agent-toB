@@ -543,6 +543,69 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
                     f"「{knowledge_search_query}」，调用 knowledge_search 时"
                     f"请使用该表述作为 query）"
                 )
+            # 快速模式：跳过"模型决定是否检索"的第一轮 LLM 调用——服务端直接
+            # 检索并把分块注入当前 user 轮次尾部（与精准模式提示同一位置）。
+            # 引用卡片与工具拦截路径共用 citations_by_chunk：此处产出的卡片
+            # 立即推送给前端，后续【N】过滤/落库逻辑不变。模型确需补充检索时
+            # 仍可自行调用 knowledge_search（工具结果继续走 on_tool_complete）。
+            if (
+                effective_mode == "knowledge"
+                and search_mode == "fast"
+                and knowledge_cfg is not None
+            ):
+                try:
+                    from server.knowledge.retriever import search_chunks
+
+                    fast_chunks = search_chunks(
+                        req.message,
+                        kb_id=knowledge_base["id"] if knowledge_base else None,
+                        config=knowledge_cfg,
+                    )
+                except Exception as exc:
+                    # 检索失败不判负：退化为模型自行调工具（工具层会把错误转成
+                    # 可读的 tool_error，模型据此如实告知用户）
+                    logger.warning(
+                        "fast knowledge retrieval failed, falling back to tool path: %s", exc
+                    )
+                    fast_chunks = None
+                if fast_chunks is not None:
+                    if fast_chunks:
+                        blocks: list[str] = []
+                        for index, chunk in enumerate(fast_chunks, start=1):
+                            chunk_id = str(chunk["chunk_id"])
+                            citations_by_chunk.pop(chunk_id, None)
+                            citations_by_chunk[chunk_id] = {
+                                "num": index,
+                                "chunk_id": chunk_id,
+                                "doc_id": chunk["doc_id"],
+                                "doc_name": chunk["doc_name"],
+                                "chunk_title": chunk["chunk_title"],
+                                "snippet": str(chunk.get("content") or "")[:_CITATION_SNIPPET_CHARS],
+                                "score": chunk["score"],
+                            }
+                            source = f'《{chunk["doc_name"]}》'
+                            if chunk.get("chunk_title"):
+                                source += f'·{chunk["chunk_title"]}'
+                            # 与工具侧一致的 4000 字符截断，防止超长块撑爆上下文
+                            blocks.append(
+                                f"【{index}】{source}\n{str(chunk['content'])[:4000]}"
+                            )
+                        model_message += (
+                            "\n\n（知识库检索结果（已按相关度排序；严格基于以下内容回答，"
+                            "引用时在句末标注对应编号【N】）：\n"
+                            + "\n\n".join(blocks)
+                            + "\n）"
+                        )
+                        # 检索一完成就推送引用卡片，随回答流式渲染（与工具路径一致）
+                        emit(
+                            "citations",
+                            {
+                                "chunks": list(citations_by_chunk.values()),
+                                "request_id": request_id,
+                            },
+                        )
+                    else:
+                        model_message += "\n\n（知识库检索结果：未检索到相关内容）"
             final = agent.chat(model_message, **chat_kwargs) or ""
             cancelled = runtime_store.is_cancelled(request_id)
             with tool_status_lock:
