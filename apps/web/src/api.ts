@@ -798,11 +798,11 @@ export const api = {
   async setTaskPermission(
     taskId: string,
     mode: PermissionMode,
-    ttlSeconds = 900,
   ): Promise<TaskPermission> {
+    // 不传 ttl_seconds：权限一次切换持久化，直到用户手动改回只读
     const response = await apiFetch(`/tasks/${encodeURIComponent(taskId)}/permission`, {
       method: 'PUT',
-      body: JSON.stringify({ mode, ttl_seconds: ttlSeconds }),
+      body: JSON.stringify({ mode }),
     })
     if (!response.ok) throw await parseError(response)
     const body = await response.json() as { permission: BackendTaskPermission }

@@ -59,6 +59,14 @@ def test_agent_task_is_user_scoped_and_defaults_to_read(monkeypatch, tmp_path) -
     )
     assert created_user.status_code == 200
     other_headers = _login(client, "other", "password-123")
+    # 新建用户带强制改密标记；改密清掉，否则白名单外端点一律 403。
+    changed = client.post(
+        "/auth/change-password",
+        headers=other_headers,
+        json={"old_password": "password-123", "new_password": "password-456"},
+    )
+    assert changed.status_code == 200, changed.text
+    other_headers = {"Authorization": f"Bearer {changed.json()['access_token']}"}
     assert client.get(f"/tasks/{task['id']}", headers=other_headers).status_code == 404
 
     deleted = client.delete(f"/tasks/{task['id']}", headers=admin_headers)
@@ -75,7 +83,7 @@ def test_agent_task_is_user_scoped_and_defaults_to_read(monkeypatch, tmp_path) -
     assert client.get(f"/tasks/{second['id']}", headers=admin_headers).status_code == 404
 
 
-def test_agent_plan_approval_execute_and_permission_downgrade(monkeypatch, tmp_path) -> None:
+def test_agent_plan_approval_execute_and_permission_persists(monkeypatch, tmp_path) -> None:
     client = _client(monkeypatch, tmp_path)
     headers = _login(client, "admin", "correct-horse-battery-staple")
     task = client.post("/tasks", headers=headers, json={}).json()["task"]
@@ -169,11 +177,12 @@ def test_agent_plan_approval_execute_and_permission_downgrade(monkeypatch, tmp_p
     permission = client.put(
         f"/tasks/{task['id']}/permission",
         headers=headers,
-        json={"mode": "full", "ttl_seconds": 600},
+        # 不传 ttl_seconds：持久权限，expires_at 为 NULL
+        json={"mode": "full"},
     )
     assert permission.status_code == 200
     assert permission.json()["permission"]["mode"] == "full"
-    assert permission.json()["permission"]["expires_at"] is not None
+    assert permission.json()["permission"]["expires_at"] is None
 
     execute = client.post(
         f"/tasks/{task['id']}/execute",
@@ -188,7 +197,8 @@ def test_agent_plan_approval_execute_and_permission_downgrade(monkeypatch, tmp_p
 
     completed = client.get(f"/tasks/{task['id']}", headers=headers).json()["task"]
     assert completed["status"] == "completed"
-    assert completed["permission"]["mode"] == "read"
+    # 权限一次切换持久化：执行结束后仍是 full，不再自动回落只读
+    assert completed["permission"]["mode"] == "full"
     assert [run["phase"] for run in completed["runs"]] == ["plan", "execute"]
     assert completed["messages"][-2]["content"] == "执行已批准计划"
 
@@ -201,7 +211,7 @@ def test_agent_plan_approval_execute_and_permission_downgrade(monkeypatch, tmp_p
     after_retry = client.get(f"/tasks/{task['id']}", headers=headers).json()["task"]
     assert [run["phase"] for run in after_retry["runs"]] == ["plan", "execute", "execute"]
     assert after_retry["runs"][-1]["attempt"] == 2
-    assert captured[-1]["permission_mode"] == "read"
+    assert captured[-1]["permission_mode"] == "full"
 
     deleted = client.delete(f"/tasks/{task['id']}", headers=headers)
     assert deleted.status_code == 200
@@ -266,7 +276,8 @@ def test_execute_with_failed_tool_marks_task_failed(monkeypatch, tmp_path) -> No
     assert '"status": "failed"' in response.text
     detail = client.get(f"/tasks/{task['id']}", headers=headers).json()["task"]
     assert detail["status"] == "failed"
-    assert detail["permission"]["mode"] == "read"
+    # 工具失败也不吊销权限：持久化切换，重试仍在 full 下运行
+    assert detail["permission"]["mode"] == "full"
     assert detail["events"][-1]["status"] == "failed"
 
 

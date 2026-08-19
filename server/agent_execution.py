@@ -103,7 +103,8 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
                 "task_id": task_id,
                 "request_id": request_id,
                 "status": "cancelled",
-                "permission_mode": "read",
+                # 权限一次切换持久化：运行结束不再自动回落只读
+                "permission_mode": repository.get_task_permission(user_id, task_id)["mode"],
             },
         )
         final_event_id = runtime_store.next_event_id(request_id)
@@ -187,7 +188,7 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
                 "task_id": task_id,
                 "request_id": request_id,
                 "status": task_status,
-                "permission_mode": "read",
+                "permission_mode": repository.get_task_permission(user_id, task_id)["mode"],
             },
         )
         try:
@@ -711,7 +712,8 @@ def fail_interrupted_execute_job(job: dict[str, Any], reason: str) -> None:
             "task_id": task_id,
             "request_id": request_id,
             "status": "failed",
-            "permission_mode": "read",
+            # 权限一次切换持久化：运行结束不再自动回落只读
+            "permission_mode": repository.get_task_permission(user_id, task_id)["mode"],
         },
     )
     error_event_id = runtime_store.next_event_id(request_id)

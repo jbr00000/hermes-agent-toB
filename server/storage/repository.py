@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from server.constants import DEFAULT_AGENT_TASK_TITLE, DEFAULT_CHAT_TITLE
@@ -1156,16 +1156,8 @@ class StorageRepository:
                 conversation.ended_at = now if task_status == "completed" else None
                 conversation.updated_at = now
 
-            leases = session.scalars(
-                select(PermissionLease).where(
-                    PermissionLease.tenant_id == tenant_id(),
-                    PermissionLease.user_id == user_id,
-                    PermissionLease.task_id == task_id,
-                    PermissionLease.revoked_at.is_(None),
-                )
-            ).all()
-            for lease in leases:
-                lease.revoked_at = now
+            # 权限一次切换持久化：运行结束不再吊销权限租约，只由用户手动
+            # 切回只读（set_task_permission 时 revoke 旧租约）
             session.flush()
             return _task_run_dict(row)
 
@@ -1269,16 +1261,7 @@ class StorageRepository:
                 conversation.approved_at = None
                 conversation.status = "idle"
                 conversation.updated_at = now
-            leases = session.scalars(
-                select(PermissionLease).where(
-                    PermissionLease.tenant_id == tenant_id(),
-                    PermissionLease.user_id == user_id,
-                    PermissionLease.task_id == task_id,
-                    PermissionLease.revoked_at.is_(None),
-                )
-            ).all()
-            for lease in leases:
-                lease.revoked_at = now
+            # 重新规划不再吊销权限租约（权限持久化，只由用户手动切换）
             session.flush()
             return _task_plan_dict(row)
 
@@ -1350,7 +1333,12 @@ class StorageRepository:
                     PermissionLease.user_id == user_id,
                     PermissionLease.task_id == task_id,
                     PermissionLease.revoked_at.is_(None),
-                    PermissionLease.expires_at > now,
+                    # expires_at NULL = 持久权限（一次切换长期生效）；
+                    # 非 NULL 的定时租约过期后回落只读
+                    or_(
+                        PermissionLease.expires_at.is_(None),
+                        PermissionLease.expires_at > now,
+                    ),
                 )
                 .order_by(PermissionLease.created_at.desc())
                 .limit(1)
@@ -1358,7 +1346,7 @@ class StorageRepository:
             return _permission_dict(row)
 
     def set_task_permission(
-        self, user_id: str, task_id: str, mode: str, ttl_seconds: int
+        self, user_id: str, task_id: str, mode: str, ttl_seconds: int | None
     ) -> dict[str, Any]:
         now = time.time()
         with session_scope() as session:
@@ -1394,7 +1382,8 @@ class StorageRepository:
                 user_id=user_id,
                 mode=mode,
                 created_at=now,
-                expires_at=now + ttl_seconds,
+                # ttl_seconds=None → expires_at NULL = 持久权限
+                expires_at=None if ttl_seconds is None else now + ttl_seconds,
                 revoked_at=None,
             )
             session.add(row)

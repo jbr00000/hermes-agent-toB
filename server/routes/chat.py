@@ -638,14 +638,16 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
                         status="cancelled",
                         task_status="cancelled",
                     )
-                    repository.revoke_task_permissions(user_id, task["id"])
                     emit(
                         "task.status",
                         {
                             "task_id": task["id"],
                             "request_id": request_id,
                             "status": "cancelled",
-                            "permission_mode": "read",
+                            # 权限一次切换持久化：运行结束不再自动回落只读
+                            "permission_mode": repository.get_task_permission(
+                                user_id, task["id"]
+                            )["mode"],
                         },
                     )
                 elif unresolved_tool_failure:
@@ -655,14 +657,15 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
                         task_status="failed",
                         error="one or more tools failed",
                     )
-                    repository.revoke_task_permissions(user_id, task["id"])
                     emit(
                         "task.status",
                         {
                             "task_id": task["id"],
                             "request_id": request_id,
                             "status": "failed",
-                            "permission_mode": "read",
+                            "permission_mode": repository.get_task_permission(
+                                user_id, task["id"]
+                            )["mode"],
                         },
                     )
                 elif effective_mode == "plan":
@@ -695,14 +698,15 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
                         status="completed",
                         task_status="completed",
                     )
-                    repository.revoke_task_permissions(user_id, task["id"])
                     emit(
                         "task.status",
                         {
                             "task_id": task["id"],
                             "request_id": request_id,
                             "status": "completed",
-                            "permission_mode": "read",
+                            "permission_mode": repository.get_task_permission(
+                                user_id, task["id"]
+                            )["mode"],
                         },
                     )
             record_event(
@@ -790,14 +794,15 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
                         task_status="cancelled" if cancelled else "failed",
                         error=None if cancelled else error_text,
                     )
-                    repository.revoke_task_permissions(user_id, task["id"])
                     emit(
                         "task.status",
                         {
                             "task_id": task["id"],
                             "request_id": request_id,
                             "status": "cancelled" if cancelled else "failed",
-                            "permission_mode": "read",
+                            "permission_mode": repository.get_task_permission(
+                                user_id, task["id"]
+                            )["mode"],
                         },
                     )
             except Exception:

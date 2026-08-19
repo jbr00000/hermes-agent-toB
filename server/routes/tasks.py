@@ -41,7 +41,9 @@ class RetryTaskRequest(BaseModel):
 
 class PermissionRequest(BaseModel):
     mode: Literal["read", "controlled", "full"]
-    ttl_seconds: int = Field(default=900, ge=60, le=3600)
+    # None（默认）= 持久权限：一次切换长期生效，直到用户手动切回只读；
+    # 传秒数则为定时租约（兼容旧客户端），到期自动回落只读
+    ttl_seconds: int | None = Field(default=None, ge=60, le=3600)
 
 
 class ToolApprovalDecisionRequest(BaseModel):

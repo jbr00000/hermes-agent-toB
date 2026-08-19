@@ -46,7 +46,7 @@ export function TaskPlanPanel({
               {awaitingApproval
                 ? '审批后才可执行；涉及写入或终端操作时还需切换到完全访问。'
                 : permissionMode === 'full'
-                  ? '完全访问将在本次执行结束后自动恢复为只读。'
+                  ? '完全访问将持续生效，直到你手动切回只读。'
                   : '当前只会启用与权限等级匹配的工具。'}
             </div>
           </div>

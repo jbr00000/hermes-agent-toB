@@ -198,7 +198,9 @@ class PermissionLease(Base):
     user_id: Mapped[str] = mapped_column(String(36), nullable=False)
     mode: Mapped[str] = mapped_column(String(16), nullable=False)
     created_at: Mapped[float] = mapped_column(Double, nullable=False)
-    expires_at: Mapped[float] = mapped_column(Double, nullable=False)
+    # NULL = 持久权限：用户一次切换后长期生效，直到手动切回只读；
+    # 非 NULL = 定时租约（兼容仍传 ttl_seconds 的旧客户端）
+    expires_at: Mapped[float | None] = mapped_column(Double)
     revoked_at: Mapped[float | None] = mapped_column(Double)
 
 
