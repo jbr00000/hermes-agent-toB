@@ -72,7 +72,7 @@ export function RightPanel({ activeTab, onOpenTab }: { activeTab: WorkTab | null
           <PermissionSegment value={permissionMode} onChange={setPermissionMode} disabled={!task || active} />
           {permissionMode === 'full' && (
             <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-caution">
-              完全访问仅当前任务生效，任务结束后自动降权。
+              完全访问已对本任务持久生效，切回只读后才会降权。
             </div>
           )}
         </PanelSection>
