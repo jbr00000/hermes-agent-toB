@@ -94,10 +94,10 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
         )
         if finished_run is None:
             return "stale"
-        event_sequence += 1
+        status_event_id = runtime_store.next_event_id(request_id)
         runtime_store.append_event(
             request_id,
-            event_sequence,
+            status_event_id,
             "task.status",
             {
                 "task_id": task_id,
@@ -106,13 +106,14 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
                 "permission_mode": "read",
             },
         )
-        event_sequence += 1
+        final_event_id = runtime_store.next_event_id(request_id)
         runtime_store.append_event(
             request_id,
-            event_sequence,
+            final_event_id,
             "final",
             {"content": "", "request_id": request_id, "status": "cancelled"},
         )
+        event_sequence = max(event_sequence, final_event_id)
         runtime_store.save_chat_snapshot(
             request_id,
             session_id,
@@ -146,12 +147,19 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
 
     def emit(event: str, data: dict[str, Any]) -> int:
         nonlocal event_sequence
+        if event != "delta":
+            # 事件序号跨进程原子分配：API 入队路径（agent_queue）与本 worker
+            # 会同时写同一运行的流，手工 last_event_id+1 撞号后，撞号事件会
+            # 被 SSE 重放游标（after_id 严格大于）永久跳过——session 事件
+            # 丢失曾导致前端用户消息双气泡。
+            event_id = runtime_store.next_event_id(request_id)
+            runtime_store.append_event(request_id, event_id, event, data)
+            with event_lock:
+                event_sequence = max(event_sequence, event_id)
+            return event_id
         with event_lock:
             event_sequence += 1
-            event_id = event_sequence
-        if event != "delta":
-            runtime_store.append_event(request_id, event_id, event, data)
-        return event_id
+            return event_sequence
 
     def persist_terminal(
         *,
@@ -694,10 +702,10 @@ def fail_interrupted_execute_job(job: dict[str, Any], reason: str) -> None:
         task_status="failed",
         error=reason,
     )
-    event_id = runtime_store.last_event_id(request_id) + 1
+    status_event_id = runtime_store.next_event_id(request_id)
     runtime_store.append_event(
         request_id,
-        event_id,
+        status_event_id,
         "task.status",
         {
             "task_id": task_id,
@@ -706,10 +714,10 @@ def fail_interrupted_execute_job(job: dict[str, Any], reason: str) -> None:
             "permission_mode": "read",
         },
     )
-    event_id += 1
+    error_event_id = runtime_store.next_event_id(request_id)
     runtime_store.append_event(
         request_id,
-        event_id,
+        error_event_id,
         "error",
         {
             "message": "执行 Worker 中断。为避免重复写入，任务未自动重放，请确认后重试。",
@@ -722,7 +730,7 @@ def fail_interrupted_execute_job(job: dict[str, Any], reason: str) -> None:
         request_id,
         session_id,
         str(snapshot.get("content") or ""),
-        event_id,
+        error_event_id,
         status="failed",
         started_at=snapshot.get("started_at"),
         ttl_seconds=86400,

@@ -22,7 +22,11 @@ export function TaskPlanPanel({
   onModeChange: (mode: PermissionMode) => void
 }) {
   if (!plan && status === 'draft') return null
-  const awaitingApproval = plan?.status === 'pending' && status === 'awaiting_approval'
+  // 计划仍是 pending 但任务已 failed/cancelled 时也必须露出「批准计划」：
+  // 后端 approve_task_plan 不校验任务状态（批准后置回 ready），否则这种
+  // 状态下两个按钮都不显示，用户没有任何出路
+  const awaitingApproval = plan?.status === 'pending'
+    && ['awaiting_approval', 'failed', 'cancelled'].includes(status)
   const executable = plan?.status === 'approved' && ['ready', 'failed', 'cancelled'].includes(status)
   return (
     <div className="border-y border-line bg-[#fcfcfd] px-4 py-3">

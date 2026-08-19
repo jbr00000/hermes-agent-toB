@@ -36,6 +36,7 @@ class RuntimeStore:
         self._local_knowledge_pending: deque[str] = deque()
         self._local_knowledge_processing: dict[str, dict[str, Any]] = {}
         self._local_events: dict[str, list[dict[str, Any]]] = {}
+        self._local_event_seq: dict[str, int] = {}
         self._local_workers: dict[str, float] = {}
         # key -> (window_expires_at, fail_count) / key -> locked_until
         self._local_login_failures: dict[str, tuple[float, int]] = {}
@@ -303,6 +304,54 @@ class RuntimeStore:
                 ),
                 default=0,
             )
+
+    # 事件序号跨进程原子分配：API 入队路径与 worker 执行路径会同时向同一
+    # 运行的流写事件，之前各自 last_event_id()+1 再 append 存在竞态——两个
+    # 事件拿到同一个 id 时，SSE 重放的 zrangebyscore("(after_id", ...) 游标
+    # 会永久跳过撞号事件（session 事件丢失曾导致前端用户消息双气泡）。
+    # INCR 在 Lua 里与 zset 当前最大值对齐：老运行（无计数器）或计数器过期
+    # 后也不会分配出比已缓冲事件更小的 id。
+    _NEXT_EVENT_ID_LUA = """
+local seq = redis.call('INCR', KEYS[1])
+local latest = redis.call('ZREVRANGE', KEYS[2], 0, 0, 'WITHSCORES')
+local zmax = 0
+if #latest >= 2 then zmax = math.floor(tonumber(latest[2]) or 0) end
+if seq <= zmax then
+  seq = zmax + 1
+  redis.call('SET', KEYS[1], seq)
+end
+redis.call('EXPIRE', KEYS[1], ARGV[1])
+return seq
+"""
+
+    def next_event_id(self, request_id: str, *, ttl_seconds: int = 86400) -> int:
+        """Atomically allocate the next SSE event id for a run's stream."""
+        counter_key = self._key("stream", request_id, "event-seq")
+        events_key = self._key("stream", request_id, "events-v2")
+        if self._redis is not None:
+            try:
+                return int(
+                    self._redis.eval(
+                        self._NEXT_EVENT_ID_LUA,
+                        2,
+                        counter_key,
+                        events_key,
+                        ttl_seconds,
+                    )
+                )
+            except RedisError as exc:
+                logger.warning("Redis SSE event id allocation failed: %s", exc)
+        with self._local_guard:
+            buffered = max(
+                (
+                    int(event.get("id") or 0)
+                    for event in self._local_events.get(events_key, [])
+                ),
+                default=0,
+            )
+            seq = max(self._local_event_seq.get(counter_key, 0), buffered) + 1
+            self._local_event_seq[counter_key] = seq
+            return seq
 
     def save_chat_snapshot(
         self,

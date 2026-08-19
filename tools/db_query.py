@@ -138,6 +138,17 @@ def _database_url_env_name() -> str:
     return "HERMES_DB_URL"
 
 
+def _db_configured() -> bool:
+    """业务库连接串是否已配置。
+
+    db_query 本期暂时屏蔽：未配置 url_env（deployment.yaml database.url_env，
+    默认 HERMES_DB_URL）时工具对模型不可见；客户交付时把连接串写进 .env
+    即自动恢复，无需改代码。registry 对 check_fn 有 ~30s TTL 缓存，配置
+    变更最迟一分钟内生效。
+    """
+    return bool(os.environ.get(_database_url_env_name(), "").strip())
+
+
 def _configured_max_rows() -> int:
     env_value = os.environ.get("HERMES_DB_QUERY_MAX_ROWS")
     if env_value:
@@ -331,4 +342,5 @@ registry.register(
         },
     },
     handler=_handle,
+    check_fn=_db_configured,
 )

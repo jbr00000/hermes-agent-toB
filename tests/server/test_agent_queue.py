@@ -62,6 +62,29 @@ def test_agent_event_buffer_and_snapshot_can_be_replayed(monkeypatch) -> None:
     assert store.get_chat_snapshot("run-1")["content"] == "partial"
 
 
+def test_next_event_id_never_collides_with_buffered_events(monkeypatch) -> None:
+    """撞号事件会被 SSE 重放游标（after_id 严格大于）永久跳过，因此序号
+    分配必须与已缓冲事件对齐且连续唯一——即使缓冲区里已存在手工 id
+    （老运行/竞态遗留）。"""
+    monkeypatch.delenv("HERMES_REDIS_URL", raising=False)
+    store = RuntimeStore()
+    store.append_event("run-1", 1, "task.status", {"status": "queued"})
+    store.append_event("run-1", 5, "session", {})
+
+    first = store.next_event_id("run-1")
+    second = store.next_event_id("run-1")
+
+    assert first > 5
+    assert second > first
+    # 分配出的 id 追加进缓冲区后，重放能按游标依次取到
+    store.append_event("run-1", first, "plan.required", {})
+    store.append_event("run-1", second, "final", {})
+    assert [event["id"] for event in store.list_events("run-1", after_id=5)] == [
+        first,
+        second,
+    ]
+
+
 def test_worker_requeues_planning_but_does_not_replay_started_execution(
     monkeypatch, tmp_path
 ) -> None:

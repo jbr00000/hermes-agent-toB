@@ -299,7 +299,7 @@ export function AgentView({ taskId, title, onDeleted, onOpenTab }: { taskId: str
               onClick={active ? stopTask : sendPlanRequest}
             >
               {active ? <CircleStop size={15} /> : <Send size={15} />}
-              {active ? '停止' : '生成计划'}
+              {active ? '停止' : '发送'}
             </button>
           </div>
           </div>

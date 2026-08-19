@@ -115,7 +115,9 @@ def enqueue_agent_run(
             ttl_seconds=86400,
         )
     if created:
-        event_id = runtime_store.last_event_id(request_id) + 1
+        # 序号必须原子分配：worker 可能已领走任务并开始写事件，手工
+        # last_event_id+1 会与 worker 的 emit 撞号（撞号事件被重放游标跳过）
+        event_id = runtime_store.next_event_id(request_id, ttl_seconds=86400)
         runtime_store.append_event(
             request_id,
             event_id,
