@@ -140,7 +140,7 @@ function ChatRightPanel({ sessionId, referencedDocs, onOpenTab }: { sessionId: s
 
         <PanelSection title="当前范围" icon={Archive}>
           <div className="space-y-3">
-            <InfoRow label="业务空间" value={activeSpace?.name ?? '轨道公司'} />
+            <InfoRow label="业务空间" value={activeSpace?.name ?? '诉讼仲裁'} />
             <InfoRow label="回答方式" value="知识库增强" />
           </div>
         </PanelSection>
