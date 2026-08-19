@@ -268,8 +268,16 @@ export function AgentView({ taskId, title, onDeleted, onOpenTab }: { taskId: str
           <textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              // 与 Chat 输入框一致：Enter 发送，Shift+Enter 换行；
+              // isComposing 守卫防止中文输入法选词时的 Enter 误触发发送
+              if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                event.preventDefault()
+                sendPlanRequest()
+              }
+            }}
             className="block min-h-[82px] w-full resize-none bg-transparent px-4 py-3 text-sm outline-none"
-            placeholder={approvedPlan ? '计划已批准，可在上方调整权限后执行' : '输入任务目标，Agent 将先生成执行计划'}
+            placeholder={approvedPlan ? '计划已批准，可在上方调整权限后执行' : '输入任务目标，Agent 将先生成执行计划（Enter 发送，Shift+Enter 换行）'}
             disabled={!canPlan}
           />
           <div className="flex items-center justify-between border-t border-line px-3 py-2">
