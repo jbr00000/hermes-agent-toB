@@ -484,8 +484,12 @@ function OriginalContent({
   onDownload: () => void
 }) {
   const center = 'flex h-full items-center justify-center p-6 text-center text-sm text-zinc-400'
-  if (loading) return <div className={center}>加载原文中…</div>
-  if (error) {
+  // loading/error 只对真正会拉原文的格式（pdf/md/txt）生效：Office 等格式
+  // fileQuery 处于 disabled 状态，React Query v5 下 isPending 恒为 true，
+  // 不拦截的话永远卡在这里，走不到下方的 officePreview 分支
+  const pullsOriginal = ORIGINAL_PREVIEW_EXTS.has(fileExt)
+  if (pullsOriginal && loading) return <div className={center}>加载原文中…</div>
+  if (pullsOriginal && error) {
     const gone = error instanceof ApiError && error.status === 410
     return <div className={center}>{gone ? '原始文件已丢失，请重新上传' : '原文加载失败'}</div>
   }
