@@ -849,7 +849,17 @@ def _probe_remote_backend(env_type: str) -> str | None:
             "\"$(uname -r 2>/dev/null || echo unknown)\" "
             "\"$HOME\" \"$(pwd)\" \"$(whoami 2>/dev/null || id -un 2>/dev/null || echo unknown)\""
         )
-        result = env.execute(probe_cmd, timeout=4)
+        try:
+            result = env.execute(probe_cmd, timeout=4)
+        finally:
+            # 探针容器是一次性的：探测完立即拆除。persist 模式下 cleanup 默认
+            # 是 no-op（为用户沙箱的长驻契约设计），探针不该沿用——否则每次
+            # 进程重启都会遗留一个与用户无关的常驻容器，docker ps 里看起来像
+            # "多出来的沙箱"。
+            try:
+                env.cleanup(force_remove=True)
+            except Exception:
+                logger.debug("Backend probe cleanup failed", exc_info=True)
         if result.get("returncode") != 0:
             logger.debug("Backend probe returned non-zero: %r", result)
             _BACKEND_PROBE_CACHE[cache_key] = ""
