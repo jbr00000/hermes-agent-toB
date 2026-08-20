@@ -152,6 +152,9 @@ def list_task_artifacts(task_id: str, user: dict = Depends(get_current_user)):
             rel = path.relative_to(root)
             if any(part.startswith(".") for part in rel.parts):
                 continue
+            # uploads/ 是用户上传的原始附件（输入，不是交付物），不进交付卡片
+            if rel.parts and rel.parts[0] == "uploads":
+                continue
             stat = path.stat()
             artifacts.append(
                 {

@@ -90,6 +90,10 @@ async def upload_files(
         saved.append(
             uploads_module.save_upload(user["id"], owner_type, owner_id, file_name, content)
         )
+    if saved and owner_type == "task":
+        # agent 任务的附件原件同时暂存进沙箱任务工作区 uploads/（execute 阶段
+        # 模型可用终端直接读取原始格式）；上传时暂存一份，execute 前还会幂等补齐
+        uploads_module.stage_task_uploads(user["id"], owner_id)
     return {"files": saved}
 
 

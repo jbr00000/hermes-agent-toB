@@ -452,10 +452,30 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
                 if task is not None and effective_mode == "execute"
                 else req.message
             )
+            # 附件全文注入：chat 会话挂 session、agent 任务挂 task；已注入过的
+            # 文件（历史消息 metadata.attachments 里有 id）不重复注入。execute
+            # 阶段不注文本——原始文件已暂存进沙箱工作区 uploads/（见下方 note）。
+            from server import uploads as uploads_module
+
+            attachment_owner = (
+                ("task", task["id"]) if task is not None else ("session", session_id)
+            )
+            attachment_metadata: dict[str, Any] | None = None
+            if effective_mode != "execute":
+                displayed_user_message, attachment_metadata = (
+                    uploads_module.prepare_attachment_injection(
+                        user_id,
+                        attachment_owner[0],
+                        attachment_owner[1],
+                        prior_messages,
+                        displayed_user_message,
+                    )
+                )
             user_message = repository.append_message(
                 session_id,
                 "user",
                 displayed_user_message,
+                metadata=attachment_metadata,
             )
             emit(
                 "session",
@@ -539,7 +559,18 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
             # 精准模式：把改写后的检索问题缀在当前 user 轮次尾部发给模型
             # （落库的 user 消息仍是用户原文）。放这里而不是 system prompt——
             # 系统提示必须全程字节稳定（不变量 3），逐轮变化的内容只能进当前轮。
-            model_message = req.message
+            # 附件注入已落在 displayed_user_message 里（与落库内容一致，恢复会话
+            # 时随历史重放）；execute 的落库文案是占位符，模型消息仍用用户原文。
+            model_message = (
+                req.message if effective_mode == "execute" else displayed_user_message
+            )
+            if effective_mode == "execute" and task is not None:
+                # 任务附件原件暂存进沙箱工作区 uploads/，位置说明只发给模型
+                uploads_note = uploads_module.task_uploads_note(
+                    user_id, task["id"], execute_cwd or ""
+                )
+                if uploads_note:
+                    model_message += "\n\n" + uploads_note
             if knowledge_search_query:
                 model_message = (
                     f"{req.message}\n\n"

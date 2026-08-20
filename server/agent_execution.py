@@ -378,6 +378,17 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
             display_override
             or ("执行已批准计划" if phase == "execute" else message)
         )
+        # 附件全文注入（仅 plan：execute 的模型输入是占位指令，原始文件走
+        # 沙箱工作区 uploads/）。按文件幂等——已注入的文件在历史里靠前缀
+        # 缓存生效，不重复注入。注入文本落库，恢复会话时随历史重放。
+        from server import uploads as uploads_module
+
+        attachment_metadata: dict[str, Any] | None = None
+        if phase == "plan" and not display_override:
+            message, attachment_metadata = uploads_module.prepare_attachment_injection(
+                user_id, "task", task_id, prior_messages, message
+            )
+            displayed_user_message = message
         user_message = repository.get_message_for_run(request_id, "user")
         if user_message is None:
             user_message = repository.append_message(
@@ -385,6 +396,7 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
                 "user",
                 displayed_user_message,
                 model_run_id=request_id,
+                metadata=attachment_metadata,
             )
         emit(
             "session",
@@ -456,6 +468,12 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
             from tools.terminal_tool import register_task_env_overrides
 
             register_task_env_overrides(sandbox_key, {"cwd": task_container_cwd(task_id)})
+            # 任务附件原件暂存进工作区 uploads/，位置说明只发给模型（不落库）
+            uploads_note = uploads_module.task_uploads_note(
+                user_id, task_id, task_container_cwd(task_id)
+            )
+            if uploads_note:
+                message += "\n\n" + uploads_note
 
         final = agent.chat(
             message,

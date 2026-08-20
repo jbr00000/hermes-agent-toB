@@ -122,20 +122,61 @@ def read_parsed_text(record: dict) -> str:
 
 
 def remove_file_files(record: dict) -> None:
-    """删除单个上传文件的磁盘目录（原件 + 解析产物）。"""
+    """删除单个上传文件的磁盘目录（原件 + 解析产物 + 沙箱里的暂存副本）。"""
     file_path = record.get("file_path") or ""
-    if not file_path:
-        return
-    dest_dir = (Path(get_hermes_home()) / file_path).parent
-    if dest_dir.parent == owner_dir(
-        record["user_id"], record["owner_type"], record["owner_id"]
-    ):
-        shutil.rmtree(dest_dir, ignore_errors=True)
+    if file_path:
+        dest_dir = (Path(get_hermes_home()) / file_path).parent
+        if dest_dir.parent == owner_dir(
+            record["user_id"], record["owner_type"], record["owner_id"]
+        ):
+            shutil.rmtree(dest_dir, ignore_errors=True)
+    if record.get("owner_type") == "task":
+        try:
+            from server.sandbox import task_workspace_dir
+
+            staged = (
+                task_workspace_dir(record["user_id"], record["owner_id"], create=False)
+                / "uploads"
+                / f"{record['id']}{record['file_ext']}"
+            )
+            staged.unlink(missing_ok=True)
+        except (ValueError, OSError):
+            pass
 
 
 def remove_owner_files(user_id: str, owner_type: str, owner_id: str) -> None:
     """owner（session/task）删除时清掉整个上传目录。"""
     shutil.rmtree(owner_dir(user_id, owner_type, owner_id), ignore_errors=True)
+
+
+def stage_task_uploads(user_id: str, task_id: str) -> list[str]:
+    """把任务附件的**原始文件**复制进沙箱任务工作区的 uploads/ 子目录。
+
+    宿主机侧直拷（工作区是绑定挂载，容器内即 /workspace/tasks/<id>/uploads/），
+    execute 阶段模型可用 terminal/read_file 直接读取原始二进制（xlsx 等
+    解析后丢格式的格式尤其需要）。幂等；返回容器内相对路径列表。
+    交付文件列表（GET /tasks/{id}/artifacts）排除 uploads/ 顶层目录。
+    """
+    from server.sandbox import task_workspace_dir
+
+    records = get_repository().list_uploaded_files(user_id, "task", task_id)
+    if not records:
+        return []
+    dest_dir = task_workspace_dir(user_id, task_id) / "uploads"
+    staged: list[str] = []
+    home = Path(get_hermes_home())
+    for record in records:
+        source = home / record["file_path"]
+        if not source.is_file():
+            continue
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        # 用「文件id+原扩展名」命名，避免中文文件名/重名在容器工具链里的麻烦；
+        # 原始文件名在注入文本和 prompt 里另行告知模型
+        dest = dest_dir / f"{record['id']}{record['file_ext']}"
+        if not dest.exists() or dest.stat().st_size != source.stat().st_size:
+            shutil.copyfile(source, dest)
+        staged.append(f"uploads/{dest.name}")
+    return staged
 
 
 # ------------------------------------------------------------- token 预算与截断
@@ -252,3 +293,79 @@ def budget_summary(user_id: str, owner_type: str, owner_id: str) -> dict:
         "file_tokens": file_tokens,
         "over_budget": file_tokens > budget,
     }
+
+
+# ------------------------------------------------------------- 消息注入（chat/plan）
+
+def prepare_attachment_injection(
+    user_id: str,
+    owner_type: str,
+    owner_id: str,
+    prior_messages: list[dict],
+    base_text: str,
+) -> tuple[str, dict | None]:
+    """把尚未注入过的 ready 附件全文拼进当前用户消息。返回 (文本, 消息 metadata)。
+
+    按文件幂等：已注入的文件（历史消息 metadata.attachments 里有 id）不再重复
+    注入——它们已躺在会话历史的固定位置上，后续轮次靠前缀缓存命中，既省
+    token 又不违反「不改写历史消息」不变量。对话中途新传/刚解析完的文件在
+    下一轮补注。预算从**本批**新文件里最新的开始截断（老文件已在历史中）。
+
+    调用方把返回文本同时用于「发给模型」和「落库」（两者一致，恢复会话时
+    附件内容随历史重放）；metadata.display_content 存用户原文供前端气泡
+    展示，前端不认识该字段时退化为显示全文（可接受的降级）。
+    """
+    records = [
+        r
+        for r in get_repository().list_uploaded_files(user_id, owner_type, owner_id)
+        if r.get("parse_status") == "ready"
+    ]
+    if not records:
+        return base_text, None
+    injected_ids = {
+        item["id"]
+        for message in prior_messages
+        for item in ((message.get("metadata") or {}).get("attachments") or [])
+        if isinstance(item, dict) and item.get("id")
+    }
+    pending = [r for r in records if r["id"] not in injected_ids]
+    if not pending:
+        return base_text, None
+
+    history_tokens = sum(
+        count_tokens(str(m.get("content") or "")) for m in prior_messages
+    )
+    budget = attachment_budget(history_tokens + count_tokens(base_text))
+    block, usage = build_attachment_block(pending, budget)
+    if not block:
+        return base_text, None
+    text = (
+        f"{base_text}\n\n"
+        f"（用户随消息上传了以下文件的全文，作为本轮及后续对话的上下文；"
+        f"回答与这些文件相关的问题时直接依据其内容：\n{block}\n）"
+    )
+    return text, {"attachments": usage, "display_content": base_text}
+
+
+def task_uploads_note(user_id: str, task_id: str, container_cwd: str) -> str | None:
+    """execute 阶段：把任务附件原件暂存进沙箱工作区并生成给模型的位置说明。
+
+    返回 None 表示该任务没有附件。说明只发给模型（不落库——重试时会按
+    当前附件集合重新生成，且 execute 落库的 user 消息是占位文案）。
+    """
+    staged = stage_task_uploads(user_id, task_id)
+    if not staged:
+        return None
+    records = get_repository().list_uploaded_files(user_id, "task", task_id)
+    by_staged_name = {f"{r['id']}{r['file_ext']}": r for r in records}
+    lines = []
+    for rel in staged:
+        record = by_staged_name.get(rel.rsplit("/", 1)[-1])
+        original = record["file_name"] if record else rel
+        lines.append(f"- {container_cwd}/{rel}（原始文件名：{original}）")
+    return (
+        "用户随任务上传了原始文件，已放入本任务工作区（终端 cwd 的子目录）：\n"
+        + "\n".join(lines)
+        + "\n需要按原始格式精确处理（如 xlsx 的单元格、pdf 的版面）时，"
+        "用终端/文件工具直接读取这些文件，不要凭注入的文本转述猜测格式细节。"
+    )

@@ -322,3 +322,123 @@ def test_runtime_config_reads_max_input_tokens(monkeypatch) -> None:
 
     monkeypatch.setattr(runtime_config, "load_config", lambda: {"model": "m"})
     assert runtime_config.load_runtime_config().max_input_tokens == 128_000
+
+
+# ------------------------------------------------------- 消息注入 + 沙箱暂存
+
+
+def _capture_agent(monkeypatch, captured: list[dict]) -> None:
+    class FakeAgent:
+        provider = "custom"
+        model = "test-model"
+        reasoning_config = {"enabled": False}
+        enabled_toolsets = ["db", "session_search"]
+
+        def __init__(self, callbacks: dict | None = None) -> None:
+            self.callbacks = callbacks or {}
+
+        def chat(self, message, stream_callback=None, task_id=None):
+            captured.append({"message": message, "mode": self.callbacks.get("mode")})
+            return "回答"
+
+        def interrupt(self, message=None):
+            return None
+
+    import server.agent_factory as agent_factory
+
+    monkeypatch.setattr(
+        agent_factory, "build_agent", lambda **kwargs: FakeAgent(kwargs)
+    )
+
+
+def test_chat_turn_injects_attachment_once_and_persists(monkeypatch, tmp_path) -> None:
+    client = _client(monkeypatch, tmp_path)
+    headers = _login(client, "admin", "correct-horse-battery-staple")
+    session_id = _make_chat_session(client, headers)
+    _upload(client, headers, "session", session_id, [("案情.txt", "张三诉李四合同纠纷。".encode())])
+
+    captured: list[dict] = []
+    _capture_agent(monkeypatch, captured)
+
+    first = client.post(
+        "/chat",
+        headers=headers,
+        json={"session_id": session_id, "interaction_type": "chat", "message": "总结案情"},
+    )
+    assert first.status_code == 200
+    assert "【附件 1/1：案情.txt】" in captured[0]["message"]
+    assert "张三诉李四合同纠纷。" in captured[0]["message"]
+    assert captured[0]["message"].startswith("总结案情")
+
+    detail = client.get(f"/sessions/{session_id}", headers=headers).json()
+    user_msg = detail["messages"][0]
+    assert "张三诉李四合同纠纷。" in user_msg["content"]  # 注入文本随历史落库
+    assert user_msg["metadata"]["display_content"] == "总结案情"
+    assert user_msg["metadata"]["attachments"][0]["status"] == "full"
+
+    # 第二轮：同一文件不重复注入（历史里已有，前缀缓存命中）
+    second = client.post(
+        "/chat",
+        headers=headers,
+        json={"session_id": session_id, "interaction_type": "chat", "message": "继续"},
+    )
+    assert second.status_code == 200
+    assert captured[1]["message"] == "继续"
+
+    # 对话中途新传文件 → 下一轮补注（老文件仍不重复）
+    _upload(client, headers, "session", session_id, [("补充.txt", "补充证据清单。".encode())])
+    third = client.post(
+        "/chat",
+        headers=headers,
+        json={"session_id": session_id, "interaction_type": "chat", "message": "再看补充"},
+    )
+    assert third.status_code == 200
+    assert "补充证据清单。" in captured[2]["message"]
+    assert "张三诉李四" not in captured[2]["message"]
+
+
+def test_agent_task_plan_injection_and_execute_workspace(monkeypatch, tmp_path) -> None:
+    """plan 注入附件全文；execute 不注文本，原件在沙箱工作区 uploads/ 且有位置说明。"""
+    client = _client(monkeypatch, tmp_path)
+    headers = _login(client, "admin", "correct-horse-battery-staple")
+    task = client.post("/tasks", headers=headers, json={}).json()["task"]
+    record = _upload(
+        client, headers, "task", task["id"], [("费用明细.txt", "律师费 3000 元/小时。".encode())]
+    ).json()["files"][0]
+
+    captured: list[dict] = []
+    _capture_agent(monkeypatch, captured)
+
+    assert client.post(
+        f"/tasks/{task['id']}/plan", headers=headers, json={"message": "测算费用"}
+    ).status_code == 200
+    assert captured[-1]["mode"] == "plan"
+    assert "律师费 3000 元/小时。" in captured[-1]["message"]
+
+    assert client.post(f"/tasks/{task['id']}/approve", headers=headers).status_code == 200
+    assert client.put(
+        f"/tasks/{task['id']}/permission", headers=headers, json={"mode": "full"}
+    ).status_code == 200
+    assert client.post(
+        f"/tasks/{task['id']}/execute", headers=headers, json={}
+    ).status_code == 200
+    execute_message = captured[-1]["message"]
+    assert captured[-1]["mode"] == "execute"
+    # execute 不注入全文，只给工作区位置说明
+    assert "律师费 3000 元/小时。" not in execute_message
+    assert f"/workspace/tasks/{task['id']}/uploads/" in execute_message
+    assert "费用明细.txt" in execute_message
+
+    # 原件确实落进了沙箱任务工作区（宿主机侧，绑定挂载进容器）
+    from server.sandbox import task_workspace_dir
+
+    staged = task_workspace_dir(task["user_id"], task["id"]) / "uploads" / f"{record['id']}.txt"
+    assert staged.read_bytes() == "律师费 3000 元/小时。".encode()
+
+    # 交付文件列表排除 uploads/——输入附件不是交付物
+    artifacts = client.get(f"/tasks/{task['id']}/artifacts", headers=headers).json()["artifacts"]
+    assert all(not a["path"].startswith("uploads/") for a in artifacts)
+
+    # 删除附件：原件目录与沙箱暂存副本一起清掉
+    assert client.delete(f"/uploads/{record['id']}", headers=headers).status_code == 200
+    assert not staged.exists()
