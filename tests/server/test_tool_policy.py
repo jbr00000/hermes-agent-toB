@@ -32,16 +32,30 @@ def test_execute_mode_requires_full_permission_for_sandbox_terminal() -> None:
         mode="execute",
         features={"host_terminal": False},
         permission_mode="full",
-    ) == ["db", "terminal", "web", "knowledge"]
+    ) == ["db", "terminal", "file", "web", "knowledge"]
 
 
 def test_controlled_permission_enables_terminal_behind_the_approval_gate() -> None:
-    """controlled 拿到 terminal 工具集；每条命令由 tool_gate 审批钩子逐条把关。"""
+    """controlled 拿到 terminal+file 工具集；命令与文件写入由 tool_gate 逐条把关。"""
     assert resolve_toolsets(
         mode="execute",
         features={},
         permission_mode="controlled",
-    ) == ["db", "terminal", "web", "knowledge"]
+    ) == ["db", "terminal", "file", "web", "knowledge"]
+
+
+def test_file_toolset_never_reaches_read_only_modes() -> None:
+    """file 只在 controlled/full 出现；read、chat、plan、knowledge 一律不挂。"""
+    assert "file" not in resolve_toolsets(mode="execute", features={})
+    assert "file" not in resolve_toolsets(
+        mode="chat", features={}, permission_mode="full"
+    )
+    assert "file" not in resolve_toolsets(
+        mode="plan", features={}, permission_mode="full"
+    )
+    assert "file" not in resolve_toolsets(
+        mode="knowledge", features={}, permission_mode="full"
+    )
 
 
 def test_browser_toolset_requires_flag_and_full_permission() -> None:
@@ -49,19 +63,19 @@ def test_browser_toolset_requires_flag_and_full_permission() -> None:
     # flag 关 + full → 无 browser
     assert resolve_toolsets(
         mode="execute", features={}, permission_mode="full"
-    ) == ["db", "terminal", "web", "knowledge"]
+    ) == ["db", "terminal", "file", "web", "knowledge"]
     # flag 开 + controlled → 无 browser（浏览器仍属 full 专属）
     assert resolve_toolsets(
         mode="execute",
         features={"browser_automation": True},
         permission_mode="controlled",
-    ) == ["db", "terminal", "web", "knowledge"]
+    ) == ["db", "terminal", "file", "web", "knowledge"]
     # flag 开 + full → browser 放行
     assert resolve_toolsets(
         mode="execute",
         features={"browser_automation": True},
         permission_mode="full",
-    ) == ["db", "terminal", "web", "knowledge", "browser"]
+    ) == ["db", "terminal", "file", "web", "knowledge", "browser"]
     # chat / plan 即使 flag 开 + full 也不给浏览器（规划阶段不允许副作用）
     assert resolve_toolsets(
         mode="chat",

@@ -32,6 +32,11 @@ def resolve_toolsets(
     命令在执行前都要经 server.tool_gate 的 pre_tool_call 钩子等待用户在
     Web 上批准（运行中途 human-in-the-loop）。browser 仍属 full 专属。
 
+    "file" 工具集（read_file / write_file / patch / search_files）挂在
+    controlled 与 full：沙箱后端是 Docker 时，file 工具通过 cwd override
+    在容器内的任务工作区（/workspace/tasks/<task_id>/）读写，产物随后经
+    artifacts 接口供用户下载。plan/chat/knowledge 保持只读，不挂 file。
+
     "knowledge" 工具集（knowledge_search）是只读检索，chat/plan/execute 全
     部放行——未配置知识库后端时 check_fn 会隐藏工具，加在这里是 no-op。
     mode="knowledge"（知识库问答）是专用模式：只挂 knowledge 工具集，由
@@ -43,10 +48,10 @@ def resolve_toolsets(
     if normalized_mode in {"chat", "plan"}:
         return ["db", "web", "knowledge"]
     if permission_mode == "full":
-        toolsets = ["db", "terminal", "web", "knowledge"]
+        toolsets = ["db", "terminal", "file", "web", "knowledge"]
         if (features or {}).get("browser_automation"):
             toolsets.append("browser")
         return toolsets
     if permission_mode == "controlled":
-        return ["db", "terminal", "web", "knowledge"]
+        return ["db", "terminal", "file", "web", "knowledge"]
     return ["db", "web", "knowledge"]

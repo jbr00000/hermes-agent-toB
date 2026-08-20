@@ -8,6 +8,7 @@ ToolRiskLevel = Literal["read", "controlled_write", "high_risk", "unknown"]
 
 _READ_TOOLS = {"db_query", "knowledge_search"}
 _HIGH_RISK_TOOLS = {"terminal", "process", "code_execution"}
+_CONTROLLED_WRITE_TOOLS = {"patch"}
 _CONTROLLED_WRITE_PREFIXES = ("write_", "create_", "update_", "delete_", "patch_")
 
 
@@ -17,7 +18,9 @@ def tool_risk_level(tool_name: str | None) -> ToolRiskLevel:
         return "read"
     if normalized in _HIGH_RISK_TOOLS:
         return "high_risk"
-    if normalized.startswith(_CONTROLLED_WRITE_PREFIXES):
+    if normalized in _CONTROLLED_WRITE_TOOLS or normalized.startswith(
+        _CONTROLLED_WRITE_PREFIXES
+    ):
         return "controlled_write"
     return "unknown"
 

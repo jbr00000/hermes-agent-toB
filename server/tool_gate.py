@@ -1,8 +1,8 @@
 """controlled 权限档的运行中途审批门控。
 
 实现机制：插件 pre_tool_call 钩子（agent 线程内同步执行、可阻塞）。agent 以
-controlled 权限运行时，每条 terminal/process 命令在这里挂起，直到用户在
-Web 上批准/拒绝、运行被取消或审批超时。
+controlled 权限运行时，每条 terminal/process 命令与 write_file/patch 文件写入
+都在这里挂起，直到用户在 Web 上批准/拒绝、运行被取消或审批超时。
 
 关键约束（与 agent_execution / 前端约定）:
 - 门控注册表按 ``session_id`` 索引（钩子里的 ``api_request_id`` 每次模型调用
@@ -29,7 +29,7 @@ from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
-GATED_TOOLS = frozenset({"terminal", "process"})
+GATED_TOOLS = frozenset({"terminal", "process", "write_file", "patch"})
 DENIED_SENTINEL = "[approval-denied]"
 
 EmitFn = Callable[[str, dict[str, Any]], int]
