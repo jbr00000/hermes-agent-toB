@@ -357,7 +357,7 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
             raise RuntimeError("cancelled before execution started")
         from server.agent_factory import build_agent
         from server.memory import save_memory_candidate
-        from server.sandbox import task_sandbox_key
+        from server.sandbox import task_container_cwd, task_workspace_dir, user_sandbox_key
 
         prior_messages = [
             item
@@ -442,10 +442,19 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
             metadata={**runtime_metadata, "request_id": request_id},
         )
 
+        sandbox_key = user_sandbox_key(user_id)
+        if phase == "execute":
+            # 共享用户沙箱内按任务分目录：预建宿主机子目录（绑定挂载进容器），
+            # 并把本轮的 cwd 钉到容器内 /workspace/tasks/<task_id>/。
+            task_workspace_dir(user_id, task_id)
+            from tools.terminal_tool import register_task_env_overrides
+
+            register_task_env_overrides(sandbox_key, {"cwd": task_container_cwd(task_id)})
+
         final = agent.chat(
             message,
             stream_callback=on_delta,
-            task_id=task_sandbox_key(user_id, task_id),
+            task_id=sandbox_key,
         ) or ""
         if (
             lease_lost.is_set()
@@ -682,10 +691,7 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
                 "Could not expire pending tool approvals for %s", request_id, exc_info=True
             )
         runtime_store.mark_request(request_id, "done")
-        if phase == "execute":
-            from server.sandbox import release_task_sandbox
-
-            release_task_sandbox(user_id, task_id)
+        # 沙箱按用户长驻：运行结束不回收容器（它可能正在服务该用户的其他任务）。
 
 
 def fail_interrupted_execute_job(job: dict[str, Any], reason: str) -> None:

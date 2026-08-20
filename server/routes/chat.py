@@ -234,9 +234,17 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
     permission_mode = "read" if effective_mode in {"chat", "plan", "knowledge"} else permission["mode"]
     sandbox_task_id = None
     if task is not None:
-        from server.sandbox import task_sandbox_key
+        from server.sandbox import task_container_cwd, task_workspace_dir, user_sandbox_key
 
-        sandbox_task_id = task_sandbox_key(user_id, task["id"])
+        sandbox_task_id = user_sandbox_key(user_id)
+        if effective_mode == "execute":
+            # 共享用户沙箱内按任务分目录：预建宿主机子目录 + 钉住容器内 cwd。
+            task_workspace_dir(user_id, task["id"])
+            from tools.terminal_tool import register_task_env_overrides
+
+            register_task_env_overrides(
+                sandbox_task_id, {"cwd": task_container_cwd(task["id"])}
+            )
 
     request_id = req.request_id or str(uuid.uuid4())
     lock_token = runtime_store.acquire_conversation(session_id)
@@ -844,15 +852,7 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
             runtime_store.release_conversation(session_id, lock_token)
             if stream_attached.is_set():
                 event_queue.put(sentinel)
-            if task is not None and effective_mode == "execute":
-                from server.sandbox import release_task_sandbox
-
-                threading.Thread(
-                    target=release_task_sandbox,
-                    args=(user_id, task["id"]),
-                    daemon=True,
-                    name=f"sandbox-release-{task['id'][:8]}",
-                ).start()
+            # 沙箱按用户长驻：对话结束不回收容器。
 
     if task is not None:
         emit(

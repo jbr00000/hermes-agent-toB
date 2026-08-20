@@ -59,9 +59,7 @@ class AgentWorker:
             return
         reason = "Agent execution Worker lease expired"
         fail_interrupted_execute_job(job, reason)
-        from server.sandbox import release_task_sandbox
-
-        release_task_sandbox(str(job["user_id"]), str(job["task_id"]))
+        # 沙箱按用户长驻：任务失败/中断也不回收容器。
         self.runtime_store.finish_agent_job(
             request_id, self.worker_id, status="failed", allow_stale=True
         )
