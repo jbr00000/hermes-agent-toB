@@ -136,3 +136,119 @@ def remove_file_files(record: dict) -> None:
 def remove_owner_files(user_id: str, owner_type: str, owner_id: str) -> None:
     """owner（session/task）删除时清掉整个上传目录。"""
     shutil.rmtree(owner_dir(user_id, owner_type, owner_id), ignore_errors=True)
+
+
+# ------------------------------------------------------------- token 预算与截断
+
+# 预算 = 模型上下文上限 − 历史消息 − system prompt/工具 schema 粗估 − 输出余量。
+# 超预算不阻断发送（用户已确认）：从最新上传的文件开始截断/跳过并明示。
+OUTPUT_RESERVE_TOKENS = 8192
+SYSTEM_RESERVE_TOKENS = 4096
+
+_TOKEN_ENCODING = None
+
+
+def _encoding():
+    global _TOKEN_ENCODING
+    if _TOKEN_ENCODING is None:
+        import tiktoken
+
+        _TOKEN_ENCODING = tiktoken.get_encoding("cl100k_base")
+    return _TOKEN_ENCODING
+
+
+def attachment_budget(history_tokens: int = 0) -> int:
+    """附件全文可用的 token 预算（可为 0，绝不小于 0）。"""
+    from server.runtime_config import load_runtime_config
+
+    cap = load_runtime_config().max_input_tokens
+    return max(0, cap - history_tokens - SYSTEM_RESERVE_TOKENS - OUTPUT_RESERVE_TOKENS)
+
+
+def owner_history_tokens(user_id: str, owner_type: str, owner_id: str) -> int:
+    """owner 已有对话历史的 token 粗估（注入新消息前的占用）。"""
+    repository = get_repository()
+    conversation_id = owner_id
+    if owner_type == "task":
+        task = repository.get_owned_task(user_id, owner_id)
+        if task is None:
+            return 0
+        conversation_id = task["session_id"]
+    messages = repository.get_messages(conversation_id)
+    return sum(count_tokens(str(m.get("content") or "")) for m in messages)
+
+
+def _truncate_to_tokens(text: str, limit: int) -> str:
+    tokens = _encoding().encode(text)
+    if len(tokens) <= limit:
+        return text
+    return _encoding().decode(tokens[: max(0, limit)])
+
+
+def build_attachment_block(
+    records: list[dict], budget_tokens: int
+) -> tuple[str, list[dict]]:
+    """把 ready 附件的全文拼成注入块，按预算从最新上传的开始截断。
+
+    records 须按上传时间升序（list_uploaded_files 的默认序）。返回
+    (注入文本, 每文件使用明细)；明细里 status ∈ full | truncated | skipped，
+    前端 chip 与警告条据此展示。解析中/失败的附件不参与注入也不占预算。
+    """
+    ready = [r for r in records if r.get("parse_status") == "ready"]
+    if not ready:
+        return "", []
+
+    parts: list[str] = []
+    usage: list[dict] = []
+    remaining = max(0, budget_tokens)
+    total = len(ready)
+    for index, record in enumerate(ready, start=1):
+        text = read_parsed_text(record)
+        tokens = int(record.get("token_count") or 0) or count_tokens(text)
+        header = f"【附件 {index}/{total}：{record['file_name']}】"
+        if not text:
+            usage.append(_usage(record, tokens, 0, "skipped"))
+            parts.append(f"{header}（解析产物缺失，未注入内容）")
+            continue
+        if tokens <= remaining:
+            usage.append(_usage(record, tokens, tokens, "full"))
+            parts.append(f"{header}\n{text}")
+            remaining -= tokens
+        elif remaining > 0:
+            cut = _truncate_to_tokens(text, remaining)
+            usage.append(_usage(record, tokens, remaining, "truncated"))
+            parts.append(
+                f"{header}（已截断，仅展示前 {remaining} tokens，原文共 {tokens} tokens）\n{cut}"
+            )
+            remaining = 0
+        else:
+            usage.append(_usage(record, tokens, 0, "skipped"))
+            parts.append(f"{header}（上下文预算不足，未注入内容）")
+    return "\n\n".join(parts), usage
+
+
+def _usage(record: dict, tokens: int, included: int, status: str) -> dict:
+    return {
+        "id": record["id"],
+        "file_name": record["file_name"],
+        "token_count": tokens,
+        "included_tokens": included,
+        "status": status,
+    }
+
+
+def budget_summary(user_id: str, owner_type: str, owner_id: str) -> dict:
+    """GET /uploads 附带的预算用量：前端据此渲染超预算警告（不阻断）。"""
+    from server.runtime_config import load_runtime_config
+
+    records = get_repository().list_uploaded_files(user_id, owner_type, owner_id)
+    file_tokens = sum(
+        int(r.get("token_count") or 0) for r in records if r.get("parse_status") == "ready"
+    )
+    budget = attachment_budget(owner_history_tokens(user_id, owner_type, owner_id))
+    return {
+        "max_input_tokens": load_runtime_config().max_input_tokens,
+        "budget_tokens": budget,
+        "file_tokens": file_tokens,
+        "over_budget": file_tokens > budget,
+    }

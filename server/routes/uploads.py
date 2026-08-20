@@ -99,9 +99,16 @@ def list_uploads(
     owner_id: str,
     user: dict = Depends(get_current_user),
 ):
-    """列出某 owner 的全部附件（含解析状态/token 数，供前端轮询刷新）。"""
+    """列出某 owner 的全部附件（含解析状态/token 数，供前端轮询刷新）。
+
+    附带 token 预算用量：附件全文合计超过预算时 over_budget=true，前端
+    显示黄色警告条（不阻断发送，超出部分从最新文件开始截断）。
+    """
     files = get_repository().list_uploaded_files(user["id"], owner_type, owner_id)
-    return {"files": files}
+    return {
+        "files": files,
+        "budget": uploads_module.budget_summary(user["id"], owner_type, owner_id),
+    }
 
 
 @router.delete("/{file_id}")

@@ -233,3 +233,92 @@ def test_pdf_without_mineru_fails_with_clear_error(monkeypatch, tmp_path) -> Non
     record = response.json()["files"][0]
     assert record["parse_status"] == "failed"
     assert "mineru" in (record["parse_error"] or "").lower()
+
+
+# ---------------------------------------------------------------- token 预算与截断
+
+
+def test_list_uploads_includes_budget_summary(monkeypatch, tmp_path) -> None:
+    client = _client(monkeypatch, tmp_path)
+    headers = _login(client, "admin", "correct-horse-battery-staple")
+    session_id = _make_chat_session(client, headers)
+    _upload(client, headers, "session", session_id, [("a.txt", "若干正文".encode())])
+
+    listed = client.get(
+        "/uploads", headers=headers, params={"owner_type": "session", "owner_id": session_id}
+    ).json()
+    budget = listed["budget"]
+    assert budget["max_input_tokens"] == 128_000
+    assert budget["file_tokens"] > 0
+    assert budget["over_budget"] is False
+    # 全新会话无历史：预算 = 上限 − system 粗估 − 输出余量
+    assert budget["budget_tokens"] == 128_000 - 4096 - 8192
+
+
+def test_list_uploads_flags_over_budget_without_blocking(monkeypatch, tmp_path) -> None:
+    client = _client(monkeypatch, tmp_path)
+    headers = _login(client, "admin", "correct-horse-battery-staple")
+    session_id = _make_chat_session(client, headers)
+    _upload(client, headers, "session", session_id, [("a.txt", "若干正文".encode())])
+
+    from server import runtime_config
+
+    monkeypatch.setattr(
+        runtime_config,
+        "load_runtime_config",
+        lambda: runtime_config.RuntimeConfig(
+            provider="custom", model="m", reasoning_config=None, max_input_tokens=10_000
+        ),
+    )
+    budget = client.get(
+        "/uploads", headers=headers, params={"owner_type": "session", "owner_id": session_id}
+    ).json()["budget"]
+    assert budget["budget_tokens"] == 0  # 10000 − 4096 − 8192 < 0 → 0
+    assert budget["over_budget"] is True
+
+
+def test_attachment_block_truncates_newest_first(monkeypatch) -> None:
+    """超预算时最早上传的保全量，最新的先被截断；预算耗尽则后续跳过。"""
+    from server import uploads
+
+    texts = {"1": "甲" * 400, "2": "乙" * 400}
+    monkeypatch.setattr(uploads, "read_parsed_text", lambda record: texts[record["id"]])
+    records = [
+        {
+            "id": file_id,
+            "file_name": name,
+            "parse_status": "ready",
+            "token_count": uploads.count_tokens(texts[file_id]),
+        }
+        for file_id, name in (("1", "first.txt"), ("2", "second.txt"))
+    ]
+
+    budget = records[0]["token_count"] + 10
+    block, usage = uploads.build_attachment_block(records, budget)
+    assert [u["status"] for u in usage] == ["full", "truncated"]
+    assert usage[1]["included_tokens"] == 10
+    assert "已截断，仅展示前 10 tokens" in block
+    assert "first.txt" in block and "second.txt" in block
+
+    block, usage = uploads.build_attachment_block(records, 5)
+    assert [u["status"] for u in usage] == ["truncated", "skipped"]
+    assert "上下文预算不足，未注入内容" in block
+
+    # 解析中/失败的附件不参与注入
+    parsing = [{"id": "3", "file_name": "p.txt", "parse_status": "parsing", "token_count": 0}]
+    block, usage = uploads.build_attachment_block(parsing, 100)
+    assert block == "" and usage == []
+
+
+def test_runtime_config_reads_max_input_tokens(monkeypatch) -> None:
+    from server import runtime_config
+
+    monkeypatch.setattr(
+        runtime_config,
+        "load_config",
+        lambda: {"model": {"default": "m", "max_input_tokens": 64_000}},
+    )
+    assert runtime_config.load_runtime_config().max_input_tokens == 64_000
+
+    monkeypatch.setattr(runtime_config, "load_config", lambda: {"model": "m"})
+    assert runtime_config.load_runtime_config().max_input_tokens == 128_000

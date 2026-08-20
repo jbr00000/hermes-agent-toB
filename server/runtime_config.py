@@ -11,6 +11,9 @@ from hermes_cli.config import load_config
 DEFAULT_PROVIDER = "deepseek"
 DEFAULT_MODEL = "deepseek-v4-pro"
 DEFAULT_REASONING_CONFIG = {"enabled": False}
+# 模型上下文上限（附件注入的 token 预算基准）；config.yaml 的 model 段可用
+# max_input_tokens 覆盖。默认 128K，对齐 deepseek/zai/alibaba 的主力模型。
+DEFAULT_MAX_INPUT_TOKENS = 128_000
 _SUPPORTED_PROVIDERS = frozenset({"deepseek", "zai", "alibaba", "custom"})
 
 
@@ -19,6 +22,7 @@ class RuntimeConfig:
     provider: str
     model: str
     reasoning_config: dict[str, Any] | None
+    max_input_tokens: int = DEFAULT_MAX_INPUT_TOKENS
 
 
 def _infer_provider(model: str) -> str:
@@ -41,15 +45,22 @@ def _normalize_provider(provider: object, model: str) -> str:
     return candidate
 
 
-def _resolve_model_config(config: dict[str, Any]) -> tuple[str, object]:
+def _resolve_model_config(config: dict[str, Any]) -> tuple[str, object, int]:
     raw = config.get("model")
     if isinstance(raw, str):
         model = raw.strip()
-        return (model or DEFAULT_MODEL), None
+        return (model or DEFAULT_MODEL), None, DEFAULT_MAX_INPUT_TOKENS
     if isinstance(raw, dict):
         model = str(raw.get("default") or raw.get("model") or "").strip()
-        return (model or DEFAULT_MODEL), raw.get("provider")
-    return DEFAULT_MODEL, None
+        max_input = raw.get("max_input_tokens")
+        try:
+            max_input_tokens = int(max_input) if max_input is not None else DEFAULT_MAX_INPUT_TOKENS
+        except (TypeError, ValueError):
+            max_input_tokens = DEFAULT_MAX_INPUT_TOKENS
+        if max_input_tokens <= 0:
+            max_input_tokens = DEFAULT_MAX_INPUT_TOKENS
+        return (model or DEFAULT_MODEL), raw.get("provider"), max_input_tokens
+    return DEFAULT_MODEL, None, DEFAULT_MAX_INPUT_TOKENS
 
 
 def _resolve_reasoning_config(config: dict[str, Any]) -> dict[str, Any] | None:
@@ -65,10 +76,11 @@ def _resolve_reasoning_config(config: dict[str, Any]) -> dict[str, Any] | None:
 
 def load_runtime_config() -> RuntimeConfig:
     config = load_config()
-    model, explicit_provider = _resolve_model_config(config)
+    model, explicit_provider, max_input_tokens = _resolve_model_config(config)
     provider = _normalize_provider(explicit_provider, model)
     return RuntimeConfig(
         provider=provider,
         model=model,
         reasoning_config=_resolve_reasoning_config(config),
+        max_input_tokens=max_input_tokens,
     )
