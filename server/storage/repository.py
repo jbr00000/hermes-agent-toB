@@ -32,6 +32,7 @@ from .models import (
     TaskRun,
     ToolApproval,
     ToolEvent,
+    UploadedFile,
     User,
 )
 from .models import DEFAULT_KB_NAME
@@ -212,6 +213,26 @@ def _parse_message_metadata(raw: str | None) -> dict[str, Any] | None:
     except (TypeError, json.JSONDecodeError):
         return None
     return parsed if isinstance(parsed, dict) else None
+
+
+def _uploaded_file_dict(row: UploadedFile) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "user_id": row.user_id,
+        "owner_type": row.owner_type,
+        "owner_id": row.owner_id,
+        "file_name": row.file_name,
+        "file_ext": row.file_ext,
+        "size_bytes": row.size_bytes,
+        "file_path": row.file_path,
+        "parsed_path": row.parsed_path,
+        "parse_status": row.parse_status,
+        "parse_error": row.parse_error,
+        "parser": row.parser,
+        "token_count": row.token_count,
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+    }
 
 
 def _knowledge_chunk_dict(row: KnowledgeChunk) -> dict[str, Any]:
@@ -1697,6 +1718,13 @@ class StorageRepository:
                     TaskRun.tenant_id == tenant_id(), TaskRun.task_id == task_id
                 )
             )
+            session.execute(
+                delete(UploadedFile).where(
+                    UploadedFile.tenant_id == tenant_id(),
+                    UploadedFile.owner_type == "task",
+                    UploadedFile.owner_id == task_id,
+                )
+            )
             session.execute(delete(Message).where(Message.conversation_id == task.conversation_id))
             session.execute(
                 delete(ModelRun).where(
@@ -2005,6 +2033,13 @@ class StorageRepository:
                 )
             )
             session.execute(delete(Message).where(Message.conversation_id == conversation_id))
+            session.execute(
+                delete(UploadedFile).where(
+                    UploadedFile.tenant_id == tenant_id(),
+                    UploadedFile.owner_type == "session",
+                    UploadedFile.owner_id == conversation_id,
+                )
+            )
             session.execute(
                 delete(ModelRun).where(
                     ModelRun.tenant_id == tenant_id(),
@@ -2542,6 +2577,128 @@ class StorageRepository:
                 base.updated_at = time.time()
             session.delete(doc)
             return True
+
+    # ------------------------------------------------------ 临时上传文件（chat/agent 附件）
+
+    def create_uploaded_file(
+        self,
+        user_id: str,
+        *,
+        file_id: str | None = None,
+        owner_type: str,
+        owner_id: str,
+        file_name: str,
+        file_ext: str,
+        size_bytes: int,
+        file_path: str,
+    ) -> dict[str, Any]:
+        """落一条 parsing 状态的上传记录；解析由调用方异步驱动。
+
+        ``file_id`` 由服务层预生成（磁盘目录名要用它），缺省则此处生成。"""
+        now = time.time()
+        row = UploadedFile(
+            id=file_id or str(uuid.uuid4()),
+            tenant_id=tenant_id(),
+            user_id=user_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            file_name=file_name,
+            file_ext=file_ext,
+            size_bytes=size_bytes,
+            file_path=file_path,
+            parsed_path=None,
+            parse_status="parsing",
+            parse_error=None,
+            parser=None,
+            token_count=0,
+            created_at=now,
+            updated_at=now,
+        )
+        with session_scope() as session:
+            session.add(row)
+        return _uploaded_file_dict(row)
+
+    def get_uploaded_file(self, file_id: str) -> dict[str, Any] | None:
+        with session_scope() as session:
+            row = session.scalar(
+                select(UploadedFile).where(
+                    UploadedFile.tenant_id == tenant_id(),
+                    UploadedFile.id == file_id,
+                )
+            )
+            return _uploaded_file_dict(row) if row is not None else None
+
+    def list_uploaded_files(
+        self, user_id: str, owner_type: str, owner_id: str
+    ) -> list[dict[str, Any]]:
+        with session_scope() as session:
+            rows = session.scalars(
+                select(UploadedFile)
+                .where(
+                    UploadedFile.tenant_id == tenant_id(),
+                    UploadedFile.user_id == user_id,
+                    UploadedFile.owner_type == owner_type,
+                    UploadedFile.owner_id == owner_id,
+                )
+                .order_by(UploadedFile.created_at.asc(), UploadedFile.id.asc())
+            ).all()
+            return [_uploaded_file_dict(row) for row in rows]
+
+    def count_uploaded_files(self, owner_type: str, owner_id: str) -> int:
+        with session_scope() as session:
+            return int(
+                session.scalar(
+                    select(func.count(UploadedFile.id)).where(
+                        UploadedFile.tenant_id == tenant_id(),
+                        UploadedFile.owner_type == owner_type,
+                        UploadedFile.owner_id == owner_id,
+                    )
+                )
+                or 0
+            )
+
+    def update_uploaded_file_parse(
+        self,
+        file_id: str,
+        *,
+        status: str,
+        error: str | None = None,
+        parser: str | None = None,
+        token_count: int = 0,
+        parsed_path: str | None = None,
+    ) -> dict[str, Any] | None:
+        with session_scope() as session:
+            row = session.scalar(
+                select(UploadedFile).where(
+                    UploadedFile.tenant_id == tenant_id(),
+                    UploadedFile.id == file_id,
+                )
+            )
+            if row is None:
+                return None
+            row.parse_status = status
+            row.parse_error = error
+            row.parser = parser
+            row.token_count = token_count
+            row.parsed_path = parsed_path
+            row.updated_at = time.time()
+            return _uploaded_file_dict(row)
+
+    def delete_uploaded_file(self, user_id: str, file_id: str) -> dict[str, Any] | None:
+        """删除一条上传记录（DB 侧）；磁盘文件清理由调用方负责。"""
+        with session_scope() as session:
+            row = session.scalar(
+                select(UploadedFile).where(
+                    UploadedFile.tenant_id == tenant_id(),
+                    UploadedFile.user_id == user_id,
+                    UploadedFile.id == file_id,
+                )
+            )
+            if row is None:
+                return None
+            snapshot = _uploaded_file_dict(row)
+            session.delete(row)
+            return snapshot
 
     def replace_knowledge_chunks(
         self, doc_id: str, doc_name: str, chunks: list[dict[str, Any]]

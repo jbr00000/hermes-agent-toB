@@ -437,3 +437,40 @@ class KnowledgeJob(Base):
     started_at: Mapped[float | None] = mapped_column(Double)
     finished_at: Mapped[float | None] = mapped_column(Double)
     created_at: Mapped[float] = mapped_column(Double, nullable=False)
+
+
+class UploadedFile(Base):
+    """临时上传文件（chat/agent 附件问答）：原件落盘 + 解析全文，随 owner 删除。
+
+    与知识库文档的区别：知识库是租户级长期资产（分块 + ES/Milvus 索引），
+    上传文件是单次会话/任务的临时上下文——只解析不分块，全文注入模型。
+
+    owner_type = "session"（chat 会话）| "task"（agent 任务）；
+    owner_id   = conversation_id / task_id。
+    parse_status: parsing → ready | failed（失败后由用户删除重传）。
+    """
+
+    __tablename__ = "uploaded_files"
+    __table_args__ = (
+        Index("idx_uploaded_files_owner", "tenant_id", "owner_type", "owner_id"),
+        Index("idx_uploaded_files_user", "tenant_id", "user_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    owner_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    file_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    file_ext: Mapped[str] = mapped_column(String(16), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    # 相对 $HERMES_HOME 的路径（与 knowledge_documents.file_path 同约定）
+    file_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    # 解析产物（markdown 全文）相对路径；parsing/failed 时为 NULL
+    parsed_path: Mapped[str | None] = mapped_column(String(500))
+    parse_status: Mapped[str] = mapped_column(String(16), nullable=False, default="parsing")
+    parse_error: Mapped[str | None] = mapped_column(Text)
+    parser: Mapped[str | None] = mapped_column(String(32))
+    token_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[float] = mapped_column(Double, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Double, nullable=False)

@@ -1,0 +1,235 @@
+"""POST/GET/DELETE /uploads —— chat/agent 临时附件的存储与解析 API。"""
+from __future__ import annotations
+
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+
+def _client(monkeypatch, tmp_path) -> TestClient:
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("HERMES_ADMIN_PASSWORD", "correct-horse-battery-staple")
+    monkeypatch.delenv("HERMES_DATABASE_URL", raising=False)
+    monkeypatch.delenv("HERMES_REDIS_URL", raising=False)
+    monkeypatch.setenv("HERMES_ALLOW_EMBEDDED_AGENT_WORKER", "1")
+
+    from server import auth
+    from server.storage import reset_storage_for_tests
+
+    auth._JWT_SECRET = None
+    reset_storage_for_tests()
+
+    from server import uploads
+
+    # 测试里同步解析：上传响应返回时状态已就绪/失败，无需轮询
+    monkeypatch.setattr(uploads, "_dispatch_parse", uploads.parse_upload)
+
+    from server.app import create_app
+
+    return TestClient(create_app())
+
+
+def _login(client: TestClient, username: str, password: str) -> dict[str, str]:
+    response = client.post("/auth/login", json={"username": username, "password": password})
+    assert response.status_code == 200
+    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
+def _home(client: TestClient) -> Path:
+    from hermes_constants import get_hermes_home
+
+    return Path(get_hermes_home())
+
+
+def _make_chat_session(client: TestClient, headers: dict[str, str]) -> str:
+    created = client.post("/sessions", headers=headers, json={"interaction_type": "chat"})
+    assert created.status_code == 201
+    return created.json()["session"]["id"]
+
+
+def _upload(
+    client: TestClient,
+    headers: dict[str, str],
+    owner_type: str,
+    owner_id: str,
+    files: list[tuple[str, bytes]],
+):
+    return client.post(
+        "/uploads",
+        headers=headers,
+        data={"owner_type": owner_type, "owner_id": owner_id},
+        files=[("files", (name, content, "application/octet-stream")) for name, content in files],
+    )
+
+
+def test_upload_txt_parses_to_ready_with_token_count(monkeypatch, tmp_path) -> None:
+    client = _client(monkeypatch, tmp_path)
+    headers = _login(client, "admin", "correct-horse-battery-staple")
+    session_id = _make_chat_session(client, headers)
+
+    response = _upload(client, headers, "session", session_id, [("案情摘要.txt", "第一段。\n\n第二段。".encode("utf-8"))])
+    assert response.status_code == 201
+    record = response.json()["files"][0]
+    assert record["parse_status"] == "ready"
+    assert record["parser"] == "local"
+    assert record["token_count"] > 0
+    assert record["owner_type"] == "session"
+    assert record["owner_id"] == session_id
+
+    # 原件与解析产物都落在 $HERMES_HOME/uploads/ 下
+    home = _home(client)
+    assert (home / record["file_path"]).read_bytes() == "第一段。\n\n第二段。".encode("utf-8")
+    assert "第一段" in (home / record["parsed_path"]).read_text(encoding="utf-8")
+
+    listed = client.get(
+        "/uploads", headers=headers, params={"owner_type": "session", "owner_id": session_id}
+    )
+    assert listed.status_code == 200
+    assert [f["id"] for f in listed.json()["files"]] == [record["id"]]
+
+
+def test_upload_rejects_bad_ext_empty_and_oversize(monkeypatch, tmp_path) -> None:
+    client = _client(monkeypatch, tmp_path)
+    headers = _login(client, "admin", "correct-horse-battery-staple")
+    session_id = _make_chat_session(client, headers)
+
+    bad_ext = _upload(client, headers, "session", session_id, [("evil.exe", b"MZ")])
+    assert bad_ext.status_code == 400
+
+    empty = _upload(client, headers, "session", session_id, [("empty.txt", b"")])
+    assert empty.status_code == 400
+
+    from server import uploads
+
+    monkeypatch.setattr(uploads, "MAX_FILE_BYTES", 8)
+    oversize = _upload(client, headers, "session", session_id, [("big.txt", b"x" * 16)])
+    assert oversize.status_code == 413
+
+    listed = client.get(
+        "/uploads", headers=headers, params={"owner_type": "session", "owner_id": session_id}
+    ).json()["files"]
+    assert listed == []
+
+
+def test_five_file_limit_per_owner(monkeypatch, tmp_path) -> None:
+    client = _client(monkeypatch, tmp_path)
+    headers = _login(client, "admin", "correct-horse-battery-staple")
+    session_id = _make_chat_session(client, headers)
+
+    batch = _upload(
+        client,
+        headers,
+        "session",
+        session_id,
+        [(f"f{i}.txt", f"content {i}".encode()) for i in range(4)],
+    )
+    assert batch.status_code == 201
+    fifth = _upload(client, headers, "session", session_id, [("f4.txt", b"content 4")])
+    assert fifth.status_code == 201
+    sixth = _upload(client, headers, "session", session_id, [("f5.txt", b"content 5")])
+    assert sixth.status_code == 400
+    assert "最多上传 5 个文件" in sixth.json()["detail"]
+
+
+def test_uploads_are_user_scoped(monkeypatch, tmp_path) -> None:
+    client = _client(monkeypatch, tmp_path)
+    admin_headers = _login(client, "admin", "correct-horse-battery-staple")
+    session_id = _make_chat_session(client, admin_headers)
+    record = _upload(client, admin_headers, "session", session_id, [("a.txt", b"secret")]).json()[
+        "files"
+    ][0]
+
+    client.post(
+        "/users",
+        headers=admin_headers,
+        json={"username": "other", "password": "password-123", "role": "user"},
+    )
+    other_headers = _login(client, "other", "password-123")
+    changed = client.post(
+        "/auth/change-password",
+        headers=other_headers,
+        json={"old_password": "password-123", "new_password": "password-456"},
+    )
+    other_headers = {"Authorization": f"Bearer {changed.json()['access_token']}"}
+
+    # 别人的 owner：上传 404、列表按 user 过滤为空、删除 404
+    assert _upload(client, other_headers, "session", session_id, [("b.txt", b"x")]).status_code == 404
+    listed = client.get(
+        "/uploads", headers=other_headers, params={"owner_type": "session", "owner_id": session_id}
+    ).json()["files"]
+    assert listed == []
+    assert client.delete(f"/uploads/{record['id']}", headers=other_headers).status_code == 404
+
+
+def test_delete_upload_removes_disk_files(monkeypatch, tmp_path) -> None:
+    client = _client(monkeypatch, tmp_path)
+    headers = _login(client, "admin", "correct-horse-battery-staple")
+    session_id = _make_chat_session(client, headers)
+    record = _upload(client, headers, "session", session_id, [("a.txt", b"hello")]).json()["files"][
+        0
+    ]
+    home = _home(client)
+    assert (home / record["file_path"]).exists()
+
+    deleted = client.delete(f"/uploads/{record['id']}", headers=headers)
+    assert deleted.status_code == 200
+    assert not (home / record["file_path"]).exists()
+    assert not (home / record["parsed_path"]).exists()
+    assert client.get(
+        "/uploads", headers=headers, params={"owner_type": "session", "owner_id": session_id}
+    ).json()["files"] == []
+    assert client.delete(f"/uploads/{record['id']}", headers=headers).status_code == 404
+
+
+def test_session_delete_cascades_uploads(monkeypatch, tmp_path) -> None:
+    client = _client(monkeypatch, tmp_path)
+    headers = _login(client, "admin", "correct-horse-battery-staple")
+    session_id = _make_chat_session(client, headers)
+    record = _upload(client, headers, "session", session_id, [("a.txt", b"hello")]).json()["files"][
+        0
+    ]
+    home = _home(client)
+    assert (home / record["file_path"]).exists()
+
+    deleted = client.delete(f"/sessions/{session_id}", headers=headers)
+    assert deleted.status_code == 200
+    assert not (home / record["file_path"]).exists()
+
+
+def test_task_owner_uploads_and_agent_session_rejected(monkeypatch, tmp_path) -> None:
+    client = _client(monkeypatch, tmp_path)
+    headers = _login(client, "admin", "correct-horse-battery-staple")
+
+    task = client.post("/tasks", headers=headers, json={}).json()["task"]
+    ok = _upload(client, headers, "task", task["id"], [("需求.xlsx", b"")])
+    # xlsx 空文件 openpyxl 会解析失败，但上传本身应受理（异步解析）
+    assert ok.status_code == 400  # 空文件在读取层被拦下
+    ok = _upload(client, headers, "task", task["id"], [("需求说明.txt", "需求正文".encode())])
+    assert ok.status_code == 201
+    assert ok.json()["files"][0]["parse_status"] == "ready"
+
+    # agent 会话不能直接作为 session owner——附件要挂到 task 上
+    rejected = _upload(client, headers, "session", task["session_id"], [("a.txt", b"x")])
+    assert rejected.status_code == 400
+
+    # 任务删除后磁盘目录清空
+    record = ok.json()["files"][0]
+    home = _home(client)
+    assert (home / record["file_path"]).exists()
+    assert client.delete(f"/tasks/{task['id']}", headers=headers).status_code == 200
+    assert not (home / record["file_path"]).exists()
+
+
+def test_pdf_without_mineru_fails_with_clear_error(monkeypatch, tmp_path) -> None:
+    """未配置 MinerU 的部署：PDF 上传受理但解析 failed，错误信息可展示。"""
+    client = _client(monkeypatch, tmp_path)
+    headers = _login(client, "admin", "correct-horse-battery-staple")
+    session_id = _make_chat_session(client, headers)
+
+    response = _upload(client, headers, "session", session_id, [("合同.pdf", b"%PDF-1.4 fake")])
+    assert response.status_code == 201
+    record = response.json()["files"][0]
+    assert record["parse_status"] == "failed"
+    assert "mineru" in (record["parse_error"] or "").lower()

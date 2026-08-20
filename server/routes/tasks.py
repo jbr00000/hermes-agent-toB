@@ -185,11 +185,19 @@ def download_task_artifact(
 
 @router.delete("/{task_id}")
 def delete_task(task_id: str, user: dict = Depends(get_current_user)):
-    result = get_repository().delete_owned_task(user["id"], task_id)
+    repository = get_repository()
+    task = repository.get_owned_task(user["id"], task_id)
+    result = repository.delete_owned_task(user["id"], task_id)
     if result == "missing":
         raise HTTPException(status_code=404, detail="task not found")
     if result == "running":
         raise HTTPException(status_code=409, detail="running task cannot be deleted")
+    from server import uploads as uploads_module
+
+    uploads_module.remove_owner_files(user["id"], "task", task_id)
+    if task is not None:
+        # 任务删除会连带删掉其 conversation（delete_owned_task），附件目录一并清
+        uploads_module.remove_owner_files(user["id"], "session", task["session_id"])
     from server.sandbox import destroy_task_sandbox
 
     destroy_task_sandbox(user["id"], task_id)
