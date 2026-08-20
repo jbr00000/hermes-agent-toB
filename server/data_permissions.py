@@ -37,6 +37,11 @@ def _config():
     return load_deployment_config().data_permissions
 
 
+def is_enabled() -> bool:
+    """数据权限开关是否打开（tools/db_query 在基础设施异常时据此 fail-closed）。"""
+    return bool(_config().enabled)
+
+
 def allowed_tables_for_role(role: str) -> list[str] | None:
     """返回该角色的表白名单；None 表示不限制（功能关闭或角色未列出）。"""
     config = _config()

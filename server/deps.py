@@ -1,15 +1,21 @@
 """FastAPI auth dependencies."""
 from __future__ import annotations
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from server import auth
 
 _bearer = HTTPBearer()
 
+# 强制改密用户在改密完成前只允许访问这些端点（其余一律 403）。
+_MUST_CHANGE_PASSWORD_ALLOWED_PATHS = frozenset(
+    {"/auth/change-password", "/auth/me", "/auth/session", "/auth/logout"}
+)
+
 
 async def get_current_user(
+    request: Request,
     creds: HTTPAuthorizationCredentials = Depends(_bearer),
 ) -> dict:
     """Resolve the JWT in the Authorization: Bearer header to a user dict.
@@ -18,6 +24,10 @@ async def get_current_user(
     The user row is re-read from storage on every request, so role/status/
     feature changes take effect immediately (JWT claims are only an identity
     pointer, not a permission snapshot).
+
+    A user flagged must_change_password is additionally confined to the
+    password-change whitelist: every other endpoint returns 403
+    (detail="must_change_password") until the flag is cleared.
     """
     payload = auth.decode_token(creds.credentials)
     if payload is None:
@@ -27,6 +37,11 @@ async def get_current_user(
         raise HTTPException(status_code=401, detail="user not found")
     if user.get("status") != "active":
         raise HTTPException(status_code=401, detail="account disabled")
+    if (
+        user.get("must_change_password")
+        and request.url.path not in _MUST_CHANGE_PASSWORD_ALLOWED_PATHS
+    ):
+        raise HTTPException(status_code=403, detail="must_change_password")
     return user
 
 

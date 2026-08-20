@@ -79,7 +79,6 @@ def init_db() -> None:
     init_storage()
     repository = get_repository()
     if repository.count_users() > 0:
-        _promote_oldest_admin_if_no_superadmin()
         return
     username = os.environ.get("HERMES_ADMIN_USERNAME", "admin")
     password = os.environ.get("HERMES_ADMIN_PASSWORD") or "changeme"
@@ -99,23 +98,6 @@ def init_db() -> None:
         print(f"[auth] WARNING: bootstrapped superadmin '{username}' with default password 'changeme'.")
     else:
         print(f"[auth] bootstrapped superadmin user '{username}'.")
-
-
-def _promote_oldest_admin_if_no_superadmin() -> None:
-    """Upgrade path: deployments bootstrapped before the superadmin role existed
-    have only admin/user rows. Promote the oldest active admin so the user-admin
-    surface stays reachable; operators can later create their own superadmin and
-    demote this account."""
-    repository = get_repository()
-    if repository.count_active_superadmins() > 0:
-        return
-    oldest = repository.get_oldest_active_admin()
-    if oldest is None:
-        print("[auth] WARNING: no active superadmin and no admin to promote; "
-              "user management is unreachable until an operator promotes a user manually.")
-        return
-    repository.set_user_role(oldest["id"], "superadmin")
-    print(f"[auth] WARNING: promoted oldest admin '{oldest['username']}' to superadmin (upgrade path).")
 
 
 def create_user(

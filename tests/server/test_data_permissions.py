@@ -232,3 +232,48 @@ def test_handle_without_user_id_skips_check(monkeypatch, tmp_path, dp_env) -> No
     # CLI/admin 路径没有 user_id → 不做数据权限检查。
     result = json.loads(_handle({"sql": "SELECT amount FROM salaries"}))
     assert result["row_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# fail-open/fail-closed：基础设施异常时按开关决定
+# ---------------------------------------------------------------------------
+
+
+def _break_storage(monkeypatch) -> None:
+    import server.storage
+
+    def _boom():
+        raise RuntimeError("storage down")
+
+    monkeypatch.setattr(server.storage, "get_repository", _boom)
+
+
+def test_storage_error_with_feature_enabled_fails_closed(
+    monkeypatch, tmp_path, dp_env, caplog
+) -> None:
+    dp_env("    user:\n      - orders\n")
+    _init_storage(monkeypatch, tmp_path)
+    _business_db(monkeypatch, tmp_path)
+    _break_storage(monkeypatch)
+
+    from tools.db_query import _check_data_permissions
+
+    result = _check_data_permissions("SELECT * FROM orders", {"user_id": "u1"})
+    assert result is not None
+    assert "error" in json.loads(result)
+    assert "data_permissions check failed" in caplog.text
+
+
+def test_storage_error_with_feature_disabled_allows_and_logs(
+    monkeypatch, tmp_path, dp_env, caplog
+) -> None:
+    dp_env(None)  # enabled: false
+    _init_storage(monkeypatch, tmp_path)
+    _business_db(monkeypatch, tmp_path)
+    _break_storage(monkeypatch)
+
+    from tools.db_query import _check_data_permissions
+
+    with caplog.at_level("ERROR", logger="tools.db_query"):
+        assert _check_data_permissions("SELECT * FROM orders", {"user_id": "u1"}) is None
+    assert "data_permissions check failed" in caplog.text

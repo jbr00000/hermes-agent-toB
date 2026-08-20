@@ -5,6 +5,7 @@ small table-driven shim; MySQL deployments use Alembic instead.
 """
 from __future__ import annotations
 
+import json
 import time
 
 from sqlalchemy import create_engine, text
@@ -65,7 +66,12 @@ def test_sqlite_shim_adds_and_backfills_features(monkeypatch, tmp_path) -> None:
             text("SELECT features FROM users WHERE id = 'u1'")
         ).scalar()
     assert stored is not None
-    assert '"chat": true' in stored or '"chat":true' in stored
+    assert json.loads(stored) == {
+        "agent": True,
+        "chat": True,
+        "knowledge": True,
+        "memory": True,
+    }
 
     # Reading through the repository normalizes to the all-enabled default.
     from server.storage import get_repository, reset_storage_for_tests as reset_again
@@ -123,6 +129,77 @@ def test_sqlite_shim_is_idempotent(monkeypatch, tmp_path) -> None:
     with engine.connect() as conn:
         count = conn.execute(text("SELECT COUNT(*) FROM users")).scalar()
     assert count == 1
+    engine.dispose()
+
+
+def test_sqlite_shim_promotes_oldest_admin_to_superadmin(monkeypatch, tmp_path) -> None:
+    """升级路径：无 active superadmin 时把最老的 active admin 提为 superadmin，
+    幂等（对应 MySQL 侧 3b7e1f9a42c6 的 data migration）。"""
+    url = _build_legacy_db(tmp_path)  # u1 = 最老的 active admin
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO users (id, tenant_id, username, password_hash, role,"
+                " status, created_at, updated_at)"
+                " VALUES ('u2', 'default', 'newer-admin', 'hash', 'admin', 'active', :t, :t)"
+            ),
+            {"t": time.time() + 60},
+        )
+    engine.dispose()
+    monkeypatch.setenv("HERMES_DATABASE_URL", url)
+
+    from server.storage import reset_storage_for_tests
+
+    reset_storage_for_tests()
+
+    from server.storage.database import init_database
+
+    init_database()
+
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        roles = dict(
+            conn.execute(text("SELECT id, role FROM users")).fetchall()
+        )
+    assert roles["u1"] == "superadmin"
+    assert roles["u2"] == "admin"  # 只提升最老的一个
+    engine.dispose()
+
+    # 幂等：二次 init 不再提升 u2
+    reset_storage_for_tests()
+    init_database()
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        assert conn.execute(
+            text("SELECT COUNT(*) FROM users WHERE role = 'superadmin'")
+        ).scalar() == 1
+    engine.dispose()
+
+
+def test_sqlite_shim_leaves_existing_superadmin_untouched(monkeypatch, tmp_path) -> None:
+    """已有 superadmin 的库不做任何提升。"""
+    url = _build_legacy_db(tmp_path)
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(
+            text("UPDATE users SET role = 'superadmin' WHERE id = 'u1'")
+        )
+    engine.dispose()
+    monkeypatch.setenv("HERMES_DATABASE_URL", url)
+
+    from server.storage import reset_storage_for_tests
+
+    reset_storage_for_tests()
+
+    from server.storage.database import init_database
+
+    init_database()
+
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        roles = dict(conn.execute(text("SELECT id, role FROM users")).fetchall())
+    assert roles == {"u1": "superadmin"}
     engine.dispose()
 
 

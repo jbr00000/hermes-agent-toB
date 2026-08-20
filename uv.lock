@@ -999,6 +999,7 @@ dependencies = [
     { name = "jinja2" },
     { name = "markdown" },
     { name = "mineru-vl-utils" },
+    { name = "numpy" },
     { name = "openai" },
     { name = "openpyxl" },
     { name = "packaging" },
@@ -1021,6 +1022,7 @@ dependencies = [
     { name = "rich" },
     { name = "ruamel-yaml" },
     { name = "sqlalchemy" },
+    { name = "sqlglot" },
     { name = "sse-starlette" },
     { name = "tenacity" },
     { name = "tiktoken" },
@@ -1094,7 +1096,6 @@ tts-premium = [
 ]
 voice = [
     { name = "faster-whisper" },
-    { name = "numpy" },
     { name = "sounddevice" },
 ]
 web = [
@@ -1144,7 +1145,7 @@ requires-dist = [
     { name = "mineru-vl-utils", specifier = "==1.2.1" },
     { name = "mistralai", marker = "extra == 'mistral'", specifier = "==2.4.8" },
     { name = "nemo-relay", marker = "extra == 'nemo-relay'", specifier = "==0.3" },
-    { name = "numpy", marker = "extra == 'voice'", specifier = "==2.4.3" },
+    { name = "numpy", specifier = "==2.4.3" },
     { name = "openai", specifier = "==2.24.0" },
     { name = "openpyxl", specifier = "==3.1.5" },
     { name = "packaging", specifier = "==26.0" },
@@ -1175,6 +1176,7 @@ requires-dist = [
     { name = "simple-term-menu", marker = "extra == 'cli'", specifier = "==1.6.6" },
     { name = "sounddevice", marker = "extra == 'voice'", specifier = "==0.5.5" },
     { name = "sqlalchemy", specifier = "==2.0.51" },
+    { name = "sqlglot", specifier = "==30.15.0" },
     { name = "sse-starlette", specifier = "==3.4.5" },
     { name = "starlette", marker = "extra == 'dev'", specifier = "==1.0.1" },
     { name = "starlette", marker = "extra == 'mcp'", specifier = "==1.0.1" },
@@ -3009,6 +3011,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/94/df/de669c7054cd47c4439ac34b1b2ee8b804a794791fbb10720e997a2c87c7/sqlalchemy-2.0.51-cp313-cp313-win32.whl", hash = "sha256:b93ab07b5292dbe7e6b8da89475275e7042744283921344b56105f3eeb0f828b", size = 2117721, upload-time = "2026-06-15T16:23:12.36Z" },
     { url = "https://files.pythonhosted.org/packages/d0/8a/403c51d064196bae20a0bc2476577f83a3f8dd299719a97417086b7f2ec5/sqlalchemy-2.0.51-cp313-cp313-win_amd64.whl", hash = "sha256:0f053118c30e53161857a953e4de667d90e274980dccbe5dd3829bbbeece72a5", size = 2143615, upload-time = "2026-06-15T16:23:13.906Z" },
     { url = "https://files.pythonhosted.org/packages/e2/22/dbf013a12ec759e54a34a119e9e217435b3f71b2dd5c61a7ade0a25dae87/sqlalchemy-2.0.51-py3-none-any.whl", hash = "sha256:bb024d8b621d0be75f4f44ecc7c950450026e76d66dc8f791bb5331d7fed59d5", size = 1944334, upload-time = "2026-06-15T16:09:22.418Z" },
+]
+
+[[package]]
+name = "sqlglot"
+version = "30.15.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/58/fb/c43bfdc662bd6fcdf93158f9239b975ac01b775cfcb56015913fee9b95e2/sqlglot-30.15.0.tar.gz", hash = "sha256:fe5412f4da61075f532d3de2482144bf7139028980a37bbd79fb016c49dc2dbe", size = 5973319, upload-time = "2026-08-04T17:37:12.831Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/32/28/f1e99aca0c23e2406dc8727555476647d58c2d6315d7d8101dffbb2cbc0f/sqlglot-30.15.0-py3-none-any.whl", hash = "sha256:594da0bc9d020edfb9982fd56b61dc93483cb24edca5ed1b3bb17937ba9b59bc", size = 731813, upload-time = "2026-08-04T17:37:11.48Z" },
 ]
 
 [[package]]

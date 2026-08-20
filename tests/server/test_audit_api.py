@@ -73,6 +73,14 @@ def test_audit_events_require_admin_role(monkeypatch, tmp_path) -> None:
         json={"username": "regular", "password": "password-123", "role": "user"},
     )
     user_headers = _login(client, "regular", "password-123")
+    # 新建用户带强制改密标记；改密清掉，这里的 403 才是在验证角色门控。
+    changed = client.post(
+        "/auth/change-password",
+        headers=user_headers,
+        json={"old_password": "password-123", "new_password": "password-456"},
+    )
+    assert changed.status_code == 200, changed.text
+    user_headers = {"Authorization": f"Bearer {changed.json()['access_token']}"}
 
     assert client.get("/audit/events", headers=user_headers).status_code == 403
     assert client.get("/audit/events", headers=admin_headers).status_code == 200

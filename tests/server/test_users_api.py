@@ -137,6 +137,14 @@ def test_last_superadmin_guard_via_second_actor(monkeypatch, tmp_path) -> None:
     headers1 = _login(client, "admin", "correct-horse-battery-staple")
     boss2 = _create_user(client, headers1, "boss2", role="superadmin")
     headers2 = _login(client, "boss2", "password-123")
+    # 新建用户带强制改密标记；改密清掉，否则白名单外端点一律 403。
+    changed = client.post(
+        "/auth/change-password",
+        headers=headers2,
+        json={"old_password": "password-123", "new_password": "password-456"},
+    )
+    assert changed.status_code == 200, changed.text
+    headers2 = {"Authorization": f"Bearer {changed.json()['access_token']}"}
 
     me1 = client.get("/auth/me", headers=headers1).json()["user"]
     # boss2 deletes admin (the first superadmin): allowed, boss2 remains.

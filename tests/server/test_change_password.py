@@ -128,6 +128,33 @@ def test_change_password_success_clears_flag_and_revokes_old_refresh(
     assert user["must_change_password"] is False
 
 
+def test_flagged_user_is_confined_to_whitelist_until_password_change(
+    monkeypatch, tmp_path
+) -> None:
+    client = _client(monkeypatch, tmp_path)
+    _create_user(client)
+    headers, _ = _login(client, "worker", "initial-pass-1")
+
+    # 白名单外一律 403，且 detail 可供前端识别。
+    blocked = client.get("/sessions", headers=headers)
+    assert blocked.status_code == 403
+    assert blocked.json()["detail"] == "must_change_password"
+
+    # 白名单端点仍可用。
+    assert client.get("/auth/me", headers=headers).status_code == 200
+    assert client.get("/auth/session", headers=headers).status_code == 200
+
+    # 改密后恢复全量访问。
+    changed = client.post(
+        "/auth/change-password",
+        headers=headers,
+        json={"old_password": "initial-pass-1", "new_password": "new-password-1"},
+    )
+    assert changed.status_code == 200
+    new_headers = {"Authorization": f"Bearer {changed.json()['access_token']}"}
+    assert client.get("/sessions", headers=new_headers).status_code == 200
+
+
 def test_admin_reset_sets_flag_again(monkeypatch, tmp_path) -> None:
     client = _client(monkeypatch, tmp_path)
     created = _create_user(client)

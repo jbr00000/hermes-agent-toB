@@ -124,9 +124,13 @@ dependencies = [
   # Enterprise knowledge base (server/knowledge/): chunk token counting,
   # vector store client, and xlsx parsing. pymilvus stays on the 2.5 line to
   # match the Milvus v2.5.x standalone server in the compose knowledge profile.
+  # numpy powers semantic chunking (server/knowledge/semantic_chunker.py) and is
+  # imported at module load by chunker.py — it must be core, not a voice-only
+  # extra, or a base install breaks ALL knowledge chunking on import.
   "tiktoken==0.13.0",
   "pymilvus==2.5.18",
   "openpyxl==3.1.5",
+  "numpy==2.4.3",
   # mineru_mode=vlm: mineru-vl-utils drives a vLLM-served MinerU2.5 VLM over
   # its OpenAI-compatible API; pymupdf renders PDF pages to images locally.
   "mineru-vl-utils==1.2.1",
@@ -179,7 +183,6 @@ voice = [
   # so keep it out of the base install for source-build packagers like Homebrew.
   "faster-whisper==1.2.1",
   "sounddevice==0.5.5",
-  "numpy==2.4.3",
 ]
 pty = [
   # Kept as a no-op back-compat alias — `ptyprocess` and `pywinpty` are now

@@ -21,7 +21,6 @@ embedding 全部走客户自部署的 OpenAI 兼容端点（与入库共用 ``Em
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
 import json
 import logging
 import math
@@ -30,6 +29,8 @@ import re
 
 import numpy as np
 import tiktoken
+
+from server.deployment_config import SemanticChunkingConfig
 
 logger = logging.getLogger(__name__)
 
@@ -43,19 +44,6 @@ def _encoding():
     if _ENCODING is None:
         _ENCODING = tiktoken.get_encoding("cl100k_base")
     return _ENCODING
-
-
-@dataclass(frozen=True)
-class SemanticChunkConfig:
-    """语义分块可调参数（默认值对齐 chonkie SemanticChunker）。"""
-
-    threshold: float = 0.8  # 极小值分位数阈值，越小切得越保守（块越大）
-    similarity_window: int = 3  # 衡量"下一句"时回看几句
-    min_sentences_per_chunk: int = 1  # 两个切点的最小句距
-    min_characters_per_sentence: int = 24  # 短于此的句子并入前句
-    filter_window: int = 5  # Savitzky-Golay 窗口（奇数且 > filter_polyorder）
-    filter_polyorder: int = 3
-    filter_tolerance: float = 0.2  # 一阶导判零容差，越大切点越多
 
 
 # ---------------------------------------------------------------- 句子切分
@@ -143,23 +131,12 @@ def _savgol_coeffs(window: int, polyorder: int, deriv: int) -> np.ndarray:
     return factorial * (vandermonde @ ata_inv[deriv])
 
 
-def _apply_convolution(data: np.ndarray, kernel: np.ndarray) -> np.ndarray:
-    """卷积，边界做镜像反射（对齐 chonkie-core 的 apply_convolution）。"""
-    n = len(data)
+def _correlate(data: np.ndarray, kernel: np.ndarray) -> np.ndarray:
+    """与 kernel 的相关运算（核不翻转），边界镜像反射（对齐 chonkie-core 的 apply_convolution）。"""
     half = len(kernel) // 2
-    output = np.zeros(n, dtype=np.float64)
-    for i in range(n):
-        acc = 0.0
-        for j in range(len(kernel)):
-            idx = i - half + j
-            if idx < 0:
-                idx = -idx
-            elif idx >= n:
-                idx = 2 * n - idx - 2
-            idx = min(max(idx, 0), n - 1)
-            acc += data[idx] * kernel[j]
-        output[i] = acc
-    return output
+    padded = np.pad(data, half, mode="reflect")
+    # np.convolve 会翻转核，预先翻回即为相关
+    return np.convolve(padded, kernel[::-1], mode="valid")
 
 
 def _find_local_minima(
@@ -172,8 +149,8 @@ def _find_local_minima(
     """局部极小值：|一阶导| < tolerance 且二阶导 > 0（曲线触底回升处）。"""
     if len(similarities) < window:
         return [], []
-    first_deriv = _apply_convolution(similarities, _savgol_coeffs(window, polyorder, 1))
-    second_deriv = _apply_convolution(similarities, _savgol_coeffs(window, polyorder, 2))
+    first_deriv = _correlate(similarities, _savgol_coeffs(window, polyorder, 1))
+    second_deriv = _correlate(similarities, _savgol_coeffs(window, polyorder, 2))
     indices: list[int] = []
     values: list[float] = []
     for i in range(len(similarities)):
@@ -181,16 +158,6 @@ def _find_local_minima(
             indices.append(i)
             values.append(float(similarities[i]))
     return indices, values
-
-
-def _percentile(values: list[float], p: float) -> float:
-    """线性插值分位数（与 chonkie-core / numpy 'linear' 一致），p ∈ [0, 1]。"""
-    ordered = sorted(values)
-    idx = p * (len(ordered) - 1)
-    lower = int(math.floor(idx))
-    upper = min(lower + 1, len(ordered) - 1)
-    weight = idx - lower
-    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
 
 
 def _filter_split_indices(
@@ -202,7 +169,7 @@ def _filter_split_indices(
     """只保留 ≤ threshold 分位数的极小值，且相邻切点间距 ≥ min_distance。"""
     if not indices:
         return []
-    threshold_val = _percentile(values, threshold)
+    threshold_val = float(np.percentile(values, threshold * 100))
     kept: list[int] = []
     last: int | None = None
     for idx, val in zip(indices, values):
@@ -220,14 +187,14 @@ def semantic_split(
     text: str,
     embed_batch: Callable[[list[str]], list[list[float]]],
     chunk_size: int,
-    config: SemanticChunkConfig | None = None,
+    config: SemanticChunkingConfig | None = None,
 ) -> list[str]:
     """把一段文本按语义切成 ≤ ``chunk_size`` token 的若干块。
 
     ``embed_batch`` 与入库共用同一个 Embedder.embed——分块阶段的句级
     embedding 是语义模式的固有成本（chonkie 同样每窗一句各 embed 一次）。
     """
-    cfg = config or SemanticChunkConfig()
+    cfg = config or SemanticChunkingConfig()
     delimiters, include_delim = load_sentence_delimiters()
     sentences = split_sentences(
         text,

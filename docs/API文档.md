@@ -9,7 +9,7 @@
 |---|---|
 | 协议 | HTTP/1.1 |
 | 请求体 | `application/json`（除 `/chat` 的响应是 SSE） |
-| 鉴权 | 除 `/health`、`/auth/login`、`/auth/register` 外，所有端点都要 `Authorization: Bearer <JWT>` |
+| 鉴权 | 除 `/health`、`/auth/login`、`/auth/refresh`、`/auth/session`、`/auth/logout` 外，所有端点都要 `Authorization: Bearer <JWT>`（refresh/session/logout 走 `hermes_refresh_token` HttpOnly cookie） |
 | 时间戳 | Unix 秮（秒，float） |
 | 用户标识 | `user_id`（UUID 字符串）——会话/记忆/权限都按它隔离 |
 
@@ -22,10 +22,11 @@
 | 码 | 含义 |
 |---|---|
 | 200 | 成功 |
-| 401 | 未认证 / token 失效 / 用户名密码错 |
-| 403 | 无权限（非 admin、或越权访问他人资源） |
+| 401 | 未认证 / token 失效 / 用户名密码错 / 账号被禁用 |
+| 403 | 无权限（角色不足、功能开关关闭、或越权访问他人资源）；`detail == "must_change_password"` 表示账号被标记强制改密，改密前仅 `/auth/change-password`、`/auth/me`、`/auth/session`、`/auth/logout` 可达 |
 | 404 | 资源不存在（或不属于你——隔离场景下统一返回 404 防探测） |
 | 409 | 冲突（如用户名已存在） |
+| 429 | 登录失败次数过多，账号临时锁定 |
 
 ---
 
@@ -37,10 +38,20 @@
 3. token 过期 → 重新 login
 ```
 
-`user` 对象结构（登录/注册/`/auth/me` 都返回）：
+`user` 对象结构（登录/刷新/`/auth/me`/用户管理都返回）：
 ```json
-{ "id": "uuid", "username": "alice", "role": "user" | "admin" }
+{
+  "id": "uuid",
+  "username": "alice",
+  "role": "superadmin" | "admin" | "user",
+  "status": "active" | "disabled",
+  "features": { "agent": true, "chat": true, "knowledge": true, "memory": true },
+  "must_change_password": false,
+  "created_at": 1783...
+}
 ```
+- `features`：per-user 功能开关；某一项为 `false` 时对应端点对该用户（含 admin）返回 403。
+- `must_change_password: true`：新建/被重置密码的账号，须先走 `POST /auth/change-password`；期间其他端点一律 403（见上表）。前端拿到该 403 后重拉 `/auth/me` 即可切到强制改密页。
 
 ---
 
@@ -49,33 +60,43 @@
 ### 3.1 鉴权 Auth
 
 #### `POST /auth/login`
-登录拿 JWT。**无需鉴权。**
+登录拿 JWT。**无需鉴权。** 同时种 `hermes_refresh_token` HttpOnly cookie。
 ```json
 // 请求
-{ "username": "alice", "password": "pw" }
+{ "username": "alice", "password": "pw", "remember": false }
+// remember=true → refresh cookie 带 Max-Age（默认 30 天）；false → 会话 cookie，关浏览器即失效
 // 响应 200
 { "access_token": "eyJhbGciOi...", "token_type": "bearer",
-  "user": { "id": "...", "username": "alice", "role": "user" } }
+  "user": { "id": "...", "username": "alice", "role": "user", "status": "active",
+            "features": {...}, "must_change_password": false, "created_at": 1783... } }
 // 响应 401
 { "detail": "invalid username or password" }
+// 响应 429（连续失败触发锁定，默认 15 分钟）
+{ "detail": "账号已锁定，请 N 分钟后重试" }
 ```
 
-#### `POST /auth/register`（仅 admin）
-创建新用户。**需 admin token。**（首跑 bootstrap 的 admin 才能创建其他人）
+#### `POST /auth/refresh` / `GET /auth/session` / `POST /auth/logout`
+浏览器会话续期/恢复/登出，均走 refresh cookie（**无需 Bearer**）：
+- `POST /auth/refresh` → 200 返回新 `access_token` + `user`；401 表示 refresh 会话失效（需重新登录）。
+- `GET /auth/session` → 同上但匿名访问不算错误：`{ "authenticated": false }` 或 `{ "authenticated": true, "access_token": "...", "user": {...} }`。
+- `POST /auth/logout` → 204，吊销 refresh 会话并清 cookie。
+
+#### `POST /auth/change-password`
+用户自助改密。**需 Bearer**（`must_change_password` 账号在白名单内，可用）。
 ```json
 // 请求
-{ "username": "carol", "password": "carolpw" }   // role 默认 "user"
-// 响应 200
-{ "access_token": "...", "token_type": "bearer",
-  "user": { "id": "...", "username": "carol", "role": "user", "created_at": 1783... } }
-// 403 非 admin；409 用户名已存在
+{ "old_password": "initial-pass", "new_password": "new-pass-123" }   // 新密码至少 8 位
+// 响应 200（镜像 login：新 access_token + user，并种新 refresh cookie；旧 refresh 会话全部吊销）
+{ "access_token": "...", "token_type": "bearer", "user": { ..., "must_change_password": false } }
+// 400 旧密码不正确；422 新密码不合规
 ```
 
 #### `GET /auth/me`
 查当前登录用户。
 ```json
 // 响应 200
-{ "user": { "id": "...", "username": "alice", "role": "user" } }
+{ "user": { "id": "...", "username": "alice", "role": "user", "status": "active",
+            "features": {...}, "must_change_password": false, "created_at": 1783... } }
 ```
 
 ---
@@ -239,6 +260,24 @@ Agent 模式必须通过任务接口进入。服务端持久化任务、运行�
 #### `DELETE /tasks/{task_id}`
 删除非运行中的任务聚合，包括会话、消息、运行、计划、权限租约、工具事件和产物记录；审计记录保留。
 
+#### `GET /tasks/{task_id}/tool-approvals?status=`
+controlled 档（逐条审批）的待决命令列表；前端重连时用它重建 pending 审批的 ground truth。`status` 可选 `pending | approved | denied | expired`。
+```json
+{ "approvals": [ { "id": "...", "task_id": "...", "run_request_id": "...",
+                   "tool_name": "terminal", "args_summary": {...},
+                   "status": "pending", "created_at": 1783... } ] }
+```
+
+#### `POST /tasks/{task_id}/tool-approvals/{approval_id}`
+批准/拒绝一条待执行命令。不写 SSE——审批门控的下一拍轮询会发现决定，由 executor 统一发 `tool.approval_resolved` 事件。
+```json
+// 请求
+{ "decision": "approve" }   // "approve" | "deny" | "allow_all"（本次运行后续命令不再询问）
+// 响应 200
+{ "approval": { "id": "...", "status": "approved", ... } }
+// 404 approval 不存在或不属于你；409 已被决定（含并发竞态）
+```
+
 ---
 
 ### 3.5 记忆 Memory
@@ -267,23 +306,26 @@ Agent 模式必须通过任务接口进入。服务端持久化任务、运行�
 
 ---
 
-### 3.6 用户管理 Users（仅 admin）
+### 3.6 用户管理 Users（仅 superadmin）
 
-所有 `/users` 端点都需 **admin** token（非 admin 返回 403）。
+所有 `/users` 端点都需 **superadmin** token（admin/user 返回 403）。防锁死规则：不能删除/禁用/降级自己，也不能删除/禁用/降级最后一个 active superadmin（400/409）。所有变更写审计（`user_admin`）。
 
 #### `GET /users`
 ```json
-{ "users": [ { "id":"...", "username":"admin", "role":"admin", "created_at":... },
-              { "id":"...", "username":"alice", "role":"user", "created_at":... } ] }
+{ "users": [ { "id":"...", "username":"admin", "role":"superadmin", "status":"active",
+               "features": {...}, "must_change_password": false, "created_at":... } ] }
 ```
 
 #### `POST /users`
 ```json
 // 请求
-{ "username": "bob", "password": "bobpw", "role": "user" }   // role 可选，默认 user
-// 响应 200
-{ "user": { "id":"...", "username":"bob", "role":"user", "created_at":... } }
-// 409 用户名已存在
+{ "username": "bob", "password": "bobpw123",          // 至少 8 位
+  "role": "user",                                      // 可选："superadmin"|"admin"|"user"，默认 user
+  "features": { "knowledge": false } }                 // 可选：缺省的键默认启用
+// 响应 200 —— 新用户 must_change_password=true，首次登录后须先改密
+{ "user": { "id":"...", "username":"bob", "role":"user", "status":"active",
+            "features": {...}, "must_change_password": true, "created_at":... } }
+// 400 用户名/密码/角色不合规；409 用户名已存在
 ```
 
 #### `DELETE /users/{user_id}`
@@ -294,9 +336,36 @@ Agent 模式必须通过任务接口进入。服务端持久化任务、运行�
 #### `PUT /users/{user_id}/role`
 ```json
 // 请求
-{ "role": "admin" }   // "user" | "admin"
+{ "role": "admin" }   // "superadmin" | "admin" | "user"
 // 响应 200
 { "user_id": "...", "role": "admin" }
+// 400 自我降级/角色非法；409 目标是最后一个 active superadmin
+```
+
+#### `PUT /users/{user_id}/password`
+管理员重置密码。目标用户被重新标记 `must_change_password=true`，旧密码与全部 refresh 会话立即失效。
+```json
+// 请求
+{ "password": "new-pass-123" }   // 至少 8 位；不落审计
+// 响应 200
+{ "user_id": "...", "password_reset": true }
+```
+
+#### `PUT /users/{user_id}/status`
+```json
+// 请求
+{ "status": "disabled" }   // "active" | "disabled"
+// 响应 200 —— 禁用后该用户已签发的 access token 立即失效（每请求重读用户行）
+{ "user_id": "...", "status": "disabled" }
+```
+
+#### `PUT /users/{user_id}/features`
+Patch 语义：只传要改的键，缺省键保持原值。
+```json
+// 请求
+{ "memory": false }        // 键：agent | chat | knowledge | memory
+// 响应 200 —— 下一个请求即生效（不烘焙在 JWT 里）
+{ "user_id": "...", "features": { "agent": true, "chat": true, "knowledge": true, "memory": false } }
 ```
 
 ---
@@ -304,10 +373,12 @@ Agent 模式必须通过任务接口进入。服务端持久化任务、运行�
 ### 3.7 功能开关 Features
 
 #### `GET /features`
-返回当前功能开关状态（前端据此渲染「是否启用宿主机访问」按钮）。
+返回当前功能开关状态（前端据此渲染「是否启用宿主机访问」按钮）与当前角色的数据权限。
 ```json
-{ "features": { "host_terminal": false } }
+{ "features": { "host_terminal": false },
+  "data_permissions": { "enabled": true, "allowed_tables": ["orders", "customers"] } }
 ```
+> `data_permissions.enabled=false` / `allowed_tables=null` 表示该角色不限制表访问；列出（可为空数组）即白名单（见 `deployment.yaml` 的 `data_permissions` 段）。
 > 开关本身在 `config.yaml` 的 `features` 段或 `HERMES_FEATURE_*` env 配置。`POST` 改开关（Inc 2，等你前端按钮设计好再加）。
 
 ---
@@ -324,7 +395,7 @@ Agent 模式必须通过任务接口进入。服务端持久化任务、运行�
 
 ### 3.9 知识库 Knowledge
 
-企业知识库，按「知识库（base）→ 文档 → 分块」三级组织，使用分三步：**① 新建知识库 → ② 往库里上传文档（只落盘，不解析）→ ③ 勾选文档批量触发解析**（构建链路见 [`知识库构建方案.md`](知识库构建方案.md)）。`deployment.yaml` 里 `knowledge.enabled=false`（缺省）时**整组路由 404**，前端据此显示"当前部署未启用知识库"。
+企业知识库，按「知识库（base）→ 文档 → 分块」三级组织，使用分三步：**① 新建知识库 → ② 往库里上传文档（只落盘，不解析）→ ③ 勾选文档批量触发解析**（构建链路见 [`知识库构建方案.md`](知识库构建方案.md)）。`deployment.yaml` 里 `knowledge.enabled=false`（缺省）时**整组路由 404**，前端据此显示"当前部署未启用知识库"。此外**全部端点（含 admin 的变更端点）都要求用户的 `features.knowledge=true`**，被关掉的用户访问一律 403。
 
 所有**写操作（建库/改库/删库/上传/解析/删除/重试）仅 admin**；所有读操作普通用户可用。
 

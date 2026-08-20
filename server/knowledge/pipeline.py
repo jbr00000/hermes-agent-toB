@@ -98,13 +98,10 @@ def _run_pipeline(
     embed_batch = None
     semantic_cfg = None
     if cfg.chunk_mode == "semantic":
-        from dataclasses import asdict
-
         from .embedder import get_embedder
-        from .semantic_chunker import SemanticChunkConfig
 
         embed_batch = get_embedder(cfg).embed
-        semantic_cfg = SemanticChunkConfig(**asdict(cfg.semantic))
+        semantic_cfg = cfg.semantic
     chunks = chunk_document(
         parsed.content_list,
         chunk_size=cfg.chunk_size,

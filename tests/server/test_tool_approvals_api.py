@@ -45,6 +45,14 @@ def _setup(monkeypatch, tmp_path) -> tuple[TestClient, dict, dict, dict]:
     assert created.status_code == 200
     user = created.json()["user"]
     user_headers = _login(client, "worker", "password-123")
+    # 新建用户带强制改密标记；改密清掉，否则白名单外端点一律 403。
+    changed = client.post(
+        "/auth/change-password",
+        headers=user_headers,
+        json={"old_password": "password-123", "new_password": "password-456"},
+    )
+    assert changed.status_code == 200, changed.text
+    user_headers = {"Authorization": f"Bearer {changed.json()['access_token']}"}
     task_resp = client.post("/tasks", headers=user_headers, json={"title": "受控任务"})
     assert task_resp.status_code == 201, task_resp.text
     return client, user_headers, user, task_resp.json()["task"]

@@ -13,6 +13,7 @@ deployment installs them).
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -20,6 +21,8 @@ import time
 from typing import Any
 
 from tools.registry import registry
+
+logger = logging.getLogger(__name__)
 
 _MAX_ROWS = 200
 _DEFAULT_TIMEOUT_SECONDS = 30.0
@@ -271,10 +274,12 @@ def _check_data_permissions(sql: str, kw: dict) -> str | None:
 
     Returns None when the statement may run; otherwise a JSON error payload.
     The SQL text never reaches the audit log — summarize_tool_args stores a
-    fingerprint only. Fail-open on infrastructure errors (matching the rest
-    of this module): the feature is off by default, and the fail-CLOSED case
-    that matters (restricted role + unparseable SQL) lives in
-    server/data_permissions.py.
+    fingerprint only. On infrastructure errors the failure is logged and the
+    outcome depends on the feature flag: when data_permissions is enabled the
+    query is denied (fail-closed — a storage outage must not silently disable
+    a permission check); when disabled the query runs (the check would have
+    been a no-op anyway). The other fail-closed case (restricted role +
+    unparseable SQL) lives in server/data_permissions.py.
 
     Boundary note: full-permission users could in theory bypass this from
     sandbox code (shared read-only credentials); the chat/plan paths are
@@ -308,6 +313,17 @@ def _check_data_permissions(sql: str, kw: dict) -> str | None:
             pass
         return json.dumps({"error": reason}, ensure_ascii=False)
     except Exception:
+        logger.exception("data_permissions check failed; deciding by feature flag")
+        try:
+            from server import data_permissions
+
+            if data_permissions.is_enabled():
+                return json.dumps(
+                    {"error": "data permission check unavailable; query denied (fail-closed)"},
+                    ensure_ascii=False,
+                )
+        except Exception:
+            pass
         return None
 
 

@@ -46,7 +46,11 @@ class KnowledgeEmbeddingConfig:
 
 @dataclass(frozen=True)
 class SemanticChunkingConfig:
-    """语义分块参数（chunk_mode=semantic 时生效；默认值对齐 chonkie）。"""
+    """语义分块参数（chunk_mode=semantic 时生效；默认值对齐 chonkie）。
+
+    server/knowledge/semantic_chunker.py 与本模块共用这一定义——改默认值
+    只改这里。
+    """
 
     threshold: float = 0.8  # 极小值分位数阈值，越小切得越保守（块越大）
     similarity_window: int = 3  # 衡量"下一句"时回看几句
@@ -55,6 +59,10 @@ class SemanticChunkingConfig:
     filter_window: int = 5  # Savitzky-Golay 窗口（奇数且 > filter_polyorder）
     filter_polyorder: int = 3
     filter_tolerance: float = 0.2  # 一阶导判零容差，越大切点越多
+
+
+# 短于此 token 数的尾块并入前一块（表格块除外）；knowledge/chunker.py 引用同一常量
+DEFAULT_MIN_CHUNK_TOKENS = 50
 
 
 @dataclass(frozen=True)
@@ -131,7 +139,7 @@ class KnowledgeDeploymentConfig:
     aux_llm: KnowledgeAuxLlmConfig = field(default_factory=KnowledgeAuxLlmConfig)
     chunk_size: int = 400
     chunk_overlap: int = 64
-    min_chunk_tokens: int = 50  # 短于此 token 数的尾块并入前一块（表格块除外）
+    min_chunk_tokens: int = DEFAULT_MIN_CHUNK_TOKENS
     max_file_mb: int = 100
 
 

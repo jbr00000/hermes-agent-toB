@@ -60,7 +60,8 @@ def test_set_user_role_rejects_unknown_role(monkeypatch) -> None:
 
 def test_init_db_promotes_oldest_admin_when_no_superadmin(monkeypatch) -> None:
     """Upgrade path: a deployment bootstrapped before superadmin existed has
-    only admin rows; init_db must promote the oldest active admin exactly once."""
+    only admin rows; the SQLite schema shim (run inside init_db → init_storage)
+    must promote the oldest active admin exactly once."""
     from server.storage import get_repository, init_storage
 
     init_storage()

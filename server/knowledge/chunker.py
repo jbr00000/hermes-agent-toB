@@ -28,11 +28,13 @@ from typing import Any
 
 import tiktoken
 
-from .semantic_chunker import SemanticChunkConfig, semantic_split
+from server.deployment_config import DEFAULT_MIN_CHUNK_TOKENS, SemanticChunkingConfig
+
+from .semantic_chunker import semantic_split
 
 DEFAULT_CHUNK_SIZE = 400
 DEFAULT_CHUNK_OVERLAP = 64
-_MIN_TAIL_TOKENS = 50  # 比这还短的尾块并回前一块
+_MIN_TAIL_TOKENS = DEFAULT_MIN_CHUNK_TOKENS  # 比这还短的尾块并回前一块
 _TITLE_MAX_CHARS = 200
 
 _HEADING_TYPES = {"text"}
@@ -70,7 +72,7 @@ def chunk_document(
     chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
     mode: str = "structural",
     embed_batch: Callable[[list[str]], list[list[float]]] | None = None,
-    semantic: SemanticChunkConfig | None = None,
+    semantic: SemanticChunkingConfig | None = None,
     min_tail_tokens: int = _MIN_TAIL_TOKENS,
 ) -> list[Chunk]:
     """Chunk a parsed document. ``doc_pos`` is a global 0-based sequence.
@@ -170,7 +172,7 @@ def _chunk_section(
     chunk_overlap: int,
     mode: str = "structural",
     embed_batch: Callable[[list[str]], list[list[float]]] | None = None,
-    semantic: SemanticChunkConfig | None = None,
+    semantic: SemanticChunkingConfig | None = None,
 ) -> list[Chunk]:
     chunks: list[Chunk] = []
     pending_text: list[str] = []
@@ -183,7 +185,7 @@ def _chunk_section(
             return
         if mode == "semantic":
             # embed_batch 一定非 None（chunk_document 入口已校验）
-            for piece in semantic_split(text, embed_batch, chunk_size, semantic):  # type: ignore[arg-type]
+            for piece in semantic_split(text, embed_batch, chunk_size, semantic):  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
                 chunks.append(Chunk(content=piece, chunk_title=title, doc_pos=-1, token_num=0))
         else:
             chunks.extend(_split_text(text, title, chunk_size, chunk_overlap))

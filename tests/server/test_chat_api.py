@@ -84,6 +84,14 @@ def test_chat_conversation_is_user_scoped_and_manageable(monkeypatch, tmp_path) 
     )
     assert created_user.status_code == 200
     other_headers = _login(client, "other", "password-123")
+    # 新建用户带强制改密标记；改密清掉，否则白名单外端点一律 403。
+    changed = client.post(
+        "/auth/change-password",
+        headers=other_headers,
+        json={"old_password": "password-123", "new_password": "password-456"},
+    )
+    assert changed.status_code == 200, changed.text
+    other_headers = {"Authorization": f"Bearer {changed.json()['access_token']}"}
     assert client.get(f"/sessions/{conversation['id']}", headers=other_headers).status_code == 404
     assert client.get("/sessions?interaction_type=chat", headers=other_headers).json() == {"sessions": []}
 

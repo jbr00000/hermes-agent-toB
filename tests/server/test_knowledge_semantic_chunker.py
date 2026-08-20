@@ -9,12 +9,12 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from server.deployment_config import SemanticChunkingConfig
 from server.knowledge.chunker import chunk_document, count_tokens
 from server.knowledge.semantic_chunker import (
-    SemanticChunkConfig,
+    _correlate,
     _filter_split_indices,
     _find_local_minima,
-    _percentile,
     _savgol_coeffs,
     load_sentence_delimiters,
     semantic_split,
@@ -52,12 +52,24 @@ def test_split_sentences_merges_short_sentences_forward() -> None:
 
 def test_savgol_coeffs_smooths_linear_data_to_itself() -> None:
     # 与 chonkie-core Rust 单测同款断言：线性数据经平滑滤波保持线性
-    from server.knowledge.semantic_chunker import _apply_convolution
-
     data = np.arange(1, 10, dtype=np.float64)
-    smoothed = _apply_convolution(data, _savgol_coeffs(5, 2, 0))
+    smoothed = _correlate(data, _savgol_coeffs(5, 2, 0))
     for i, val in enumerate(smoothed):
         assert abs(val - (i + 1.0)) < 0.5
+
+
+def test_savgol_first_derivative_coeffs_match_reference() -> None:
+    # 参考值：三次拟合 5 点一阶导数模板 [1,-8,0,8,-1]/12（经典五点Stencil，
+    # 与 scipy.signal.savgol_coeffs(5, 3, deriv=1) 同值、顺序相反——scipy 返回卷积序）
+    coeffs = _savgol_coeffs(5, 3, 1)
+    assert list(coeffs) == pytest.approx([1 / 12, -2 / 3, 0.0, 2 / 3, -1 / 12])
+
+
+def test_savgol_second_derivative_recovers_quadratic_curvature() -> None:
+    # y = 3x² - 2x + 1 的二阶导恒为 6（镜像边界可能失真，只断言内部点）
+    data = np.asarray([3.0 * i * i - 2.0 * i + 1.0 for i in range(15)])
+    curvature = _correlate(data, _savgol_coeffs(5, 3, 2))
+    assert list(curvature[2:-2]) == pytest.approx([6.0] * 11)
 
 
 def test_savgol_rejects_invalid_params() -> None:
@@ -81,13 +93,6 @@ def test_find_local_minima_short_series_returns_empty() -> None:
 
 
 # ----------------------------------------------------------- 分位数过滤
-
-
-def test_percentile_linear_interpolation() -> None:
-    values = [1.0, 2.0, 3.0, 4.0, 5.0]
-    assert _percentile(values, 0.0) == pytest.approx(1.0)
-    assert _percentile(values, 0.5) == pytest.approx(3.0)
-    assert _percentile(values, 1.0) == pytest.approx(5.0)
 
 
 def test_filter_split_indices_percentile_and_min_distance() -> None:
@@ -136,7 +141,7 @@ _TRANSITION = "氢燃料电池系统的财务审计合规性流程详细说明�
 
 def test_semantic_split_cuts_at_topic_boundary() -> None:
     text = "".join(_topic_sentences("a", 5) + [_TRANSITION] + _topic_sentences("b", 5))
-    chunks = semantic_split(text, _fake_embed, chunk_size=10000, config=SemanticChunkConfig())
+    chunks = semantic_split(text, _fake_embed, chunk_size=10000, config=SemanticChunkingConfig())
     assert len(chunks) == 2
     # 话题 A 的正文句不与话题 B 的正文句同块（过渡句归任一侧都合理）
     for chunk in chunks:
@@ -147,7 +152,7 @@ def test_semantic_split_cuts_at_topic_boundary() -> None:
 
 def test_semantic_split_single_topic_stays_one_chunk() -> None:
     text = "".join(_topic_sentences("a", 8))
-    chunks = semantic_split(text, _fake_embed, chunk_size=10000, config=SemanticChunkConfig())
+    chunks = semantic_split(text, _fake_embed, chunk_size=10000, config=SemanticChunkingConfig())
     assert len(chunks) == 1
     assert chunks[0] == text
 
@@ -155,14 +160,14 @@ def test_semantic_split_single_topic_stays_one_chunk() -> None:
 def test_semantic_split_enforces_chunk_size() -> None:
     text = "".join(_topic_sentences("a", 10))
     chunk_size = count_tokens("".join(_topic_sentences("a", 3)))
-    chunks = semantic_split(text, _fake_embed, chunk_size=chunk_size, config=SemanticChunkConfig())
+    chunks = semantic_split(text, _fake_embed, chunk_size=chunk_size, config=SemanticChunkingConfig())
     assert len(chunks) > 1
     assert all(count_tokens(c) <= chunk_size for c in chunks)
 
 
 def test_semantic_split_too_few_sentences_single_group() -> None:
     text = "".join(_topic_sentences("a", 2))
-    chunks = semantic_split(text, _fake_embed, chunk_size=10000, config=SemanticChunkConfig())
+    chunks = semantic_split(text, _fake_embed, chunk_size=10000, config=SemanticChunkingConfig())
     assert chunks == [text]
 
 

@@ -78,6 +78,7 @@ def init_database() -> None:
     Base.metadata.create_all(get_engine())
     _ensure_added_columns(get_engine())
     _ensure_knowledge_kb_ids(get_engine())
+    _ensure_superadmin(get_engine())
 
 
 # Columns added after the table first shipped. ``create_all`` never alters
@@ -171,6 +172,38 @@ def _ensure_knowledge_kb_ids(engine: Engine) -> None:
                  "chunk_count = (SELECT COUNT(*) FROM knowledge_chunks c "
                  "                WHERE c.kb_id = knowledge_bases.id)")
         )
+
+
+def _ensure_superadmin(engine: Engine) -> None:
+    """Promote the oldest active admin to superadmin when none exists (SQLite path).
+
+    Mirrors the Alembic data migration in 3b7e1f9a42c6 for MySQL: deployments
+    bootstrapped before the superadmin role existed only have admin/user rows,
+    and user management is superadmin-only. Idempotent — a no-op once any
+    active superadmin exists.
+    """
+    if not engine.url.get_backend_name().startswith("sqlite"):
+        return
+    with engine.begin() as conn:
+        if not conn.execute(
+            text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'")
+        ).scalar():
+            return
+        has_superadmin = conn.execute(
+            text("SELECT COUNT(*) FROM users WHERE role = 'superadmin' AND status = 'active'")
+        ).scalar()
+        if has_superadmin:
+            return
+        oldest = conn.execute(
+            text("SELECT id, username FROM users WHERE role = 'admin' AND status = 'active' "
+                 "ORDER BY created_at ASC LIMIT 1")
+        ).first()
+        if oldest is None:
+            return
+        conn.execute(
+            text("UPDATE users SET role = 'superadmin' WHERE id = :id"), {"id": oldest[0]}
+        )
+        print(f"[auth] WARNING: promoted oldest admin '{oldest[1]}' to superadmin (upgrade path).")
 
 
 def database_health() -> bool:
