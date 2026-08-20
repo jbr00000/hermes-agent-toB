@@ -7,7 +7,6 @@ import {
   ClipboardList,
   Database,
   FileArchive,
-  FileText,
   LockKeyhole,
   PanelRight,
   PanelRightClose,
@@ -18,18 +17,20 @@ import {
 import { api } from '../api'
 import { isAgentRunActive, useAgentRun } from '../agentRunManager'
 import { mockApi } from '../mockApi'
-import { attachedFilesAtom, chatAttachedFilesAtom, rightPanelCollapsedAtom, selectedSpaceAtom } from '../state'
+import { rightPanelCollapsedAtom, selectedSpaceAtom } from '../state'
 import type { AgentTaskDetail, KnowledgeDocument, PermissionMode, TabType, WorkTab } from '../types'
 import { PermissionSegment } from './agent/PermissionSegment'
-import { Badge, cn, formatBytes, IconButton, InfoRow } from './ui'
+import { Badge, cn, IconButton, InfoRow } from './ui'
+import { AttachmentRows } from './uploads/AttachmentChips'
+import { useAttachments } from './uploads/useAttachments'
 
 /** 右侧上下文面板：agent 标签显示任务上下文，chat 标签显示问答上下文。 */
 export function RightPanel({ activeTab, onOpenTab }: { activeTab: WorkTab | null; onOpenTab?: (type: TabType, refId: string, title: string) => void }) {
   const [collapsed, setCollapsed] = useAtom(rightPanelCollapsedAtom)
-  const [filesByTab] = useAtom(attachedFilesAtom)
   const queryClient = useQueryClient()
   const taskId = activeTab?.type === 'agent' ? activeTab.refId : ''
   const run = useAgentRun(taskId)
+  const { files } = useAttachments('task', taskId)
   const taskQuery = useQuery({
     queryKey: ['task', taskId],
     queryFn: () => api.getTask(taskId),
@@ -46,7 +47,6 @@ export function RightPanel({ activeTab, onOpenTab }: { activeTab: WorkTab | null
   const permissionMode = run?.permissionMode ?? task?.permission.mode ?? 'read'
   const taskStatus = run?.taskStatus ?? task?.status ?? 'draft'
   const active = isAgentRunActive(run)
-  const files = taskId ? (filesByTab[taskId] ?? []) : []
 
   const setPermissionMode = (mode: PermissionMode) => {
     if (!task || active) return
@@ -88,23 +88,7 @@ export function RightPanel({ activeTab, onOpenTab }: { activeTab: WorkTab | null
         </PanelSection>
 
         <PanelSection title="本次任务文件" icon={FileArchive}>
-          <div className="divide-y divide-line border-y border-line">
-            {files.length === 0 && (
-              <div className="py-3 text-xs text-zinc-500">暂无任务文件</div>
-            )}
-            {files.map((file) => (
-              <div key={file.id} className="py-2.5 text-sm">
-                <div className="flex min-w-0 items-center gap-2">
-                  <FileText size={15} className="shrink-0 text-zinc-400" />
-                  <span className="truncate">{file.name}</span>
-                </div>
-                <div className="mt-1 flex items-center justify-between pl-6 text-xs text-zinc-500">
-                  <span>{formatBytes(file.size)}</span>
-                  <span>本地暂存</span>
-                </div>
-              </div>
-            ))}
-          </div>
+          <AttachmentRows files={files} emptyText="暂无任务文件" />
         </PanelSection>
 
         <PanelSection title="引用知识库" icon={Database}>
@@ -125,11 +109,10 @@ export function RightPanel({ activeTab, onOpenTab }: { activeTab: WorkTab | null
 }
 
 function ChatRightPanel({ sessionId, referencedDocs, onOpenTab, onCollapse }: { sessionId: string; referencedDocs: KnowledgeDocument[]; onOpenTab?: (type: TabType, refId: string, title: string) => void; onCollapse: () => void }) {
-  const [filesByTab] = useAtom(chatAttachedFilesAtom)
   const [selectedSpace] = useAtom(selectedSpaceAtom)
   const spacesQuery = useQuery({ queryKey: ['spaces'], queryFn: mockApi.listSpaces })
   const activeSpace = (spacesQuery.data ?? []).find((space) => space.id === selectedSpace)
-  const files = filesByTab[sessionId] ?? []
+  const { files } = useAttachments('session', sessionId)
 
   return (
     <aside className="hidden min-h-0 flex-col bg-[#fbfbfc] xl:flex">
@@ -159,24 +142,7 @@ function ChatRightPanel({ sessionId, referencedDocs, onOpenTab, onCollapse }: { 
         </PanelSection>
 
         <PanelSection title="问答附件" icon={FileArchive}>
-          {files.length === 0 ? (
-            <div className="border-y border-line py-3 text-xs text-zinc-500">暂无附件</div>
-          ) : (
-            <div className="divide-y divide-line border-y border-line">
-              {files.map((file) => (
-                <div key={file.id} className="py-2.5 text-sm">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <FileText size={15} className="shrink-0 text-zinc-400" />
-                    <span className="truncate">{file.name}</span>
-                  </div>
-                  <div className="mt-1 flex items-center justify-between pl-6 text-xs text-zinc-500">
-                    <span>{formatBytes(file.size)}</span>
-                    <span>本地暂存</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+          <AttachmentRows files={files} emptyText="暂无附件" />
         </PanelSection>
 
         <PanelSection title="知识来源" icon={Database}>

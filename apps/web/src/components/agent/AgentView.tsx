@@ -1,5 +1,4 @@
 import * as React from 'react'
-import { useAtom } from 'jotai'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { CircleStop, Database, Mic, Paperclip, Send, Trash2 } from 'lucide-react'
 import { api } from '../../api'
@@ -9,11 +8,12 @@ import {
   useAgentRun,
   useAgentRunManager,
 } from '../../agentRunManager'
-import { attachedFilesAtom } from '../../state'
-import type { AgentTaskDetail, AttachedFile, PermissionMode, TabType } from '../../types'
+import type { AgentTaskDetail, PermissionMode, TabType } from '../../types'
 import { MessageBubble } from '../chat/MessageBubble'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { cn, IconButton, MessageSkeleton } from '../ui'
+import { AttachmentBudgetBar, AttachmentChips } from '../uploads/AttachmentChips'
+import { useAttachments, validateSelection } from '../uploads/useAttachments'
 import { PermissionSegment } from './PermissionSegment'
 import { ArtifactsCard } from './ArtifactsCard'
 import { TaskPlanPanel } from './TaskPlanPanel'
@@ -21,7 +21,6 @@ import { ToolApprovalPanel } from './ToolApprovalPanel'
 import { ToolEventTimeline } from './ToolEventTimeline'
 
 export function AgentView({ taskId, title, onDeleted, onOpenTab }: { taskId: string; title: string; onDeleted: (taskId: string) => void; onOpenTab: (type: TabType, refId: string, title: string) => void }) {
-  const [filesByTab, setFilesByTab] = useAtom(attachedFilesAtom)
   const queryClient = useQueryClient()
   const agentRunManager = useAgentRunManager()
   const run = useAgentRun(taskId)
@@ -41,11 +40,10 @@ export function AgentView({ taskId, title, onDeleted, onOpenTab }: { taskId: str
   const shouldFollowOutputRef = React.useRef(true)
   const wasActiveRef = React.useRef(false)
 
-  // 附件按本任务隔离（atom 是 { [taskId]: 文件列表 }），切任务互不串扰
-  const files = React.useMemo(() => filesByTab[taskId] ?? [], [filesByTab, taskId])
-  const setFiles = React.useCallback((updater: (current: AttachedFile[]) => AttachedFile[]) => {
-    setFilesByTab((current) => ({ ...current, [taskId]: updater(current[taskId] ?? []) }))
-  }, [taskId, setFilesByTab])
+  // 附件服务端持久化（owner=本任务）：parsing 中的文件存在时 hook 内每 1.5s 轮询；
+  // execute 阶段后端会把原件暂存进沙箱工作区 uploads/，前端无需额外处理
+  const { files, budget: uploadBudget, upload: uploadAttachments, remove: removeAttachment } =
+    useAttachments('task', taskId)
 
   React.useEffect(() => {
     if (query.data) agentRunManager.reconcileServerState(query.data)
@@ -195,15 +193,19 @@ export function AgentView({ taskId, title, onDeleted, onOpenTab }: { taskId: str
     }
   }, [active, onDeleted, queryClient, taskId])
 
-  // 附件仅本地暂存（上传通道未接入），选中即入列，没有"解析中"的假状态
+  // 选中即上传（服务端解析全文，chip 轮询 parsing→ready/failed）；解析中不阻塞发送
   const addFiles = (selected: FileList | null) => {
     if (!selected?.length) return
-    const next = Array.from(selected).map((file) => ({
-      id: `f-${Date.now()}-${file.name}`,
-      name: file.name,
-      size: file.size,
-    }))
-    setFiles((current) => [...current, ...next])
+    const picked = Array.from(selected)
+    const validationError = validateSelection(files.length, picked)
+    if (validationError) {
+      setActionError(validationError)
+      return
+    }
+    setActionError(null)
+    uploadAttachments.mutate(picked, {
+      onError: (error) => setActionError(error instanceof Error ? error.message : '附件上传失败'),
+    })
   }
 
   return (
@@ -287,6 +289,11 @@ export function AgentView({ taskId, title, onDeleted, onOpenTab }: { taskId: str
       <div className="border-t border-line bg-[#fbfbfc] px-6 py-4">
         <div className="mx-auto max-w-4xl">
           <div className="rounded-md border border-line bg-panel shadow-sm">
+          <AttachmentChips
+            files={files}
+            onRemove={(fileId) => removeAttachment.mutate(fileId)}
+            removing={removeAttachment.isPending}
+          />
           <textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -312,12 +319,12 @@ export function AgentView({ taskId, title, onDeleted, onOpenTab }: { taskId: str
               )}>
                 {approvedPlan ? '执行模式' : '规划模式'}
               </span>
-              <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(event) => addFiles(event.target.files)} />
+              <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(event) => { addFiles(event.target.files); event.target.value = '' }} />
               <IconButton label="添加文件" icon={Paperclip} onClick={() => fileInputRef.current?.click()} />
               <IconButton label="语音输入" icon={Mic} />
               <IconButton label="选择知识库" icon={Database} />
-              {files.length > 0 && (
-                <span className="ml-2 text-xs text-zinc-500">{files.length} 个附件（本地暂存，暂不参与执行）</span>
+              {uploadAttachments.isPending && (
+                <span className="ml-2 text-xs text-zinc-500">上传中…</span>
               )}
             </div>
             <button
@@ -332,6 +339,7 @@ export function AgentView({ taskId, title, onDeleted, onOpenTab }: { taskId: str
               {active ? '停止' : '发送'}
             </button>
           </div>
+          <AttachmentBudgetBar budget={uploadBudget} />
           </div>
         </div>
       </div>

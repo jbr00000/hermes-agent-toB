@@ -13,6 +13,7 @@ import type {
   KnowledgeDocument,
   KnowledgeSearchMode,
   KnowledgeStats,
+  MessageAttachment,
   PermissionMode,
   SessionSummary,
   TaskArtifact,
@@ -21,6 +22,9 @@ import type {
   TaskRun,
   ToolApproval,
   ToolEvent,
+  UploadBudget,
+  UploadedFile,
+  UploadOwnerType,
   UserFeatures,
   UserRole,
 } from './types'
@@ -80,6 +84,14 @@ interface BackendKnowledgeCitation {
   score?: number | null
 }
 
+interface BackendMessageAttachment {
+  id?: string
+  file_name?: string
+  token_count?: number
+  included_tokens?: number
+  status?: 'full' | 'truncated' | 'skipped'
+}
+
 interface BackendMessage {
   id: string
   role: ChatMessage['role']
@@ -89,7 +101,12 @@ interface BackendMessage {
   duration_ms?: number
   created_at?: number
   timestamp?: number
-  metadata?: { citations?: BackendKnowledgeCitation[] } | null
+  metadata?: {
+    citations?: BackendKnowledgeCitation[]
+    /** 附件注入时的用户原文（content = 原文 + 附件全文，气泡展示用原文） */
+    display_content?: string
+    attachments?: BackendMessageAttachment[]
+  } | null
 }
 
 interface BackendModelRun {
@@ -426,6 +443,7 @@ export function toKnowledgeCitations(raw: unknown): KnowledgeCitation[] {
 
 export function toMessage(row: BackendMessage): ChatMessage {
   const citations = toKnowledgeCitations(row.metadata?.citations)
+  const attachments = toMessageAttachments(row.metadata?.attachments)
   return {
     id: row.id,
     role: row.role,
@@ -435,6 +453,53 @@ export function toMessage(row: BackendMessage): ChatMessage {
     modelRunId: row.model_run_id,
     durationMs: row.duration_ms,
     citations: citations.length > 0 ? citations : undefined,
+    displayContent: row.metadata?.display_content ?? undefined,
+    attachments: attachments.length > 0 ? attachments : undefined,
+  }
+}
+
+/** 附件注入明细（user 消息 metadata.attachments；后端字段为 snake_case）。 */
+function toMessageAttachments(raw: unknown): MessageAttachment[] {
+  if (!Array.isArray(raw)) return []
+  const attachments: MessageAttachment[] = []
+  for (const item of raw as BackendMessageAttachment[]) {
+    if (!item || typeof item !== 'object' || !item.id) continue
+    attachments.push({
+      id: String(item.id),
+      fileName: String(item.file_name ?? ''),
+      tokenCount: Number(item.token_count ?? 0),
+      includedTokens: Number(item.included_tokens ?? 0),
+      status: item.status === 'truncated' || item.status === 'skipped' ? item.status : 'full',
+    })
+  }
+  return attachments
+}
+
+interface BackendUploadedFile {
+  id: string
+  owner_type: UploadOwnerType
+  owner_id: string
+  file_name: string
+  file_ext: string
+  size_bytes: number
+  parse_status: UploadedFile['parseStatus']
+  parse_error: string | null
+  token_count: number
+  created_at: number
+}
+
+function toUploadedFile(row: BackendUploadedFile): UploadedFile {
+  return {
+    id: row.id,
+    ownerType: row.owner_type,
+    ownerId: row.owner_id,
+    fileName: row.file_name,
+    fileExt: row.file_ext,
+    sizeBytes: row.size_bytes,
+    parseStatus: row.parse_status,
+    parseError: row.parse_error,
+    tokenCount: row.token_count ?? 0,
+    createdAt: row.created_at,
   }
 }
 
@@ -1064,6 +1129,52 @@ export const api = {
     if (!response.ok) throw await parseError(response)
     const body = await response.json() as { chunks: BackendKnowledgeChunk[] }
     return body.chunks.map(toKnowledgeChunk)
+  },
+
+  /** 上传临时附件（chat 会话 / agent 任务问答上下文，multipart，每 owner ≤5 个、单文件 ≤20MB）。
+   *  响应即解析状态（多半仍是 parsing）；后续轮询 listUploads 刷新。 */
+  async uploadFiles(ownerType: UploadOwnerType, ownerId: string, files: File[]): Promise<UploadedFile[]> {
+    const form = new FormData()
+    form.append('owner_type', ownerType)
+    form.append('owner_id', ownerId)
+    for (const file of files) form.append('files', file)
+    const response = await apiFetch('/uploads', { method: 'POST', body: form })
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as { files: BackendUploadedFile[] }
+    return body.files.map(toUploadedFile)
+  },
+
+  /** 列出某 owner 的全部附件 + token 预算用量；有 parsing 中的文件时调用方负责轮询。 */
+  async listUploads(
+    ownerType: UploadOwnerType,
+    ownerId: string,
+  ): Promise<{ files: UploadedFile[]; budget: UploadBudget }> {
+    const params = new URLSearchParams({ owner_type: ownerType, owner_id: ownerId })
+    const response = await apiFetch(`/uploads?${params.toString()}`)
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as {
+      files: BackendUploadedFile[]
+      budget: {
+        max_input_tokens: number
+        budget_tokens: number
+        file_tokens: number
+        over_budget: boolean
+      }
+    }
+    return {
+      files: body.files.map(toUploadedFile),
+      budget: {
+        maxInputTokens: body.budget.max_input_tokens,
+        budgetTokens: body.budget.budget_tokens,
+        fileTokens: body.budget.file_tokens,
+        overBudget: body.budget.over_budget,
+      },
+    }
+  },
+
+  async deleteUpload(fileId: string): Promise<void> {
+    const response = await apiFetch(`/uploads/${encodeURIComponent(fileId)}`, { method: 'DELETE' })
+    if (!response.ok) throw await parseError(response)
   },
 
   async uploadKnowledgeDocument(

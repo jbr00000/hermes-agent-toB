@@ -1,6 +1,6 @@
 import { atom } from 'jotai'
 import { atomWithStorage } from 'jotai/utils'
-import type { AttachedFile, KnowledgeSearchMode, WorkspaceMode, WorkTab } from './types'
+import type { KnowledgeSearchMode, WorkspaceMode, WorkTab } from './types'
 
 export const tabsAtom = atom<WorkTab[]>([])
 export const activeTabIdAtom = atom<string | null>(null)
@@ -16,10 +16,6 @@ export const knowledgeQaKbIdAtom = atomWithStorage<string | null>('hermes-knowle
 /** 知识库问答的检索模式：fast 快速（默认）/ precise 精准（轻量模型改写，更慢更准） */
 export const knowledgeQaSearchModeAtom = atomWithStorage<KnowledgeSearchMode>('hermes-knowledge-qa-search-mode', 'fast', undefined, { getOnInit: true })
 export const selectedSpaceAtom = atom<string>('litigation')
-/** 附件按会话/任务隔离（key = refId）：全局共享会在标签间串扰。
- *  注意：附件当前仅本地暂存，不参与问答/执行（上传通道未接入）。 */
-export const attachedFilesAtom = atom<Record<string, AttachedFile[]>>({})
-export const chatAttachedFilesAtom = atom<Record<string, AttachedFile[]>>({})
 
 export function tabId(ownerId: string, type: WorkTab['type'], refId: string): string {
   return `${ownerId}:${type}:${refId}`

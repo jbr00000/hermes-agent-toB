@@ -1,8 +1,8 @@
 import * as React from 'react'
-import { ShieldCheck } from 'lucide-react'
+import { FileText, ShieldCheck } from 'lucide-react'
 import { CORTEX_MARK_URL, cn } from '../ui'
 import { Markdown } from '../Markdown'
-import type { ChatMessage, KnowledgeCitation, TabType } from '../../types'
+import type { ChatMessage, KnowledgeCitation, MessageAttachment, TabType } from '../../types'
 
 export const MessageBubble = React.memo(function MessageBubble({
   message,
@@ -34,7 +34,11 @@ export const MessageBubble = React.memo(function MessageBubble({
         {assistant || system ? (
           <Markdown content={message.content || '...'} />
         ) : (
-          <div className="whitespace-pre-wrap break-words">{message.content || '...'}</div>
+          // content 可能拼了附件全文（注入模型用），气泡只显示用户原文
+          <div className="whitespace-pre-wrap break-words">{(message.displayContent ?? message.content) || '...'}</div>
+        )}
+        {!assistant && !system && message.attachments && message.attachments.length > 0 && (
+          <AttachmentRefs attachments={message.attachments} />
         )}
         {assistant && !system && message.citations && message.citations.length > 0 && (
           <CitationCards citations={message.citations} onOpenTab={onOpenTab} />
@@ -53,6 +57,31 @@ export const MessageBubble = React.memo(function MessageBubble({
     </div>
   )
 })
+
+/** 用户气泡下方的小号附件引用：full 不标注，truncated/skipped 明示注入结果。 */
+function AttachmentRefs({ attachments }: { attachments: MessageAttachment[] }) {
+  return (
+    <div className="mt-2 flex flex-wrap gap-1.5 border-t border-white/15 pt-2">
+      {attachments.map((attachment) => (
+        <span
+          key={attachment.id}
+          className="flex h-6 max-w-52 items-center gap-1 rounded border border-white/20 bg-white/10 px-1.5 text-[11px] text-white/85"
+        >
+          <FileText size={11} className="shrink-0" />
+          <span className="truncate">{attachment.fileName}</span>
+          {attachment.status === 'truncated' && (
+            <span className="shrink-0 text-amber-300">
+              已截断（{attachment.includedTokens}/{attachment.tokenCount} tokens）
+            </span>
+          )}
+          {attachment.status === 'skipped' && (
+            <span className="shrink-0 text-amber-300">未注入</span>
+          )}
+        </span>
+      ))}
+    </div>
+  )
+}
 
 /** 知识库问答的"参考来源"卡片列表：文档名 + 分块标题 + 摘要 + 序号 badge。 */
 function CitationCards({

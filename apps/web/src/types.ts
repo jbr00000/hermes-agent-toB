@@ -181,6 +181,20 @@ export interface ChatMessage {
   thinkingStartedAt?: number
   /** 知识库问答的引用来源（assistant 消息；流式中由 citations 事件填充，刷新后由 metadata 回填） */
   citations?: KnowledgeCitation[]
+  /** 用户原文：content 可能拼了附件全文（注入模型用），气泡展示优先用这个 */
+  displayContent?: string
+  /** 本轮注入的附件明细（user 消息；由 metadata.attachments 回填） */
+  attachments?: MessageAttachment[]
+}
+
+/** 一轮消息里附件全文的注入结果（对齐 server/uploads.py 的 usage 明细） */
+export interface MessageAttachment {
+  id: string
+  fileName: string
+  tokenCount: number
+  includedTokens: number
+  /** full=全文注入 · truncated=超预算截断 · skipped=预算耗尽/产物缺失未注入 */
+  status: 'full' | 'truncated' | 'skipped'
 }
 
 export interface ActiveModelRun {
@@ -201,10 +215,29 @@ export interface ConversationDetail {
   activeRun: ActiveModelRun | null
 }
 
-export interface AttachedFile {
+/** 临时上传附件（chat 会话 / agent 任务问答上下文；对齐 server/storage/models.py UploadedFile） */
+export type UploadOwnerType = 'session' | 'task'
+export type UploadParseStatus = 'parsing' | 'ready' | 'failed'
+export interface UploadedFile {
   id: string
-  name: string
-  size: number
+  ownerType: UploadOwnerType
+  ownerId: string
+  fileName: string
+  fileExt: string
+  sizeBytes: number
+  parseStatus: UploadParseStatus
+  parseError: string | null
+  /** 解析全文的 token 数（ready 后才有意义），预算条与 chip 用 */
+  tokenCount: number
+  createdAt: number
+}
+
+/** GET /uploads 附带的 token 预算用量（over_budget=true 时前端显示黄色警告条，不阻断发送） */
+export interface UploadBudget {
+  maxInputTokens: number
+  budgetTokens: number
+  fileTokens: number
+  overBudget: boolean
 }
 
 export interface KnowledgeSpace {

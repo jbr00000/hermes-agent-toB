@@ -24,14 +24,15 @@ import {
   useChatRunManager,
 } from '../../chatRunManager'
 import {
-  chatAttachedFilesAtom,
   knowledgeQaEnabledAtom,
   knowledgeQaKbIdAtom,
   knowledgeQaSearchModeAtom,
 } from '../../state'
-import type { AttachedFile, ConversationSummary, TabType } from '../../types'
+import type { ConversationSummary, TabType } from '../../types'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { Badge, cn, IconButton, MessageSkeleton } from '../ui'
+import { AttachmentBudgetBar, AttachmentChips } from '../uploads/AttachmentChips'
+import { useAttachments, validateSelection } from '../uploads/useAttachments'
 import { KnowledgeQaPicker } from './KnowledgeQaPicker'
 import { MessageBubble } from './MessageBubble'
 
@@ -53,7 +54,6 @@ export function ChatView({
   onConversationUpdated: (sessionId: string, title: string) => void
   onConversationArchived: (sessionId: string) => void
 }) {
-  const [filesByTab, setFilesByTab] = useAtom(chatAttachedFilesAtom)
   const [knowledgeQaEnabled] = useAtom(knowledgeQaEnabledAtom)
   const [knowledgeQaKbId] = useAtom(knowledgeQaKbIdAtom)
   const [knowledgeQaSearchMode] = useAtom(knowledgeQaSearchModeAtom)
@@ -89,11 +89,9 @@ export function ChatView({
   const shouldFollowOutputRef = React.useRef(true)
   const wasRunningRef = React.useRef(false)
 
-  // 附件按本会话隔离（atom 是 { [sessionId]: 文件列表 }），切会话互不串扰
-  const files = React.useMemo(() => filesByTab[sessionId] ?? [], [filesByTab, sessionId])
-  const setFiles = React.useCallback((updater: (current: AttachedFile[]) => AttachedFile[]) => {
-    setFilesByTab((current) => ({ ...current, [sessionId]: updater(current[sessionId] ?? []) }))
-  }, [sessionId, setFilesByTab])
+  // 附件服务端持久化（owner=本会话）：parsing 中的文件存在时 hook 内每 1.5s 轮询
+  const { files, budget: uploadBudget, upload: uploadAttachments, remove: removeAttachment } =
+    useAttachments('session', sessionId)
 
   React.useEffect(() => {
     if (query.data) chatRunManager.reconcileServerState(sessionId, query.data)
@@ -245,15 +243,19 @@ export function ChatView({
     })
   }, [chatRunManager, query.data?.activeRun?.id, run, sessionId])
 
-  // 附件仅本地暂存（上传通道未接入），选中即入列，没有"解析中"的假状态
+  // 选中即上传（服务端解析全文，chip 轮询 parsing→ready/failed）；解析中不阻塞发送
   const addFiles = (selected: FileList | null) => {
     if (!selected?.length) return
-    const next = Array.from(selected).map((file) => ({
-      id: `chat-file-${Date.now()}-${file.name}`,
-      name: file.name,
-      size: file.size,
-    }))
-    setFiles((current) => [...current, ...next])
+    const picked = Array.from(selected)
+    const validationError = validateSelection(files.length, picked)
+    if (validationError) {
+      setActionError(validationError)
+      return
+    }
+    setActionError(null)
+    uploadAttachments.mutate(picked, {
+      onError: (error) => setActionError(error instanceof Error ? error.message : '附件上传失败'),
+    })
   }
 
   return (
@@ -376,6 +378,11 @@ export function ChatView({
       <div className="border-t border-line bg-[#fbfbfc] px-3 py-3 sm:px-6 sm:py-4">
         <div className="mx-auto max-w-4xl">
           <div className="rounded-md border border-line bg-panel shadow-sm">
+          <AttachmentChips
+            files={files}
+            onRemove={(fileId) => removeAttachment.mutate(fileId)}
+            removing={removeAttachment.isPending}
+          />
           <textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -390,16 +397,14 @@ export function ChatView({
           />
           <div className="flex items-center justify-between gap-2 border-t border-line px-2 py-2 sm:px-3">
             <div className="flex min-w-0 items-center gap-1">
-              <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(event) => addFiles(event.target.files)} />
+              <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(event) => { addFiles(event.target.files); event.target.value = '' }} />
               <IconButton label="添加只读附件" icon={Paperclip} onClick={() => fileInputRef.current?.click()} />
               <IconButton label="语音输入" icon={Mic} />
               {knowledgeQaAvailable && (
                 <KnowledgeQaPicker bases={knowledgeBasesQuery.data ?? []} />
               )}
-              {files.length > 0 && (
-                <span className="ml-1 hidden truncate text-xs text-zinc-500 sm:inline">
-                  {files.length} 个附件（本地暂存，暂不参与问答）
-                </span>
+              {uploadAttachments.isPending && (
+                <span className="ml-1 text-xs text-zinc-500">上传中…</span>
               )}
             </div>
             <button
@@ -414,6 +419,7 @@ export function ChatView({
               {isRunning ? '停止' : '发送'}
             </button>
           </div>
+          <AttachmentBudgetBar budget={uploadBudget} />
           </div>
         </div>
       </div>

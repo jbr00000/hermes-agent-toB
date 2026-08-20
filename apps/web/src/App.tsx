@@ -51,8 +51,6 @@ import { AuditView } from './views/AuditView'
 import LoginBackdrop from './components/LoginBackdrop'
 import {
   activeTabIdAtom,
-  attachedFilesAtom,
-  chatAttachedFilesAtom,
   createTab,
   petVisibleAtom,
   rightPanelCollapsedAtom,
@@ -142,8 +140,6 @@ export default function App(): React.ReactElement {
   const [restoring, setRestoring] = React.useState(true)
   const [, setTabs] = useAtom(tabsAtom)
   const [, setActiveTabId] = useAtom(activeTabIdAtom)
-  const [, setAttachedFiles] = useAtom(attachedFilesAtom)
-  const [, setChatAttachedFiles] = useAtom(chatAttachedFilesAtom)
   const queryClient = useQueryClient()
   const chatRunManager = useChatRunManager()
   const agentRunManager = useAgentRunManager()
@@ -175,8 +171,6 @@ export default function App(): React.ReactElement {
         queryClient.clear()
         setTabs([])
         setActiveTabId(null)
-        setAttachedFiles({})
-        setChatAttachedFiles({})
         setUser(null)
       }}
     />
