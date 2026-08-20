@@ -51,7 +51,7 @@ agent:
     assert captured["provider"] == "custom"
     assert captured["model"] == "llama-3.3"
     assert captured["reasoning_config"] == {"enabled": True, "effort": "low"}
-    assert captured["enabled_toolsets"] == ["db", "terminal", "web", "knowledge"]
+    assert captured["enabled_toolsets"] == ["db", "terminal", "file", "web", "knowledge"]
     assert captured["tool_start_callback"] is callback
 
 
