@@ -76,8 +76,9 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
     timed_out = threading.Event()
     lease_lost = threading.Event()
     cancel_requested = threading.Event()
-    # controlled 档等待人工审批可能长达数分钟，默认运行上限放宽到 3600s。
-    _default_timeout = "3600" if permission_mode == "controlled" else "300"
+    # controlled 档等待人工审批可能长达数分钟，默认运行上限放宽到 3600s；
+    # 非受控档真实执行任务（联网抓取 + 沙箱产文件）也常超过 5 分钟，默认 1800s。
+    _default_timeout = "3600" if permission_mode == "controlled" else "1800"
     max_runtime = max(30, int(os.environ.get("HERMES_AGENT_RUN_TIMEOUT_SECONDS", _default_timeout)))
 
     started_run = repository.start_task_run(request_id, worker_id)
