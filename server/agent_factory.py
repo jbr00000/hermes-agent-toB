@@ -11,6 +11,7 @@ def build_agent(
     prefill_messages=None,
     mode: str = None,
     permission_mode: str = "read",
+    execute_cwd: str | None = None,
     knowledge_kb_id: str | None = None,
     knowledge_kb_name: str | None = None,
     tool_progress_callback=None,
@@ -95,12 +96,24 @@ def build_agent(
             "continued as an Agent task."
         )
     if mode == "execute":
+        if execute_cwd:
+            deliverable_rule = (
+                f"1. 需要交付给用户的文件（Excel、Word、CSV、报告等）一律写入目录 "
+                f"{execute_cwd} —— 终端的默认当前目录就是它，write_file 等文件工具"
+                "的相对路径也以它为基准；使用清晰的文件名（可以用中文，"
+                "如「费用测算结果.xlsx」）。绝对不要写入 ~、/root、/tmp 或任何其他目录，"
+                "写错了位置用户就无法在界面下载，等于没有交付。\n"
+            )
+        else:
+            deliverable_rule = (
+                "1. 需要交付给用户的文件（Excel、Word、CSV、报告等）一律写入当前工作目录"
+                "（即本任务在沙箱工作区中的专属目录），使用清晰的文件名（可以用中文，"
+                "如「费用测算结果.xlsx」），不要写入其他目录。\n"
+            )
         parts.append(
             "当前是执行模式，终端与文件工具运行在 Docker 沙箱内。交付物规则：\n"
-            "1. 需要交付给用户的文件（Excel、Word、CSV、报告等）一律写入当前工作目录"
-            "（即本任务在沙箱工作区中的专属目录），使用清晰的文件名（可以用中文，"
-            "如「费用测算结果.xlsx」），不要写入其他目录。\n"
-            "2. 不要尝试把文件复制到宿主机或用户的桌面/下载目录——沙箱无法也不应"
+            + deliverable_rule
+            + "2. 不要尝试把文件复制到宿主机或用户的桌面/下载目录——沙箱无法也不应"
             "访问宿主文件系统；用户在 Web 界面的「交付文件」卡片中下载产物。\n"
             "3. 完成后在回复中列出交付的文件名，并说明用户可在界面上下载。"
         )

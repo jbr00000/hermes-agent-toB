@@ -281,6 +281,72 @@ def test_execute_with_failed_tool_marks_task_failed(monkeypatch, tmp_path) -> No
     assert detail["events"][-1]["status"] == "failed"
 
 
+def test_execute_with_failed_read_tool_still_completes(monkeypatch, tmp_path) -> None:
+    """观测类工具（read_file/browser_* 等）失败不应判负整轮——模型会自行绕行，
+    只有写入/执行类工具的最终失败才影响交付物完整性。"""
+    client = _client(monkeypatch, tmp_path)
+    headers = _login(client, "admin", "correct-horse-battery-staple")
+    task = client.post("/tasks", headers=headers, json={}).json()["task"]
+
+    class FakeAgent:
+        provider = "custom"
+        model = "test-model"
+        reasoning_config = {"enabled": False}
+        enabled_toolsets = ["db", "terminal"]
+
+        def __init__(self, callbacks: dict) -> None:
+            self.callbacks = callbacks
+
+        def chat(self, message, stream_callback=None, task_id=None):
+            if self.callbacks["mode"] == "execute":
+                # 观测类工具失败（模型随后绕行），写入类工具最终成功
+                self.callbacks["tool_start_callback"]("tool-1", "read_file", {})
+                self.callbacks["tool_complete_callback"](
+                    "tool-1", "read_file", {}, '{"status":"error","error":"file not found"}'
+                )
+                self.callbacks["tool_start_callback"]("tool-2", "terminal", {})
+                self.callbacks["tool_complete_callback"]("tool-2", "terminal", {}, "done")
+                return "交付文件已生成。"
+            return "1. Run the command in the sandbox."
+
+        def interrupt(self, message=None):
+            return None
+
+    import server.agent_factory as agent_factory
+
+    monkeypatch.setattr(
+        agent_factory,
+        "build_agent",
+        lambda **kwargs: FakeAgent(kwargs),
+    )
+
+    assert client.post(
+        f"/tasks/{task['id']}/plan",
+        headers=headers,
+        json={"message": "plan"},
+    ).status_code == 200
+    assert client.post(f"/tasks/{task['id']}/approve", headers=headers).status_code == 200
+    assert client.put(
+        f"/tasks/{task['id']}/permission",
+        headers=headers,
+        json={"mode": "full"},
+    ).status_code == 200
+
+    response = client.post(
+        f"/tasks/{task['id']}/execute",
+        headers=headers,
+        json={},
+    )
+    assert response.status_code == 200
+    detail = client.get(f"/tasks/{task['id']}", headers=headers).json()["task"]
+    assert detail["status"] == "completed"
+    # 失败的 read_file 事件仍如实记录在时间线里
+    assert any(
+        event["tool_name"] == "read_file" and event["status"] == "failed"
+        for event in detail["events"]
+    )
+
+
 def test_agent_interruption_is_persisted_as_cancelled(monkeypatch, tmp_path) -> None:
     client = _client(monkeypatch, tmp_path)
     headers = _login(client, "admin", "correct-horse-battery-staple")

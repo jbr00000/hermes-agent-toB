@@ -419,6 +419,7 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
             prefill_messages=history,
             mode=phase,
             permission_mode=permission_mode,
+            execute_cwd=task_container_cwd(task_id) if phase == "execute" else None,
             tool_progress_callback=on_tool_progress,
             tool_start_callback=on_tool_start,
             tool_complete_callback=on_tool_complete,
@@ -469,8 +470,16 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
             raise AgentLeaseLost(request_id)
         cancelled = cancel_requested.is_set() and not timed_out.is_set()
         with tool_status_lock:
+            # 只有「写入/执行类」工具（terminal/process/write_file/patch 等）的
+            # 最终失败才判整轮失败——它们直接影响交付物完整性。观测类工具
+            # （browser_*/read_file/search_files/db_query 等）调用失败是探索
+            # 过程中的常态，模型会自行重试或绕行，不应把已完成交付的 run 判负。
+            # tool_statuses 按工具名记录最后一次状态：同一工具失败后重试成功
+            # 即视为已恢复。
             unresolved_tool_failure = any(
-                status == "failed" for status in tool_statuses.values()
+                status == "failed"
+                and tool_risk_level(name) in ("high_risk", "controlled_write")
+                for name, status in tool_statuses.items()
             )
         assistant_status = (
             "failed"

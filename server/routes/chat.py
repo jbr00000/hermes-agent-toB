@@ -233,6 +233,7 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
     )
     permission_mode = "read" if effective_mode in {"chat", "plan", "knowledge"} else permission["mode"]
     sandbox_task_id = None
+    execute_cwd = None
     if task is not None:
         from server.sandbox import task_container_cwd, task_workspace_dir, user_sandbox_key
 
@@ -240,10 +241,11 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
         if effective_mode == "execute":
             # 共享用户沙箱内按任务分目录：预建宿主机子目录 + 钉住容器内 cwd。
             task_workspace_dir(user_id, task["id"])
+            execute_cwd = task_container_cwd(task["id"])
             from tools.terminal_tool import register_task_env_overrides
 
             register_task_env_overrides(
-                sandbox_task_id, {"cwd": task_container_cwd(task["id"])}
+                sandbox_task_id, {"cwd": execute_cwd}
             )
 
     request_id = req.request_id or str(uuid.uuid4())
@@ -489,6 +491,7 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
                 prefill_messages=history,
                 mode=effective_mode,
                 permission_mode=permission_mode,
+                execute_cwd=execute_cwd,
                 knowledge_kb_id=knowledge_base["id"] if knowledge_base else None,
                 knowledge_kb_name=(
                     str(knowledge_base.get("name") or "") if knowledge_base else None
