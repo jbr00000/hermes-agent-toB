@@ -280,7 +280,48 @@ controlled 档（逐条审批）的待决命令列表；前端重连时用它重
 
 ---
 
-### 3.5 记忆 Memory
+### 3.5 附件 Uploads
+
+临时上传文件（chat 会话 / agent 任务共用）：用户随消息传文件做问答上下文，服务端**只解析全文、不分块**，注入下一轮模型消息。`owner_type=session` 挂在 chat 会话，`owner_type=task` 挂在 agent 任务；随 owner 删除。每个 owner 累计最多 **5 个**、单文件 ≤ **20MB**，扩展名白名单与知识库解析器一致。
+
+注入规则（服务端行为，前端只需展示状态）：
+- chat / plan 模式：ready 附件全文拼进**下一条 user 消息**发给模型并落库；已注入过的文件不重复注入（历史重放 + 前缀缓存命中）。
+- agent execute 阶段：不注文本，原件暂存进沙箱任务工作区 `uploads/` 供模型用终端读取；交付物列表不含 `uploads/`。
+- token 预算 = 模型输入上限 − 历史 − system 粗估(4k) − 输出余量(8k)；超预算**不阻断发送**，从最新上传的文件开始截断/跳过，并在消息 `metadata.attachments` 里逐文件标注 `full | truncated | skipped`。消息 `metadata.display_content` 是用户原文，气泡展示用它而不是注入全文后的 content。
+
+#### `POST /uploads`（multipart）
+```
+表单字段：owner_type = "session" | "task"；owner_id；files = 1~N 个文件
+```
+```json
+// 响应 201（落盘即返回，解析在后台线程进行，多半仍是 parsing）
+{ "files": [ { "id": "...", "owner_type": "session", "owner_id": "...",
+               "file_name": "案情.txt", "file_ext": ".txt", "size_bytes": 1024,
+               "parse_status": "parsing", "parse_error": null,
+               "token_count": 0, "created_at": 1783... } ] }
+// 400 超 5 个 / 不支持的格式 / 空文件；413 单文件超 20MB；404 owner 不存在或不属于你
+```
+
+#### `GET /uploads?owner_type=&owner_id=`
+列出某 owner 的全部附件 + token 预算用量。有 parsing 中的文件时前端轮询（~1.5s）。
+```json
+{ "files": [ { "id": "...", "parse_status": "ready", "token_count": 5320, ... } ],
+  "budget": { "max_input_tokens": 128000, "budget_tokens": 116000,
+              "file_tokens": 150000, "over_budget": true } }
+// over_budget=true 时前端显示黄色警告条（不阻断发送）
+```
+
+#### `DELETE /uploads/{file_id}`
+删除附件（原件 + 解析产物 + 沙箱暂存副本）。
+```json
+// 响应 200
+{ "deleted": "<file_id>" }
+// 404 不存在或不属于你
+```
+
+---
+
+### 3.6 记忆 Memory
 
 持久记忆（跨会话，按 user_id 隔离）。存进去后，该用户**每次 /chat 都会自动注入**到 agent 系统提示。
 
@@ -306,7 +347,7 @@ controlled 档（逐条审批）的待决命令列表；前端重连时用它重
 
 ---
 
-### 3.6 用户管理 Users（仅 superadmin）
+### 3.7 用户管理 Users（仅 superadmin）
 
 所有 `/users` 端点都需 **superadmin** token（admin/user 返回 403）。防锁死规则：不能删除/禁用/降级自己，也不能删除/禁用/降级最后一个 active superadmin（400/409）。所有变更写审计（`user_admin`）。
 
@@ -370,7 +411,7 @@ Patch 语义：只传要改的键，缺省键保持原值。
 
 ---
 
-### 3.7 功能开关 Features
+### 3.8 功能开关 Features
 
 #### `GET /features`
 返回当前功能开关状态（前端据此渲染「是否启用宿主机访问」按钮）与当前角色的数据权限。
@@ -383,7 +424,7 @@ Patch 语义：只传要改的键，缺省键保持原值。
 
 ---
 
-### 3.8 健康 Health
+### 3.9 健康 Health
 
 #### `GET /health`（无需鉴权）
 ```json
@@ -393,7 +434,7 @@ Patch 语义：只传要改的键，缺省键保持原值。
 
 ---
 
-### 3.9 知识库 Knowledge
+### 3.10 知识库 Knowledge
 
 企业知识库，按「知识库（base）→ 文档 → 分块」三级组织，使用分三步：**① 新建知识库 → ② 往库里上传文档（只落盘，不解析）→ ③ 勾选文档批量触发解析**（构建链路见 [`知识库构建方案.md`](知识库构建方案.md)）。`deployment.yaml` 里 `knowledge.enabled=false`（缺省）时**整组路由 404**，前端据此显示"当前部署未启用知识库"。此外**全部端点（含 admin 的变更端点）都要求用户的 `features.knowledge=true`**，被关掉的用户访问一律 403。
 
