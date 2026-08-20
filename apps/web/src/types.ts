@@ -111,6 +111,15 @@ export interface AgentTaskDetail {
   }>
 }
 
+/** 任务交付文件（沙箱工作区产物，GET /tasks/{id}/artifacts） */
+export interface TaskArtifact {
+  name: string
+  path: string
+  sizeBytes: number
+  modifiedAt: number
+  mediaType: string | null
+}
+
 export type UserRole = 'superadmin' | 'admin' | 'user'
 
 export interface UserFeatures {

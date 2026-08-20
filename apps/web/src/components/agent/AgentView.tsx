@@ -15,6 +15,7 @@ import { MessageBubble } from '../chat/MessageBubble'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { cn, IconButton, MessageSkeleton } from '../ui'
 import { PermissionSegment } from './PermissionSegment'
+import { ArtifactsCard } from './ArtifactsCard'
 import { TaskPlanPanel } from './TaskPlanPanel'
 import { ToolApprovalPanel } from './ToolApprovalPanel'
 import { ToolEventTimeline } from './ToolEventTimeline'
@@ -244,6 +245,7 @@ export function AgentView({ taskId, title, onDeleted, onOpenTab }: { taskId: str
             messages.map((message) => <MessageBubble key={message.id} message={message} onOpenTab={onOpenTab} />)
           )}
           <ToolEventTimeline events={toolEvents} activeRunId={run?.requestId ?? task?.currentRunId ?? null} />
+          <ArtifactsCard taskId={taskId} active={active} />
           {pendingApprovals.length > 0 && (
             <ToolApprovalPanel
               approvals={pendingApprovals}

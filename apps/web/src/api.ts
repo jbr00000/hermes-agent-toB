@@ -15,6 +15,7 @@ import type {
   KnowledgeStats,
   PermissionMode,
   SessionSummary,
+  TaskArtifact,
   TaskPermission,
   TaskPlan,
   TaskRun,
@@ -807,6 +808,42 @@ export const api = {
     if (!response.ok) throw await parseError(response)
     const body = await response.json() as { permission: BackendTaskPermission }
     return toPermission(body.permission)
+  },
+
+  async listTaskArtifacts(taskId: string): Promise<TaskArtifact[]> {
+    const response = await apiFetch(`/tasks/${encodeURIComponent(taskId)}/artifacts`)
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as {
+      artifacts: Array<{
+        name: string
+        path: string
+        size_bytes: number
+        modified_at: number
+        media_type: string | null
+      }>
+    }
+    return body.artifacts.map((artifact) => ({
+      name: artifact.name,
+      path: artifact.path,
+      sizeBytes: artifact.size_bytes,
+      modifiedAt: artifact.modified_at,
+      mediaType: artifact.media_type,
+    }))
+  },
+
+  /** 交付文件下载：必须走 fetch（带 JWT 头）+ blob + objectURL，window.open 无法鉴权 */
+  async downloadTaskArtifact(taskId: string, path: string, filename: string): Promise<void> {
+    const response = await apiFetch(
+      `/tasks/${encodeURIComponent(taskId)}/artifacts/download?path=${encodeURIComponent(path)}`,
+    )
+    if (!response.ok) throw await parseError(response)
+    const blob = await response.blob()
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = filename
+    anchor.click()
+    URL.revokeObjectURL(url)
   },
 
   async approveTask(taskId: string): Promise<AgentTaskDetail> {

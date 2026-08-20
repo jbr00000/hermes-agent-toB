@@ -1,10 +1,13 @@
 """User-scoped Agent task lifecycle endpoints."""
 from __future__ import annotations
 
+import mimetypes
 import uuid
+from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from server import sessions as session_service
@@ -102,6 +105,82 @@ def list_tasks(user: dict = Depends(get_current_user)):
 @router.get("/{task_id}")
 def get_task(task_id: str, user: dict = Depends(get_current_user)):
     return {"task": _task_detail(user["id"], task_id)}
+
+
+_ARTIFACTS_LIMIT = 200
+
+
+def _task_artifacts_root(user_id: str, task_id: str) -> Path:
+    """任务工作区（宿主机侧，绑定挂载进沙箱容器）的属主校验 + 路径解析。"""
+    if get_repository().get_owned_task(user_id, task_id) is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    from server.sandbox import task_workspace_dir
+
+    try:
+        return task_workspace_dir(user_id, task_id, create=False)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="task not found") from None
+
+
+def _resolve_artifact_path(root: Path, raw_path: str) -> Path:
+    """把客户端给的相对路径钉死在任务工作区内（防 ../ 逃逸与隐藏文件）。"""
+    rel = PurePosixPath(raw_path)
+    if (
+        rel.is_absolute()
+        or not rel.parts
+        or any(part in {"", ".", ".."} or part.startswith(".") for part in rel.parts)
+    ):
+        raise HTTPException(status_code=400, detail="invalid artifact path")
+    base = root.resolve()
+    target = (base / Path(rel)).resolve()
+    if target == base or base not in target.parents:
+        raise HTTPException(status_code=400, detail="invalid artifact path")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="artifact not found")
+    return target
+
+
+@router.get("/{task_id}/artifacts")
+def list_task_artifacts(task_id: str, user: dict = Depends(get_current_user)):
+    """列出任务工作区里的交付文件（沙箱内 cwd 的产物，递归、排除隐藏文件）。"""
+    root = _task_artifacts_root(user["id"], task_id)
+    artifacts: list[dict] = []
+    if root.is_dir():
+        for path in sorted(root.rglob("*")):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(root)
+            if any(part.startswith(".") for part in rel.parts):
+                continue
+            stat = path.stat()
+            artifacts.append(
+                {
+                    "name": path.name,
+                    "path": rel.as_posix(),
+                    "size_bytes": stat.st_size,
+                    "modified_at": stat.st_mtime,
+                    "media_type": mimetypes.guess_type(path.name)[0],
+                }
+            )
+            if len(artifacts) >= _ARTIFACTS_LIMIT:
+                break
+    return {"artifacts": artifacts}
+
+
+@router.get("/{task_id}/artifacts/download")
+def download_task_artifact(
+    task_id: str,
+    path: str = Query(min_length=1, max_length=512),
+    user: dict = Depends(get_current_user),
+):
+    root = _task_artifacts_root(user["id"], task_id)
+    target = _resolve_artifact_path(root, path)
+    return FileResponse(
+        target,
+        filename=target.name,
+        media_type=mimetypes.guess_type(target.name)[0]
+        or "application/octet-stream",
+    )
 
 
 @router.delete("/{task_id}")
