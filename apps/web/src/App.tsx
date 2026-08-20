@@ -55,6 +55,7 @@ import {
   chatAttachedFilesAtom,
   createTab,
   petVisibleAtom,
+  rightPanelCollapsedAtom,
   selectedSpaceAtom,
   tabId,
   tabsAtom,
@@ -381,6 +382,7 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
   const [tabs, setTabs] = useAtom(tabsAtom)
   const [activeTabId, setActiveTabId] = useAtom(activeTabIdAtom)
   const [workspaceMode, setWorkspaceMode] = useAtom(workspaceModeAtom)
+  const [rightPanelCollapsed] = useAtom(rightPanelCollapsedAtom)
   const [hydrated, setHydrated] = React.useState(false)
   const [notice, setNotice] = React.useState<string | null>(null)
   const [mobileSidebarOpen, setMobileSidebarOpen] = React.useState(false)
@@ -677,7 +679,10 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
             onLogout={() => void api.logout().finally(onLogout)}
           />
           <TabBar tabs={tabs} activeTabId={activeTabId} onActivate={activateTab} onClose={closeTab} />
-          <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden xl:grid-cols-[minmax(0,1fr)_340px]">
+          <div className={cn(
+            'grid min-h-0 flex-1 grid-cols-1 overflow-hidden',
+            rightPanelCollapsed ? 'xl:grid-cols-[minmax(0,1fr)_40px]' : 'xl:grid-cols-[minmax(0,1fr)_340px]',
+          )}>
             <main className="relative min-w-0 overflow-hidden border-r border-line bg-panel">
               {activeTab ? (
                 <TabContent

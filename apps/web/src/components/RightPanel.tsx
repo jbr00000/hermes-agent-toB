@@ -10,19 +10,22 @@ import {
   FileText,
   LockKeyhole,
   PanelRight,
+  PanelRightClose,
+  PanelRightOpen,
   ShieldCheck,
   type LucideIcon,
 } from 'lucide-react'
 import { api } from '../api'
 import { isAgentRunActive, useAgentRun } from '../agentRunManager'
 import { mockApi } from '../mockApi'
-import { attachedFilesAtom, chatAttachedFilesAtom, selectedSpaceAtom } from '../state'
+import { attachedFilesAtom, chatAttachedFilesAtom, rightPanelCollapsedAtom, selectedSpaceAtom } from '../state'
 import type { AgentTaskDetail, KnowledgeDocument, PermissionMode, TabType, WorkTab } from '../types'
 import { PermissionSegment } from './agent/PermissionSegment'
-import { Badge, cn, formatBytes, InfoRow } from './ui'
+import { Badge, cn, formatBytes, IconButton, InfoRow } from './ui'
 
 /** 右侧上下文面板：agent 标签显示任务上下文，chat 标签显示问答上下文。 */
 export function RightPanel({ activeTab, onOpenTab }: { activeTab: WorkTab | null; onOpenTab?: (type: TabType, refId: string, title: string) => void }) {
+  const [collapsed, setCollapsed] = useAtom(rightPanelCollapsedAtom)
   const [filesByTab] = useAtom(attachedFilesAtom)
   const queryClient = useQueryClient()
   const taskId = activeTab?.type === 'agent' ? activeTab.refId : ''
@@ -54,8 +57,12 @@ export function RightPanel({ activeTab, onOpenTab }: { activeTab: WorkTab | null
     })
   }
 
+  if (collapsed) {
+    return <CollapsedStrip onExpand={() => setCollapsed(false)} />
+  }
+
   if (activeTab?.type === 'chat') {
-    return <ChatRightPanel sessionId={activeTab.refId} referencedDocs={referencedDocs} onOpenTab={onOpenTab} />
+    return <ChatRightPanel sessionId={activeTab.refId} referencedDocs={referencedDocs} onOpenTab={onOpenTab} onCollapse={() => setCollapsed(true)} />
   }
 
   return (
@@ -65,7 +72,10 @@ export function RightPanel({ activeTab, onOpenTab }: { activeTab: WorkTab | null
           <PanelRight size={16} />
           任务上下文
         </div>
-        <Badge className="bg-zinc-100 text-zinc-600">{activeTab?.type ?? 'none'}</Badge>
+        <div className="flex items-center gap-1.5">
+          <Badge className="bg-zinc-100 text-zinc-600">{activeTab?.type ?? 'none'}</Badge>
+          <IconButton label="收起面板" icon={PanelRightClose} onClick={() => setCollapsed(true)} />
+        </div>
       </div>
       <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto p-4">
         <PanelSection title="权限模式" icon={ShieldCheck}>
@@ -114,7 +124,7 @@ export function RightPanel({ activeTab, onOpenTab }: { activeTab: WorkTab | null
   )
 }
 
-function ChatRightPanel({ sessionId, referencedDocs, onOpenTab }: { sessionId: string; referencedDocs: KnowledgeDocument[]; onOpenTab?: (type: TabType, refId: string, title: string) => void }) {
+function ChatRightPanel({ sessionId, referencedDocs, onOpenTab, onCollapse }: { sessionId: string; referencedDocs: KnowledgeDocument[]; onOpenTab?: (type: TabType, refId: string, title: string) => void; onCollapse: () => void }) {
   const [filesByTab] = useAtom(chatAttachedFilesAtom)
   const [selectedSpace] = useAtom(selectedSpaceAtom)
   const spacesQuery = useQuery({ queryKey: ['spaces'], queryFn: mockApi.listSpaces })
@@ -128,7 +138,10 @@ function ChatRightPanel({ sessionId, referencedDocs, onOpenTab }: { sessionId: s
           <PanelRight size={16} />
           问答上下文
         </div>
-        <Badge className="bg-[#e0ece4] text-[#28513d]">Chat</Badge>
+        <div className="flex items-center gap-1.5">
+          <Badge className="bg-[#e0ece4] text-[#28513d]">Chat</Badge>
+          <IconButton label="收起面板" icon={PanelRightClose} onClick={onCollapse} />
+        </div>
       </div>
       <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto p-4">
         <PanelSection title="安全模式" icon={LockKeyhole}>
@@ -188,6 +201,17 @@ function ChatRightPanel({ sessionId, referencedDocs, onOpenTab }: { sessionId: s
             ))}
           </div>
         </PanelSection>
+      </div>
+    </aside>
+  )
+}
+
+/** 收起后的窄条：只占 40px 宽，点击图标展开面板。 */
+function CollapsedStrip({ onExpand }: { onExpand: () => void }) {
+  return (
+    <aside className="hidden min-h-0 flex-col items-center border-l border-line bg-[#fbfbfc] xl:flex">
+      <div className="flex h-14 items-center justify-center border-b border-line">
+        <IconButton label="展开面板" icon={PanelRightOpen} onClick={onExpand} />
       </div>
     </aside>
   )

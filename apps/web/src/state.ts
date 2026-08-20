@@ -7,6 +7,8 @@ export const activeTabIdAtom = atom<string | null>(null)
 export const workspaceModeAtom = atomWithStorage<WorkspaceMode>('hermes-workspace-mode', 'agent', undefined, { getOnInit: true })
 /** 浮动小猫显隐开关（顶栏切换，localStorage 持久化） */
 export const petVisibleAtom = atomWithStorage<boolean>('hermes-pet-visible', true, undefined, { getOnInit: true })
+/** 右侧上下文面板收起状态（面板头部切换，localStorage 持久化） */
+export const rightPanelCollapsedAtom = atomWithStorage<boolean>('hermes-right-panel-collapsed', false, undefined, { getOnInit: true })
 /** 知识库问答模式开关（chat 输入框；localStorage 持久化） */
 export const knowledgeQaEnabledAtom = atomWithStorage<boolean>('hermes-knowledge-qa-enabled', false, undefined, { getOnInit: true })
 /** 知识库问答的选库限定：null = 全部知识库 */
