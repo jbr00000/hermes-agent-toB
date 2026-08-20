@@ -876,11 +876,14 @@ export const api = {
     requestId: string,
     handlers: ChatStreamHandlers,
     signal?: AbortSignal,
+    message?: string,
   ): Promise<void> {
     const response = await apiFetch(`/tasks/${encodeURIComponent(taskId)}/execute`, {
       method: 'POST',
       signal,
-      body: JSON.stringify({ request_id: requestId }),
+      body: JSON.stringify(message?.trim()
+        ? { request_id: requestId, message }
+        : { request_id: requestId }),
     })
     if (!response.ok) throw await parseError(response)
     await consumeEventStream(response, handlers)

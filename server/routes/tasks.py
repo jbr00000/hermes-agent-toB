@@ -310,14 +310,25 @@ async def execute_task(
     if plan is None or plan.get("status") != "approved":
         raise HTTPException(status_code=409, detail="approved plan required before execute")
     mode_state = session_service.enter_execute_mode(user["id"], task["session_id"])
-    instruction = (req.message or "Execute the approved plan exactly as approved.").strip()
-    message = f"{instruction}\n\nApproved plan:\n{plan['content']}"
+    instruction = (req.message or "").strip()
+    if instruction:
+        # 追加指令（执行阶段的跟进消息）：会话历史已含已批准计划与此前结果，
+        # 不再拼接计划全文；聊天流里显示用户原文而非"执行已批准计划"。
+        message = instruction
+        display_message: str | None = instruction
+    else:
+        message = (
+            "Execute the approved plan exactly as approved."
+            f"\n\nApproved plan:\n{plan['content']}"
+        )
+        display_message = None
     enqueue_agent_run(
         user_id=user["id"],
         task=task,
         request_id=request_id,
         phase="execute",
         message=message,
+        display_message=display_message,
         permission_mode=repository.get_task_permission(user["id"], task_id)["mode"],
         plan_state=mode_state["state"],
     )

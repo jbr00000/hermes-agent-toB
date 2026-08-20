@@ -143,8 +143,8 @@ export class AgentRunManager {
     return this.start(task, 'plan', message)
   }
 
-  startExecute(task: AgentTaskDetail): string {
-    return this.start(task, 'execute', null)
+  startExecute(task: AgentTaskDetail, message?: string): string {
+    return this.start(task, 'execute', message ?? null)
   }
 
   async cancel(taskId: string): Promise<void> {
@@ -493,6 +493,7 @@ export class AgentRunManager {
           requestId,
           handlers,
           controller.signal,
+          message ?? undefined,
         )
       }
       if (!terminalEventReceived && isAgentRunActive(this.getSnapshot(task.id))) {

@@ -372,7 +372,11 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
             title = " ".join(message.split()).strip()[:40] or title
             repository.update_conversation(user_id, session_id, title=title)
 
-        displayed_user_message = "执行已批准计划" if phase == "execute" else message
+        display_override = str(job.get("display_message") or "").strip()
+        displayed_user_message = (
+            display_override
+            or ("执行已批准计划" if phase == "execute" else message)
+        )
         user_message = repository.get_message_for_run(request_id, "user")
         if user_message is None:
             user_message = repository.append_message(

@@ -68,6 +68,9 @@ export function AgentView({ taskId, title, onDeleted, onOpenTab }: { taskId: str
   )
   const approvedPlan = task?.plan?.status === 'approved'
   const canPlan = !active && Boolean(task) && !approvedPlan && taskStatus !== 'completed'
+  // 计划已批准（含已完成/失败/取消）后，输入框切换为「执行模式」：
+  // 追加的指令不再走规划，直接以当前权限档位进入沙箱执行
+  const canFollowUpExecute = !active && approvedPlan
 
   React.useLayoutEffect(() => {
     const element = scrollRef.current
@@ -110,6 +113,23 @@ export function AgentView({ taskId, title, onDeleted, onOpenTab }: { taskId: str
       setActionError(error instanceof Error ? error.message : '无法启动规划')
     }
   }, [agentRunManager, canPlan, draft, task])
+
+  const sendFollowUpExecute = React.useCallback(() => {
+    const text = draft.trim()
+    if (!text || !task || !canFollowUpExecute) return
+    setDraft('')
+    setActionError(null)
+    try {
+      agentRunManager.startExecute(task, text)
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : '无法启动执行')
+    }
+  }, [agentRunManager, canFollowUpExecute, draft, task])
+
+  const sendDraft = React.useCallback(() => {
+    if (canPlan) sendPlanRequest()
+    else sendFollowUpExecute()
+  }, [canPlan, sendPlanRequest, sendFollowUpExecute])
 
   const changePermission = React.useCallback(async (mode: PermissionMode) => {
     if (!task || active) return
@@ -275,15 +295,23 @@ export function AgentView({ taskId, title, onDeleted, onOpenTab }: { taskId: str
               // isComposing 守卫防止中文输入法选词时的 Enter 误触发发送
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault()
-                sendPlanRequest()
+                sendDraft()
               }
             }}
             className="block min-h-[82px] w-full resize-none bg-transparent px-4 py-3 text-sm outline-none"
-            placeholder={approvedPlan ? '计划已批准，可在上方调整权限后执行' : '输入任务目标，Agent 将先生成执行计划（Enter 发送，Shift+Enter 换行）'}
-            disabled={!canPlan}
+            placeholder={approvedPlan
+              ? '执行模式：输入追加指令直接执行（如「把结果保存成 Excel」），按当前权限档位运行'
+              : '规划模式：输入任务目标，Agent 将先生成可审批的执行计划（Enter 发送，Shift+Enter 换行）'}
+            disabled={!canPlan && !canFollowUpExecute}
           />
           <div className="flex items-center justify-between border-t border-line px-3 py-2">
             <div className="flex items-center gap-1.5">
+              <span className={cn(
+                'mr-1 rounded px-1.5 py-0.5 text-[11px] font-medium',
+                approvedPlan ? 'bg-emerald-50 text-success' : 'bg-zinc-100 text-zinc-500',
+              )}>
+                {approvedPlan ? '执行模式' : '规划模式'}
+              </span>
               <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(event) => addFiles(event.target.files)} />
               <IconButton label="添加文件" icon={Paperclip} onClick={() => fileInputRef.current?.click()} />
               <IconButton label="语音输入" icon={Mic} />
@@ -295,10 +323,10 @@ export function AgentView({ taskId, title, onDeleted, onOpenTab }: { taskId: str
             <button
               className={cn(
                 'flex h-8 items-center gap-2 rounded-md px-3 text-sm font-medium transition active:scale-[0.98]',
-                active || (canPlan && draft.trim()) ? 'bg-ink text-white' : 'bg-zinc-200 text-zinc-400',
+                active || ((canPlan || canFollowUpExecute) && draft.trim()) ? 'bg-ink text-white' : 'bg-zinc-200 text-zinc-400',
               )}
-              disabled={!active && (!canPlan || !draft.trim())}
-              onClick={active ? stopTask : sendPlanRequest}
+              disabled={!active && (!(canPlan || canFollowUpExecute) || !draft.trim())}
+              onClick={active ? stopTask : sendDraft}
             >
               {active ? <CircleStop size={15} /> : <Send size={15} />}
               {active ? '停止' : '发送'}

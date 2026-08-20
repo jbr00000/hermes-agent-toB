@@ -59,6 +59,7 @@ def enqueue_agent_run(
     message: str,
     permission_mode: str,
     plan_state: str,
+    display_message: str | None = None,
 ) -> None:
     repository = get_repository()
     runtime_store = get_runtime_store()
@@ -75,6 +76,8 @@ def enqueue_agent_run(
         "session_id": task["session_id"],
         "phase": phase,
         "message": message,
+        # 聊天流里展示的 user 气泡文案；None 时由执行侧按 phase 给默认值
+        "display_message": display_message,
         "permission_mode": permission_mode,
         "plan_state": plan_state,
         "queued_at": now,

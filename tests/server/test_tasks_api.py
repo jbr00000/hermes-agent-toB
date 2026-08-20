@@ -363,6 +363,7 @@ def test_create_agent_task_can_snapshot_owned_chat_context(monkeypatch, tmp_path
 
 
 def test_agent_queue_failure_returns_503_and_releases_task(monkeypatch, tmp_path) -> None:
+
     client = _client(monkeypatch, tmp_path)
     headers = _login(client, "admin", "correct-horse-battery-staple")
     task = client.post("/tasks", headers=headers, json={}).json()["task"]
@@ -385,3 +386,64 @@ def test_agent_queue_failure_returns_503_and_releases_task(monkeypatch, tmp_path
     detail = client.get(f"/tasks/{task['id']}", headers=headers).json()["task"]
     assert detail["current_run_id"] is None
     assert detail["runs"][-1]["status"] == "failed"
+
+
+def test_completed_task_accepts_followup_execute_with_message(monkeypatch, tmp_path) -> None:
+    """任务完成后追加指令：execute 带 message 直接执行，不再拼接计划全文，
+    聊天流里展示的 user 气泡是用户原文而非"执行已批准计划"。"""
+    client = _client(monkeypatch, tmp_path)
+    headers = _login(client, "admin", "correct-horse-battery-staple")
+    task = client.post("/tasks", headers=headers, json={}).json()["task"]
+    captured: list[dict] = []
+
+    class FakeAgent:
+        provider = "custom"
+        model = "test-model"
+        reasoning_config = {"enabled": False}
+        enabled_toolsets = ["db"]
+
+        def __init__(self, callbacks: dict) -> None:
+            self.callbacks = callbacks
+
+        def chat(self, message, stream_callback=None, task_id=None):
+            captured.append({"message": message, "mode": self.callbacks.get("mode")})
+            return "完成"
+
+        def interrupt(self, message=None):
+            return None
+
+    import server.agent_factory as agent_factory
+
+    monkeypatch.setattr(agent_factory, "build_agent", lambda **kwargs: FakeAgent(kwargs))
+
+    assert client.post(
+        f"/tasks/{task['id']}/plan",
+        headers=headers,
+        json={"message": "抓取公告", "request_id": "p1"},
+    ).status_code == 200
+    assert client.post(f"/tasks/{task['id']}/approve", headers=headers).status_code == 200
+    assert client.put(
+        f"/tasks/{task['id']}/permission", headers=headers, json={"mode": "full"}
+    ).status_code == 200
+    assert client.post(
+        f"/tasks/{task['id']}/execute", headers=headers, json={"request_id": "e1"}
+    ).status_code == 200
+    detail = client.get(f"/tasks/{task['id']}", headers=headers).json()["task"]
+    assert detail["status"] == "completed"
+
+    followup = client.post(
+        f"/tasks/{task['id']}/execute",
+        headers=headers,
+        json={"request_id": "e2", "message": "把结果保存成 Excel"},
+    )
+    assert followup.status_code == 200
+    # 追加指令原样进入模型（不再拼 "Approved plan:" 全文）
+    assert captured[-1]["message"] == "把结果保存成 Excel"
+    assert captured[-1]["mode"] == "execute"
+
+    detail = client.get(f"/tasks/{task['id']}", headers=headers).json()["task"]
+    assert detail["status"] == "completed"
+    user_texts = [m["content"] for m in detail["messages"] if m["role"] == "user"]
+    # 气泡显示用户原文；首次执行仍是占位文案
+    assert "执行已批准计划" in user_texts
+    assert "把结果保存成 Excel" in user_texts

@@ -27,7 +27,9 @@ export function TaskPlanPanel({
   // 状态下两个按钮都不显示，用户没有任何出路
   const awaitingApproval = plan?.status === 'pending'
     && ['awaiting_approval', 'failed', 'cancelled'].includes(status)
-  const executable = plan?.status === 'approved' && ['ready', 'failed', 'cancelled'].includes(status)
+  // completed 也保留重新执行入口：历史产物在任务工作区里还在，
+  // 追加新指令请用下方输入框（执行模式）
+  const executable = plan?.status === 'approved' && ['ready', 'failed', 'cancelled', 'completed'].includes(status)
   return (
     <div className="border-y border-line bg-[#fcfcfd] px-4 py-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -79,7 +81,7 @@ export function TaskPlanPanel({
               onClick={onExecute}
             >
               <Play size={14} />
-              {status === 'failed' || status === 'cancelled' ? '重新执行' : '执行'}
+              {status === 'failed' || status === 'cancelled' || status === 'completed' ? '重新执行' : '执行'}
             </button>
           )}
         </div>
