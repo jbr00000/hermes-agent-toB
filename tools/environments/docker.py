@@ -365,9 +365,18 @@ def remove_task_containers(task_id: str, *, docker_exe: str | None = None) -> in
 
 
 def _sandbox_config_fingerprint(image: str, cwd: str, run_args: list[str]) -> str:
-    """Hash security-relevant create settings without exposing their values."""
+    """Hash security-relevant create settings without exposing their values.
+
+    ``cwd`` is intentionally NOT part of the payload: the container's `-w`
+    is only the default workdir — every command runs wrapped with an explicit
+    ``cd <effective_cwd>`` (see ``TerminalEnvironment._wrap_command``), and
+    per-task cwd overrides are re-pinned onto the live env by
+    ``register_task_env_overrides``. Baking cwd into the fingerprint would
+    defeat label-based reuse and spawn one long-lived container per task
+    instead of one per sandbox key (per user).
+    """
     payload = json.dumps(
-        {"image": image, "cwd": cwd, "run_args": run_args},
+        {"image": image, "run_args": run_args},
         ensure_ascii=True,
         separators=(",", ":"),
         sort_keys=True,
@@ -1143,7 +1152,8 @@ class DockerEnvironment(BaseEnvironment):
         # 1. Try label-based reuse (another process may have recreated it).
         task_label = self._labels.get("hermes-task-id", "")
         profile_label = self._labels.get("hermes-profile", "")
-        existing = self._find_reusable_container(task_label, profile_label)
+        config_label = self._labels.get("hermes-config", "")
+        existing = self._find_reusable_container(task_label, profile_label, config_label)
         if existing is not None:
             cid, state = existing
             if state == "running":
