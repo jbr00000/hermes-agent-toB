@@ -469,11 +469,9 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
 
             register_task_env_overrides(sandbox_key, {"cwd": task_container_cwd(task_id)})
             # 任务附件原件暂存进工作区 uploads/，位置说明只发给模型（不落库）
-            uploads_note = uploads_module.task_uploads_note(
-                user_id, task_id, task_container_cwd(task_id)
+            message = uploads_module.with_task_uploads_note(
+                message, user_id, task_id, task_container_cwd(task_id)
             )
-            if uploads_note:
-                message += "\n\n" + uploads_note
 
         final = agent.chat(
             message,

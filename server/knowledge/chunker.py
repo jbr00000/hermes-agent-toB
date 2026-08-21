@@ -44,7 +44,8 @@ _TABLE_SPLIT_FACTOR = 2
 _ENCODING = None
 
 
-def _encoding():
+def token_encoding():
+    """共享的 cl100k_base encoding（懒加载单例）；uploads 的截断也复用它。"""
     global _ENCODING
     if _ENCODING is None:
         _ENCODING = tiktoken.get_encoding("cl100k_base")
@@ -52,7 +53,7 @@ def _encoding():
 
 
 def count_tokens(text: str) -> int:
-    return len(_encoding().encode(text))
+    return len(token_encoding().encode(text))
 
 
 @dataclass
@@ -234,7 +235,7 @@ def _split_into_pieces(text: str, chunk_size: int) -> list[str]:
 
 
 def _hard_split(text: str, chunk_size: int) -> list[str]:
-    encoding = _encoding()
+    encoding = token_encoding()
     tokens = encoding.encode(text)
     return [
         encoding.decode(tokens[start : start + chunk_size])
@@ -274,7 +275,7 @@ def _pack_pieces(
 def _tail_overlap(text: str, chunk_overlap: int) -> str:
     if chunk_overlap <= 0:
         return ""
-    encoding = _encoding()
+    encoding = token_encoding()
     tokens = encoding.encode(text)
     if len(tokens) <= chunk_overlap:
         return ""

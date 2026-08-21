@@ -248,11 +248,19 @@ def test_list_uploads_includes_budget_summary(monkeypatch, tmp_path) -> None:
         "/uploads", headers=headers, params={"owner_type": "session", "owner_id": session_id}
     ).json()
     budget = listed["budget"]
-    assert budget["max_input_tokens"] == 128_000
+    assert budget["max_input_tokens"] > 0
     assert budget["file_tokens"] > 0
     assert budget["over_budget"] is False
-    # 全新会话无历史：预算 = 上限 − system 粗估 − 输出余量
-    assert budget["budget_tokens"] == 128_000 - 4096 - 8192
+    # 全新会话无历史：预算 = 上限 − system 粗估 − 输出余量（断言关系而非字面量）
+    from server import uploads as uploads_module
+
+    assert budget["budget_tokens"] == (
+        budget["max_input_tokens"]
+        - uploads_module.SYSTEM_RESERVE_TOKENS
+        - uploads_module.OUTPUT_RESERVE_TOKENS
+    )
+    # over_budget 就是 file_tokens 与 budget_tokens 的大小关系
+    assert budget["over_budget"] == (budget["file_tokens"] > budget["budget_tokens"])
 
 
 def test_list_uploads_flags_over_budget_without_blocking(monkeypatch, tmp_path) -> None:
@@ -321,7 +329,11 @@ def test_runtime_config_reads_max_input_tokens(monkeypatch) -> None:
     assert runtime_config.load_runtime_config().max_input_tokens == 64_000
 
     monkeypatch.setattr(runtime_config, "load_config", lambda: {"model": "m"})
-    assert runtime_config.load_runtime_config().max_input_tokens == 128_000
+    # 未配置时回落到模块默认常量（不钉字面量，默认值演进不用改测试）
+    assert (
+        runtime_config.load_runtime_config().max_input_tokens
+        == runtime_config.DEFAULT_MAX_INPUT_TOKENS
+    )
 
 
 # ------------------------------------------------------- 消息注入 + 沙箱暂存

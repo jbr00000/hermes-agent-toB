@@ -491,6 +491,73 @@ def test_precise_mode_degrades_to_fast_without_aux_llm(monkeypatch, tmp_path) ->
     assert "未检索到相关内容" in message
 
 
+def test_precise_mode_keeps_attachment_injection(monkeypatch, tmp_path) -> None:
+    """精准模式 + 附件：改写提示追加在注入文本尾部，附件全文不丢（回归：曾整体重建导致丢失）。"""
+    from server import uploads as uploads_module
+
+    # 同步解析：上传响应即 ready，无需轮询
+    monkeypatch.setattr(uploads_module, "_dispatch_parse", uploads_module.parse_upload)
+    client = _client(monkeypatch, tmp_path, knowledge_enabled=True, aux_llm=True)
+    headers = _login(client, "admin", "correct-horse-battery-staple")
+    session_id = _chat_session(client, headers)
+    uploaded = client.post(
+        "/uploads",
+        headers=headers,
+        data={"owner_type": "session", "owner_id": session_id},
+        files=[("files", ("报销制度.txt", "招待费限额 200 元/人。".encode(), "text/plain"))],
+    )
+    assert uploaded.status_code == 201
+    assert uploaded.json()["files"][0]["parse_status"] == "ready"
+
+    from server.storage import get_repository
+
+    repository = get_repository()
+    repository.append_message(session_id, "user", "报销制度看了吗？")
+    repository.append_message(session_id, "assistant", "看了。【1】")
+
+    captured: dict[str, object] = {}
+
+    class FakeAgent:
+        provider = "custom"
+        model = "test-model"
+        reasoning_config = {"enabled": False}
+        enabled_toolsets = ["knowledge"]
+
+        def chat(self, message, stream_callback=None):
+            captured["message"] = message
+            return "招待费限额 200 元/人【1】。"
+
+        def interrupt(self, message=None):
+            pass
+
+    import server.agent_factory as agent_factory
+    import server.knowledge.query_rewrite as query_rewrite
+
+    monkeypatch.setattr(agent_factory, "build_agent", lambda **kwargs: FakeAgent())
+    monkeypatch.setattr(
+        query_rewrite, "rewrite_query_with_history", lambda *args, **kwargs: "招待费限额是多少？"
+    )
+
+    response = client.post(
+        "/chat",
+        headers=headers,
+        json={
+            "session_id": session_id,
+            "request_id": f"req-{uuid.uuid4().hex[:8]}",
+            "interaction_type": "chat",
+            "mode": "knowledge",
+            "search_mode": "precise",
+            "message": "招待费限额多少？",
+        },
+    )
+    assert response.status_code == 200
+    message = str(captured["message"])
+    assert message.startswith("招待费限额多少？")
+    assert "招待费限额 200 元/人。" in message  # 附件全文仍在
+    assert "招待费限额是多少？" in message  # 改写提示缀在其后
+    assert message.index("招待费限额 200 元/人。") < message.index("招待费限额是多少？")
+
+
 def test_precise_mode_rewrites_followup_query(monkeypatch, tmp_path) -> None:
     """精准模式：有历史时先用轻量模型改写，改写结果缀在当前 user 轮次尾部。"""
     client = _client(monkeypatch, tmp_path, knowledge_enabled=True, aux_llm=True)

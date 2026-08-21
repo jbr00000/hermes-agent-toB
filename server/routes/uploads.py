@@ -3,7 +3,7 @@
 临时附件（chat 会话 / agent 任务共用）：用户把文件上传为问答上下文，
 服务端解析全文（不分块）供注入模型。owner_type=session 挂在 chat 会话上，
 owner_type=task 挂在 agent 任务上；随 owner 删除（DB 行级联在 repository，
-磁盘清理由 sessions/tasks 的删除路由调用 uploads.remove_owner_files）。
+磁盘清理由 sessions/tasks 的删除路由调用 uploads.remove_owner_disk_files）。
 
 写路径按 owner 类型做 feature 门控（session→chat、task→agent），读/删不
 门控——与 sessions 路由同一原则：feature 被回收的用户仍能管理自己的数据。
@@ -11,7 +11,6 @@ owner_type=task 挂在 agent 任务上；随 owner 删除（DB 行级联在 repo
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
@@ -20,10 +19,9 @@ from server import uploads as uploads_module
 from server.deps import get_current_user
 from server.knowledge.parser_client import SUPPORTED_EXTS
 from server.storage import get_repository
+from server.uploads import OwnerType
 
 router = APIRouter(prefix="/uploads", tags=["uploads"])
-
-OwnerType = Literal["session", "task"]
 
 
 def _owner_or_404(user: dict, owner_type: str, owner_id: str) -> None:
@@ -61,16 +59,9 @@ async def upload_files(
     if not files:
         raise HTTPException(status_code=400, detail="未选择文件")
 
-    repository = get_repository()
-    existing = repository.count_uploaded_files(owner_type, owner_id)
-    if existing + len(files) > uploads_module.MAX_FILES_PER_OWNER:
-        raise HTTPException(
-            status_code=400,
-            detail=f"每个{'会话' if owner_type == 'session' else '任务'}最多上传 "
-            f"{uploads_module.MAX_FILES_PER_OWNER} 个文件（已有 {existing} 个）",
-        )
-
-    saved: list[dict] = []
+    # 先读出并校验全部文件，任何一个不合格都整体 400——不允许「前几个已落盘、
+    # 后面的报错」的部分成功（前端收到错误会以为整批都没传上）
+    validated: list[tuple[str, bytes]] = []
     for file in files:
         file_name = Path(file.filename or "").name  # 剥掉任何路径成分
         file_ext = Path(file_name).suffix.lower()
@@ -87,9 +78,12 @@ async def upload_files(
                 status_code=413,
                 detail=f"文件超过大小限制（{uploads_module.MAX_FILE_BYTES // 1024 // 1024}MB）: {file_name}",
             )
-        saved.append(
-            uploads_module.save_upload(user["id"], owner_type, owner_id, file_name, content)
-        )
+        validated.append((file_name, content))
+
+    try:
+        saved = uploads_module.save_uploads(user["id"], owner_type, owner_id, validated)
+    except uploads_module.UploadLimitError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if saved and owner_type == "task":
         # agent 任务的附件原件同时暂存进沙箱任务工作区 uploads/（execute 阶段
         # 模型可用终端直接读取原始格式）；上传时暂存一份，execute 前还会幂等补齐
@@ -120,5 +114,5 @@ def delete_upload(file_id: str, user: dict = Depends(get_current_user)):
     record = get_repository().delete_uploaded_file(user["id"], file_id)
     if record is None:
         raise HTTPException(status_code=404, detail="file not found")
-    uploads_module.remove_file_files(record)
+    uploads_module.remove_upload_disk_files(record)
     return {"deleted": file_id}

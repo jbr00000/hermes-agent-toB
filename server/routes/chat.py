@@ -457,7 +457,7 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
             # 阶段不注文本——原始文件已暂存进沙箱工作区 uploads/（见下方 note）。
             from server import uploads as uploads_module
 
-            attachment_owner = (
+            attachment_owner_type, attachment_owner_id = (
                 ("task", task["id"]) if task is not None else ("session", session_id)
             )
             attachment_metadata: dict[str, Any] | None = None
@@ -465,8 +465,8 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
                 displayed_user_message, attachment_metadata = (
                     uploads_module.prepare_attachment_injection(
                         user_id,
-                        attachment_owner[0],
-                        attachment_owner[1],
+                        attachment_owner_type,
+                        attachment_owner_id,
                         prior_messages,
                         displayed_user_message,
                     )
@@ -566,15 +566,14 @@ async def chat(req: ChatRequest, request: Request, user: dict = Depends(get_curr
             )
             if effective_mode == "execute" and task is not None:
                 # 任务附件原件暂存进沙箱工作区 uploads/，位置说明只发给模型
-                uploads_note = uploads_module.task_uploads_note(
-                    user_id, task["id"], execute_cwd or ""
+                model_message = uploads_module.with_task_uploads_note(
+                    model_message, user_id, task["id"], execute_cwd or ""
                 )
-                if uploads_note:
-                    model_message += "\n\n" + uploads_note
             if knowledge_search_query:
-                model_message = (
-                    f"{req.message}\n\n"
-                    f"（知识库检索提示：该问题已结合对话历史明确为"
+                # 追加到 model_message 尾部而不是从 req.message 重建——后者会把
+                # 上面的附件全文注入整个丢掉（精准模式 + 附件的轮次模型看不到附件）
+                model_message += (
+                    f"\n\n（知识库检索提示：该问题已结合对话历史明确为"
                     f"「{knowledge_search_query}」，调用 knowledge_search 时"
                     f"请使用该表述作为 query）"
                 )

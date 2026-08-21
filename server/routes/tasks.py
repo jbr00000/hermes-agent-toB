@@ -197,10 +197,10 @@ def delete_task(task_id: str, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=409, detail="running task cannot be deleted")
     from server import uploads as uploads_module
 
-    uploads_module.remove_owner_files(user["id"], "task", task_id)
+    uploads_module.remove_owner_disk_files(user["id"], "task", task_id)
     if task is not None:
         # 任务删除会连带删掉其 conversation（delete_owned_task），附件目录一并清
-        uploads_module.remove_owner_files(user["id"], "session", task["session_id"])
+        uploads_module.remove_owner_disk_files(user["id"], "session", task["session_id"])
     from server.sandbox import destroy_task_sandbox
 
     destroy_task_sandbox(user["id"], task_id)

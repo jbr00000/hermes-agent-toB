@@ -103,9 +103,9 @@ def delete_session(session_id: str, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=409, detail="running session cannot be deleted")
     from server import uploads as uploads_module
 
-    uploads_module.remove_owner_files(user["id"], "session", session_id)
+    uploads_module.remove_owner_disk_files(user["id"], "session", session_id)
     if task is not None:
-        uploads_module.remove_owner_files(user["id"], "task", task["id"])
+        uploads_module.remove_owner_disk_files(user["id"], "task", task["id"])
         from server.sandbox import destroy_task_sandbox
 
         destroy_task_sandbox(user["id"], task["id"])

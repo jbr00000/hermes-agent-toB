@@ -20,11 +20,12 @@ import shutil
 import threading
 import uuid
 from pathlib import Path
+from typing import Literal
 
 from hermes_constants import get_hermes_home
 
 from server.deployment_config import load_deployment_config
-from server.knowledge.chunker import count_tokens
+from server.knowledge.chunker import count_tokens, token_encoding
 from server.knowledge.parser_client import SUPPORTED_EXTS, parse_document
 from server.storage import get_repository
 
@@ -33,11 +34,24 @@ logger = logging.getLogger(__name__)
 MAX_FILES_PER_OWNER = 5
 MAX_FILE_BYTES = 20 * 1024 * 1024  # 20MB——全文注入模型的场景，再大的文件 token 也装不下
 
+OwnerType = Literal["session", "task"]
+
 _UPLOADS_DIR = "uploads"
-_OWNER_DIR_NAMES = {"session": "sessions", "task": "tasks"}
+_OWNER_DIR_NAMES: dict[OwnerType, str] = {"session": "sessions", "task": "tasks"}
 
 
-def owner_dir(user_id: str, owner_type: str, owner_id: str) -> Path:
+class UploadLimitError(Exception):
+    """批量保存时数量超上限；existing 供路由层拼错误文案。"""
+
+    def __init__(self, owner_type: OwnerType, existing: int) -> None:
+        super().__init__(
+            f"每个{'会话' if owner_type == 'session' else '任务'}最多上传 "
+            f"{MAX_FILES_PER_OWNER} 个文件（已有 {existing} 个）"
+        )
+        self.existing = existing
+
+
+def owner_dir(user_id: str, owner_type: OwnerType, owner_id: str) -> Path:
     """$HERMES_HOME/uploads/<user_id>/<sessions|tasks>/<owner_id>/"""
     return (
         Path(get_hermes_home())
@@ -48,9 +62,31 @@ def owner_dir(user_id: str, owner_type: str, owner_id: str) -> Path:
     )
 
 
+# 数量上限检查与落盘必须在同一把锁里（单 API 进程部署），否则两个并发请求
+# 可各通过 count 检查、合计突破 MAX_FILES_PER_OWNER
+_SAVE_LOCK = threading.Lock()
+
+
+def save_uploads(
+    user_id: str,
+    owner_type: OwnerType,
+    owner_id: str,
+    files: list[tuple[str, bytes]],
+) -> list[dict]:
+    """锁内检查数量上限并批量落盘 + 派发解析。files 为 (文件名, 内容)，须已校验。"""
+    with _SAVE_LOCK:
+        existing = get_repository().count_uploaded_files(owner_type, owner_id)
+        if existing + len(files) > MAX_FILES_PER_OWNER:
+            raise UploadLimitError(owner_type, existing)
+        return [
+            save_upload(user_id, owner_type, owner_id, file_name, content)
+            for file_name, content in files
+        ]
+
+
 def save_upload(
     user_id: str,
-    owner_type: str,
+    owner_type: OwnerType,
     owner_id: str,
     file_name: str,
     content: bytes,
@@ -121,7 +157,7 @@ def read_parsed_text(record: dict) -> str:
         return ""
 
 
-def remove_file_files(record: dict) -> None:
+def remove_upload_disk_files(record: dict) -> None:
     """删除单个上传文件的磁盘目录（原件 + 解析产物 + 沙箱里的暂存副本）。"""
     file_path = record.get("file_path") or ""
     if file_path:
@@ -144,7 +180,7 @@ def remove_file_files(record: dict) -> None:
             pass
 
 
-def remove_owner_files(user_id: str, owner_type: str, owner_id: str) -> None:
+def remove_owner_disk_files(user_id: str, owner_type: OwnerType, owner_id: str) -> None:
     """owner（session/task）删除时清掉整个上传目录。"""
     shutil.rmtree(owner_dir(user_id, owner_type, owner_id), ignore_errors=True)
 
@@ -186,27 +222,25 @@ def stage_task_uploads(user_id: str, task_id: str) -> list[str]:
 OUTPUT_RESERVE_TOKENS = 8192
 SYSTEM_RESERVE_TOKENS = 4096
 
-_TOKEN_ENCODING = None
+
+def attachment_budget(history_tokens: int = 0, max_input_tokens: int | None = None) -> int:
+    """附件全文可用的 token 预算（可为 0，绝不小于 0）。
+
+    max_input_tokens 缺省时从 runtime_config 读；调用方已持有配置（如
+    budget_summary 一次请求多处使用）时传入，避免重复加载。"""
+    if max_input_tokens is None:
+        from server.runtime_config import load_runtime_config
+
+        max_input_tokens = load_runtime_config().max_input_tokens
+    return max(0, max_input_tokens - history_tokens - SYSTEM_RESERVE_TOKENS - OUTPUT_RESERVE_TOKENS)
 
 
-def _encoding():
-    global _TOKEN_ENCODING
-    if _TOKEN_ENCODING is None:
-        import tiktoken
-
-        _TOKEN_ENCODING = tiktoken.get_encoding("cl100k_base")
-    return _TOKEN_ENCODING
+def _messages_token_sum(messages: list[dict]) -> int:
+    """一组消息 content 的 token 粗估（历史占用，供预算/注入共用）。"""
+    return sum(count_tokens(str(m.get("content") or "")) for m in messages)
 
 
-def attachment_budget(history_tokens: int = 0) -> int:
-    """附件全文可用的 token 预算（可为 0，绝不小于 0）。"""
-    from server.runtime_config import load_runtime_config
-
-    cap = load_runtime_config().max_input_tokens
-    return max(0, cap - history_tokens - SYSTEM_RESERVE_TOKENS - OUTPUT_RESERVE_TOKENS)
-
-
-def owner_history_tokens(user_id: str, owner_type: str, owner_id: str) -> int:
+def owner_history_tokens(user_id: str, owner_type: OwnerType, owner_id: str) -> int:
     """owner 已有对话历史的 token 粗估（注入新消息前的占用）。"""
     repository = get_repository()
     conversation_id = owner_id
@@ -215,15 +249,15 @@ def owner_history_tokens(user_id: str, owner_type: str, owner_id: str) -> int:
         if task is None:
             return 0
         conversation_id = task["session_id"]
-    messages = repository.get_messages(conversation_id)
-    return sum(count_tokens(str(m.get("content") or "")) for m in messages)
+    return _messages_token_sum(repository.get_messages(conversation_id))
 
 
 def _truncate_to_tokens(text: str, limit: int) -> str:
-    tokens = _encoding().encode(text)
+    encoding = token_encoding()
+    tokens = encoding.encode(text)
     if len(tokens) <= limit:
         return text
-    return _encoding().decode(tokens[: max(0, limit)])
+    return encoding.decode(tokens[: max(0, limit)])
 
 
 def build_attachment_block(
@@ -278,17 +312,20 @@ def _usage(record: dict, tokens: int, included: int, status: str) -> dict:
     }
 
 
-def budget_summary(user_id: str, owner_type: str, owner_id: str) -> dict:
+def budget_summary(user_id: str, owner_type: OwnerType, owner_id: str) -> dict:
     """GET /uploads 附带的预算用量：前端据此渲染超预算警告（不阻断）。"""
     from server.runtime_config import load_runtime_config
 
+    max_input_tokens = load_runtime_config().max_input_tokens
     records = get_repository().list_uploaded_files(user_id, owner_type, owner_id)
     file_tokens = sum(
         int(r.get("token_count") or 0) for r in records if r.get("parse_status") == "ready"
     )
-    budget = attachment_budget(owner_history_tokens(user_id, owner_type, owner_id))
+    budget = attachment_budget(
+        owner_history_tokens(user_id, owner_type, owner_id), max_input_tokens
+    )
     return {
-        "max_input_tokens": load_runtime_config().max_input_tokens,
+        "max_input_tokens": max_input_tokens,
         "budget_tokens": budget,
         "file_tokens": file_tokens,
         "over_budget": file_tokens > budget,
@@ -299,7 +336,7 @@ def budget_summary(user_id: str, owner_type: str, owner_id: str) -> dict:
 
 def prepare_attachment_injection(
     user_id: str,
-    owner_type: str,
+    owner_type: OwnerType,
     owner_id: str,
     prior_messages: list[dict],
     base_text: str,
@@ -332,9 +369,7 @@ def prepare_attachment_injection(
     if not pending:
         return base_text, None
 
-    history_tokens = sum(
-        count_tokens(str(m.get("content") or "")) for m in prior_messages
-    )
+    history_tokens = _messages_token_sum(prior_messages)
     budget = attachment_budget(history_tokens + count_tokens(base_text))
     block, usage = build_attachment_block(pending, budget)
     if not block:
@@ -369,3 +404,13 @@ def task_uploads_note(user_id: str, task_id: str, container_cwd: str) -> str | N
         + "\n需要按原始格式精确处理（如 xlsx 的单元格、pdf 的版面）时，"
         "用终端/文件工具直接读取这些文件，不要凭注入的文本转述猜测格式细节。"
     )
+
+
+def with_task_uploads_note(
+    message: str, user_id: str, task_id: str, container_cwd: str
+) -> str:
+    """execute 阶段模型消息：有任务附件则在尾部追加原件位置说明，没有则原样返回。
+
+    chat 路由与 worker（agent_execution）共用这一入口，避免两处各自拼 note。"""
+    note = task_uploads_note(user_id, task_id, container_cwd)
+    return f"{message}\n\n{note}" if note else message

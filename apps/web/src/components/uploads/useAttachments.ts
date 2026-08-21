@@ -34,6 +34,19 @@ export function useAttachments(ownerType: UploadOwnerType, ownerId: string) {
     loading: query.isLoading,
     upload,
     remove,
+    /** 选文件入口：前端预校验（≤5 个、≤20MB）后立即上传；错误经 onError 冒泡给视图 */
+    addFiles: (selected: FileList | null, onError: (message: string) => void) => {
+      if (!selected?.length) return
+      const picked = Array.from(selected)
+      const validationError = validateSelection(query.data?.files.length ?? 0, picked)
+      if (validationError) {
+        onError(validationError)
+        return
+      }
+      upload.mutate(picked, {
+        onError: (error) => onError(error instanceof Error ? error.message : '附件上传失败'),
+      })
+    },
   }
 }
 

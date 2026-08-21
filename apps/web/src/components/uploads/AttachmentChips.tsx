@@ -1,7 +1,34 @@
-import { AlertTriangle, FileText, Loader2, X } from 'lucide-react'
+import * as React from 'react'
+import { AlertTriangle, FileText, Loader2, Paperclip, X } from 'lucide-react'
 import type { UploadBudget, UploadedFile } from '../../types'
-import { cn, formatBytes } from '../ui'
+import { cn, formatBytes, IconButton } from '../ui'
 import { attachmentStatusLabel, formatTokens } from './useAttachments'
+
+/** 回形针按钮 + 隐藏 file input（ChatView/AgentView 共用）；选中即回调，选完清空可重复选同一文件 */
+export function AttachmentPickerButton({
+  label,
+  onPick,
+}: {
+  label: string
+  onPick: (files: FileList | null) => void
+}) {
+  const inputRef = React.useRef<HTMLInputElement | null>(null)
+  return (
+    <>
+      <input
+        ref={inputRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={(event) => {
+          onPick(event.target.files)
+          event.target.value = ''
+        }}
+      />
+      <IconButton label={label} icon={Paperclip} onClick={() => inputRef.current?.click()} />
+    </>
+  )
+}
 
 /** 输入框上方的附件 chip 列表：解析状态 + 删除。只读模式（右侧面板）不显示删除按钮。 */
 export function AttachmentChips({
@@ -51,9 +78,17 @@ export function AttachmentChips({
   )
 }
 
-/** 附件 token 超预算的黄色警告条（不阻断发送，超出部分从最新文件开始截断）。 */
+/** 附件 token 预算条：有附件时常显用量（灰字），超预算升级为黄色警告（不阻断发送）。 */
 export function AttachmentBudgetBar({ budget }: { budget: UploadBudget | null }) {
-  if (!budget?.overBudget) return null
+  if (!budget || budget.fileTokens === 0) return null
+  if (!budget.overBudget) {
+    return (
+      <div className="border-t border-line px-3 py-1.5 text-[11px] text-zinc-400">
+        附件全文共 {formatTokens(budget.fileTokens)} tokens · 本模型输入上限
+        {formatTokens(budget.maxInputTokens)}（可用预算约 {formatTokens(budget.budgetTokens)}）
+      </div>
+    )
+  }
   return (
     <div className="flex items-start gap-2 border-t border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-caution">
       <AlertTriangle size={14} className="mt-0.5 shrink-0" />

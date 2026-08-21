@@ -8,7 +8,6 @@ import {
   LockKeyhole,
   Mic,
   MoreHorizontal,
-  Paperclip,
   Pencil,
   Pin,
   Play,
@@ -31,8 +30,8 @@ import {
 import type { ConversationSummary, TabType } from '../../types'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { Badge, cn, IconButton, MessageSkeleton } from '../ui'
-import { AttachmentBudgetBar, AttachmentChips } from '../uploads/AttachmentChips'
-import { useAttachments, validateSelection } from '../uploads/useAttachments'
+import { AttachmentBudgetBar, AttachmentChips, AttachmentPickerButton } from '../uploads/AttachmentChips'
+import { useAttachments } from '../uploads/useAttachments'
 import { KnowledgeQaPicker } from './KnowledgeQaPicker'
 import { MessageBubble } from './MessageBubble'
 
@@ -83,15 +82,19 @@ export function ChatView({
   const [renameDraft, setRenameDraft] = React.useState(title)
   const [actionPending, setActionPending] = React.useState(false)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = React.useState(false)
-  const fileInputRef = React.useRef<HTMLInputElement | null>(null)
   const messageScrollRef = React.useRef<HTMLDivElement | null>(null)
   const didRestoreScrollRef = React.useRef(false)
   const shouldFollowOutputRef = React.useRef(true)
   const wasRunningRef = React.useRef(false)
 
   // 附件服务端持久化（owner=本会话）：parsing 中的文件存在时 hook 内每 1.5s 轮询
-  const { files, budget: uploadBudget, upload: uploadAttachments, remove: removeAttachment } =
-    useAttachments('session', sessionId)
+  const {
+    files,
+    budget: uploadBudget,
+    upload: uploadAttachments,
+    remove: removeAttachment,
+    addFiles: addAttachments,
+  } = useAttachments('session', sessionId)
 
   React.useEffect(() => {
     if (query.data) chatRunManager.reconcileServerState(sessionId, query.data)
@@ -244,18 +247,9 @@ export function ChatView({
   }, [chatRunManager, query.data?.activeRun?.id, run, sessionId])
 
   // 选中即上传（服务端解析全文，chip 轮询 parsing→ready/failed）；解析中不阻塞发送
-  const addFiles = (selected: FileList | null) => {
-    if (!selected?.length) return
-    const picked = Array.from(selected)
-    const validationError = validateSelection(files.length, picked)
-    if (validationError) {
-      setActionError(validationError)
-      return
-    }
+  const pickFiles = (selected: FileList | null) => {
     setActionError(null)
-    uploadAttachments.mutate(picked, {
-      onError: (error) => setActionError(error instanceof Error ? error.message : '附件上传失败'),
-    })
+    addAttachments(selected, setActionError)
   }
 
   return (
@@ -397,8 +391,7 @@ export function ChatView({
           />
           <div className="flex items-center justify-between gap-2 border-t border-line px-2 py-2 sm:px-3">
             <div className="flex min-w-0 items-center gap-1">
-              <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(event) => { addFiles(event.target.files); event.target.value = '' }} />
-              <IconButton label="添加只读附件" icon={Paperclip} onClick={() => fileInputRef.current?.click()} />
+              <AttachmentPickerButton label="添加只读附件" onPick={pickFiles} />
               <IconButton label="语音输入" icon={Mic} />
               {knowledgeQaAvailable && (
                 <KnowledgeQaPicker bases={knowledgeBasesQuery.data ?? []} />

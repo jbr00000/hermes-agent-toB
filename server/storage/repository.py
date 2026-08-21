@@ -2584,7 +2584,7 @@ class StorageRepository:
         self,
         user_id: str,
         *,
-        file_id: str | None = None,
+        file_id: str,
         owner_type: str,
         owner_id: str,
         file_name: str,
@@ -2594,10 +2594,10 @@ class StorageRepository:
     ) -> dict[str, Any]:
         """落一条 parsing 状态的上传记录；解析由调用方异步驱动。
 
-        ``file_id`` 由服务层预生成（磁盘目录名要用它），缺省则此处生成。"""
+        ``file_id`` 由服务层预生成后传入（磁盘目录名要用它，必须先于落库确定）。"""
         now = time.time()
         row = UploadedFile(
-            id=file_id or str(uuid.uuid4()),
+            id=file_id,
             tenant_id=tenant_id(),
             user_id=user_id,
             owner_type=owner_type,

@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { CircleStop, Database, Mic, Paperclip, Send, Trash2 } from 'lucide-react'
+import { CircleStop, Database, Mic, Send, Trash2 } from 'lucide-react'
 import { api } from '../../api'
 import {
   isAgentRunActive,
@@ -12,8 +12,8 @@ import type { AgentTaskDetail, PermissionMode, TabType } from '../../types'
 import { MessageBubble } from '../chat/MessageBubble'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { cn, IconButton, MessageSkeleton } from '../ui'
-import { AttachmentBudgetBar, AttachmentChips } from '../uploads/AttachmentChips'
-import { useAttachments, validateSelection } from '../uploads/useAttachments'
+import { AttachmentBudgetBar, AttachmentChips, AttachmentPickerButton } from '../uploads/AttachmentChips'
+import { useAttachments } from '../uploads/useAttachments'
 import { PermissionSegment } from './PermissionSegment'
 import { ArtifactsCard } from './ArtifactsCard'
 import { TaskPlanPanel } from './TaskPlanPanel'
@@ -33,7 +33,6 @@ export function AgentView({ taskId, title, onDeleted, onOpenTab }: { taskId: str
   const [actionPending, setActionPending] = React.useState(false)
   const [actionError, setActionError] = React.useState<string | null>(null)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = React.useState(false)
-  const fileInputRef = React.useRef<HTMLInputElement | null>(null)
   const scrollRef = React.useRef<HTMLDivElement | null>(null)
   const restoredScrollRef = React.useRef(false)
   // 输出流期间是否贴底跟随：用户上滚超过阈值即退出跟随，回到底部自动恢复
@@ -42,8 +41,13 @@ export function AgentView({ taskId, title, onDeleted, onOpenTab }: { taskId: str
 
   // 附件服务端持久化（owner=本任务）：parsing 中的文件存在时 hook 内每 1.5s 轮询；
   // execute 阶段后端会把原件暂存进沙箱工作区 uploads/，前端无需额外处理
-  const { files, budget: uploadBudget, upload: uploadAttachments, remove: removeAttachment } =
-    useAttachments('task', taskId)
+  const {
+    files,
+    budget: uploadBudget,
+    upload: uploadAttachments,
+    remove: removeAttachment,
+    addFiles: addAttachments,
+  } = useAttachments('task', taskId)
 
   React.useEffect(() => {
     if (query.data) agentRunManager.reconcileServerState(query.data)
@@ -194,18 +198,9 @@ export function AgentView({ taskId, title, onDeleted, onOpenTab }: { taskId: str
   }, [active, onDeleted, queryClient, taskId])
 
   // 选中即上传（服务端解析全文，chip 轮询 parsing→ready/failed）；解析中不阻塞发送
-  const addFiles = (selected: FileList | null) => {
-    if (!selected?.length) return
-    const picked = Array.from(selected)
-    const validationError = validateSelection(files.length, picked)
-    if (validationError) {
-      setActionError(validationError)
-      return
-    }
+  const pickFiles = (selected: FileList | null) => {
     setActionError(null)
-    uploadAttachments.mutate(picked, {
-      onError: (error) => setActionError(error instanceof Error ? error.message : '附件上传失败'),
-    })
+    addAttachments(selected, setActionError)
   }
 
   return (
@@ -319,8 +314,7 @@ export function AgentView({ taskId, title, onDeleted, onOpenTab }: { taskId: str
               )}>
                 {approvedPlan ? '执行模式' : '规划模式'}
               </span>
-              <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(event) => { addFiles(event.target.files); event.target.value = '' }} />
-              <IconButton label="添加文件" icon={Paperclip} onClick={() => fileInputRef.current?.click()} />
+              <AttachmentPickerButton label="添加文件" onPick={pickFiles} />
               <IconButton label="语音输入" icon={Mic} />
               <IconButton label="选择知识库" icon={Database} />
               {uploadAttachments.isPending && (
