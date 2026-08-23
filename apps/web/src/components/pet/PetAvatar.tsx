@@ -1,4 +1,8 @@
 import React from 'react'
+import { useAtomValue } from 'jotai'
+import { petSkinAtom } from '../../state'
+import type { PetSkin } from '../../types'
+import { NiulaiAvatar } from './NiulaiAvatar'
 import './pet.css'
 
 /** 宠物神态：待机 / 思考 / 工作 / 疑惑 / 恍然大悟 / 难过 */
@@ -470,4 +474,30 @@ export function PetAvatar({
       </g>
     </svg>
   )
+}
+
+export const PET_SKIN_LABEL: Record<PetSkin, string> = {
+  cat: '铅笔小猫',
+  niulai: '牛来',
+}
+
+export interface PetCharacterProps {
+  state: PetState
+  size?: number
+  animated?: boolean
+  className?: string
+}
+
+/** 指定形象的桌宠渲染（设置面板预览等需要固定形象的场景） */
+export function PetSkinAvatar({
+  skin,
+  ...props
+}: PetCharacterProps & { skin: PetSkin }): React.ReactElement {
+  return skin === 'niulai' ? <NiulaiAvatar {...props} /> : <PetAvatar {...props} />
+}
+
+/** 跟随用户设置（petSkinAtom）的桌宠：浮层 / 标签页 / 空工作区统一走这里 */
+export function PetCharacter(props: PetCharacterProps): React.ReactElement {
+  const skin = useAtomValue(petSkinAtom)
+  return <PetSkinAvatar skin={skin} {...props} />
 }

@@ -1,12 +1,20 @@
 import { atom } from 'jotai'
 import { atomWithStorage } from 'jotai/utils'
-import type { KnowledgeSearchMode, WorkspaceMode, WorkTab } from './types'
+import type { KnowledgeSearchMode, PetSkin, WorkspaceMode, WorkTab } from './types'
 
 export const tabsAtom = atom<WorkTab[]>([])
 export const activeTabIdAtom = atom<string | null>(null)
 export const workspaceModeAtom = atomWithStorage<WorkspaceMode>('hermes-workspace-mode', 'agent', undefined, { getOnInit: true })
-/** 浮动小猫显隐开关（顶栏切换，localStorage 持久化） */
+/** 浮动桌宠显隐开关（顶栏切换，localStorage 持久化） */
 export const petVisibleAtom = atomWithStorage<boolean>('hermes-pet-visible', true, undefined, { getOnInit: true })
+/** 桌宠形象：cat 铅笔小猫 / niulai 牛来 */
+export const petSkinAtom = atomWithStorage<PetSkin>('hermes-pet-skin', 'cat', undefined, { getOnInit: true })
+/** 浮动桌宠尺寸（px） */
+export const petSizeAtom = atomWithStorage<number>('hermes-pet-size', 64, undefined, { getOnInit: true })
+/** 待机微动效开关：关闭后桌宠静止（呼吸/眨眼等全部停） */
+export const petIdleAnimAtom = atomWithStorage<boolean>('hermes-pet-idle-anim', true, undefined, { getOnInit: true })
+/** 任务动画开关：关闭后桌宠恒定待机，不跟随运行状态变神态 */
+export const petTaskAnimAtom = atomWithStorage<boolean>('hermes-pet-task-anim', true, undefined, { getOnInit: true })
 /** 右侧上下文面板收起状态（面板头部切换，localStorage 持久化） */
 export const rightPanelCollapsedAtom = atomWithStorage<boolean>('hermes-right-panel-collapsed', false, undefined, { getOnInit: true })
 /** 知识库问答模式开关（chat 输入框；localStorage 持久化） */

@@ -4,16 +4,17 @@ import { useAtomValue } from 'jotai'
 import { useAgentRun } from '../../agentRunManager'
 import { api } from '../../api'
 import { useChatRun } from '../../chatRunManager'
-import { petVisibleAtom } from '../../state'
+import { petIdleAnimAtom, petSizeAtom, petSkinAtom, petTaskAnimAtom, petVisibleAtom } from '../../state'
 import type { TabType } from '../../types'
-import { PetAvatar } from './PetAvatar'
+import { PetCharacter } from './PetAvatar'
 import type { PetState } from './PetAvatar'
-import { PET_STATE_LABEL } from './PetAvatar'
+import { PET_SKIN_LABEL, PET_STATE_LABEL } from './PetAvatar'
 import { petStateFromAgentRun, petStateFromChatRun, usePetState } from './petState'
 
-/** 浮动小猫尺寸（px） */
-const SIZE = 64
 const STORAGE_KEY = 'cortex-pet-pos'
+
+/** 指针位移小于该阈值视为点击（播放点击反应），否则是拖拽 */
+const CLICK_SLOP_PX = 6
 
 interface PetPos {
   x: number
@@ -39,9 +40,10 @@ function loadPos(): PetPos | null {
 }
 
 /**
- * 主区域右下角的浮动小猫：可被用户拖拽移动，拖拽位置写入 localStorage 跨会话保留。
- * 所有标签页都显示：chat/agent 页跟随运行神态，其余功能页保持待机神态；
- * 可由顶栏开关（petVisibleAtom）整体隐藏。无标签页时不显示（EmptyWorkspace 中央已有大猫）。
+ * 主区域右下角的浮动桌宠：可被用户拖拽移动，拖拽位置写入 localStorage 跨会话保留。
+ * 所有标签页都显示：chat/agent 页跟随运行神态（可被「任务动画」开关关掉），
+ * 其余功能页保持待机神态；形象 / 尺寸 / 动效开关都在顶栏桌宠设置面板里调。
+ * 可由顶栏开关（petVisibleAtom）整体隐藏。无标签页时不显示（EmptyWorkspace 中央已有大桌宠）。
  * 注意：需挂在 position:relative 的容器内（absolute 定位基于父容器）。
  */
 export function PetFloat({ tab }: { tab: { type: TabType; refId: string } | null }): React.ReactElement | null {
@@ -67,17 +69,28 @@ function AgentPetFloat({ taskId }: { taskId: string }): React.ReactElement {
 }
 
 function PetFloatShell({ state }: { state: PetState }): React.ReactElement {
+  const size = useAtomValue(petSizeAtom)
+  const skin = useAtomValue(petSkinAtom)
+  const taskAnim = useAtomValue(petTaskAnimAtom)
+  const idleAnim = useAtomValue(petIdleAnimAtom)
+  // 任务动画关闭：恒定待机；待机微动效只决定 idle 时动不动（任务神态保持有动画）
+  const effState = taskAnim ? state : 'idle'
+  const animated = effState === 'idle' ? idleAnim : true
+
   const [pos, setPos] = React.useState<PetPos | null>(loadPos)
   const [dragging, setDragging] = React.useState(false)
+  const [clicked, setClicked] = React.useState(false)
   const rootRef = React.useRef<HTMLDivElement | null>(null)
   const dragOffsetRef = React.useRef<{ dx: number; dy: number } | null>(null)
+  const downPointRef = React.useRef<PetPos | null>(null)
+  const clickTimerRef = React.useRef<number | null>(null)
 
   const clamp = React.useCallback((x: number, y: number): PetPos => {
     const parent = rootRef.current?.parentElement
-    const maxX = Math.max(0, (parent?.clientWidth ?? window.innerWidth) - SIZE)
-    const maxY = Math.max(0, (parent?.clientHeight ?? window.innerHeight) - SIZE)
+    const maxX = Math.max(0, (parent?.clientWidth ?? window.innerWidth) - size)
+    const maxY = Math.max(0, (parent?.clientHeight ?? window.innerHeight) - size)
     return { x: Math.min(Math.max(0, x), maxX), y: Math.min(Math.max(0, y), maxY) }
-  }, [])
+  }, [size])
 
   // localStorage 恢复的位置可能来自更宽/更高的旧布局；容器变小后 main 的
   // overflow-hidden 会把小猫整个裁掉且无法拖回。挂载后与窗口 resize 时
@@ -106,6 +119,7 @@ function PetFloatShell({ state }: { state: PetState }): React.ReactElement {
     event.preventDefault()
     const rect = event.currentTarget.getBoundingClientRect()
     dragOffsetRef.current = { dx: event.clientX - rect.left, dy: event.clientY - rect.top }
+    downPointRef.current = { x: event.clientX, y: event.clientY }
     event.currentTarget.setPointerCapture(event.pointerId)
     setDragging(true)
   }
@@ -117,10 +131,23 @@ function PetFloatShell({ state }: { state: PetState }): React.ReactElement {
     setPos(clamp(point.x, point.y))
   }
 
-  const endDrag = (): void => {
+  const endDrag = (event: React.PointerEvent<HTMLDivElement>): void => {
     if (!dragOffsetRef.current) return
     dragOffsetRef.current = null
     setDragging(false)
+    // 位移很小 = 点击：播放一次点击反应（挤压弹跳），不移动位置
+    const down = downPointRef.current
+    downPointRef.current = null
+    if (
+      down
+      && Math.abs(event.clientX - down.x) < CLICK_SLOP_PX
+      && Math.abs(event.clientY - down.y) < CLICK_SLOP_PX
+    ) {
+      if (clickTimerRef.current !== null) window.clearTimeout(clickTimerRef.current)
+      setClicked(true)
+      clickTimerRef.current = window.setTimeout(() => setClicked(false), 480)
+      return
+    }
     setPos((current) => {
       if (current) {
         try {
@@ -140,15 +167,15 @@ function PetFloatShell({ state }: { state: PetState }): React.ReactElement {
   return (
     <div
       ref={rootRef}
-      className={`absolute z-30 touch-none select-none ${dragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+      className={`absolute z-30 touch-none select-none ${dragging ? 'cursor-grabbing' : 'cursor-grab'}${clicked ? ' pet-click' : ''}`}
       style={style}
-      title={`小猫 · ${PET_STATE_LABEL[state]}（可拖拽）`}
+      title={`${PET_SKIN_LABEL[skin]} · ${PET_STATE_LABEL[effState]}（可拖拽，点击有反应）`}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
     >
-      <PetAvatar state={state} size={SIZE} />
+      <PetCharacter state={effState} size={size} animated={animated} />
     </div>
   )
 }

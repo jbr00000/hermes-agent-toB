@@ -176,6 +176,9 @@ export interface AgentKnowledgeScope {
   kbId: string | null
 }
 
+/** 桌宠形象：cat 铅笔小猫（程序化 SVG）/ niulai 牛来（抠图立绘 + 程序化动画） */
+export type PetSkin = 'cat' | 'niulai'
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant' | 'system'

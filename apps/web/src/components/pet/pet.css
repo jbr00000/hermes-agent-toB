@@ -124,3 +124,131 @@
 @media (prefers-reduced-motion: reduce) {
   .pet-anim * { animation: none !important; }
 }
+
+/* ============================================================
+   牛来桌宠（抠图立绘 + 程序化动画，同样只在 .niulai-anim 内生效）
+   ============================================================ */
+.niulai {
+  position: relative;
+  display: inline-block;
+}
+.niulai img {
+  display: block;
+  transform-origin: 50% 100%;
+}
+
+/* 待机：缓慢呼吸浮动 */
+.niulai-anim.n-idle img { animation: niulai-breathe 3.4s ease-in-out infinite; }
+@keyframes niulai-breathe {
+  0%, 100% { transform: translateY(0) scale(1, 1); }
+  50% { transform: translateY(-1.5%) scale(1.008, 1.02); }
+}
+
+/* 思考：歪头 + 微微上下 */
+.niulai-anim.n-thinking img { animation: niulai-tilt 2.8s ease-in-out infinite; }
+@keyframes niulai-tilt {
+  0%, 100% { transform: rotate(-7deg) translateY(0); }
+  50% { transform: rotate(-7deg) translateY(-2%); }
+}
+
+/* 工作：左右摇摆 */
+.niulai-anim.n-working img { animation: niulai-rock 0.9s ease-in-out infinite; }
+@keyframes niulai-rock {
+  0%, 100% { transform: rotate(-4deg); }
+  50% { transform: rotate(4deg); }
+}
+
+/* 疑惑：快速小幅抖动 */
+.niulai-anim.n-confused img { animation: niulai-wiggle 0.5s ease-in-out infinite; }
+@keyframes niulai-wiggle {
+  0%, 100% { transform: translateX(0) rotate(0); }
+  25% { transform: translateX(-3%) rotate(-1.5deg); }
+  75% { transform: translateX(3%) rotate(1.5deg); }
+}
+
+/* 恍然大悟：弹跳 */
+.niulai-anim.n-eureka img { animation: niulai-hop 0.8s ease-in-out infinite; }
+@keyframes niulai-hop {
+  0%, 100% { transform: translateY(0) scale(1, 1); }
+  35% { transform: translateY(-9%) scale(0.98, 1.04); }
+  60% { transform: translateY(0) scale(1.03, 0.96); }
+}
+
+/* 难过：低垂 + 褪色 */
+.niulai-anim.n-sad img { animation: niulai-droop 3.6s ease-in-out infinite; filter: saturate(0.7); }
+.niulai.n-sad img { filter: saturate(0.7); }
+@keyframes niulai-droop {
+  0%, 100% { transform: translateY(2%) scale(1, 0.97); }
+  55% { transform: translateY(5%) scale(1, 0.95); }
+}
+
+/* 情绪点缀符号 */
+.niulai .n-q {
+  position: absolute;
+  top: -0.35em;
+  right: -0.1em;
+  font-size: 1.4em;
+  font-weight: 700;
+  color: #46433e;
+  font-family: 'Comic Sans MS', 'Segoe Print', cursive;
+}
+.niulai-anim .n-q { animation: pet-bobq 1.6s ease-in-out infinite; }
+
+.niulai .n-dots {
+  position: absolute;
+  top: -0.2em;
+  left: -0.5em;
+  display: flex;
+  gap: 0.18em;
+}
+.niulai .n-dots i {
+  width: 0.28em;
+  height: 0.28em;
+  border-radius: 50%;
+  background: #8a857c;
+}
+.niulai-anim .n-dots i { animation: pet-dot-up 1.5s ease-in-out infinite; }
+.niulai-anim .n-dots i:nth-child(2) { animation-delay: 0.25s; }
+.niulai-anim .n-dots i:nth-child(3) { animation-delay: 0.5s; }
+
+.niulai .n-sparkle {
+  position: absolute;
+  color: #46433e;
+  font-size: 0.9em;
+  line-height: 1;
+}
+.niulai .n-sparkle.s1 { top: -0.2em; left: -0.3em; }
+.niulai .n-sparkle.s2 { top: -0.45em; right: 0; font-size: 0.7em; }
+.niulai .n-sparkle.s3 { top: 30%; right: -0.4em; font-size: 0.55em; }
+.niulai-anim .n-sparkle { animation: pet-twinkle 1.3s ease-in-out infinite; }
+.niulai-anim .n-sparkle.s2 { animation-delay: 0.4s; }
+.niulai-anim .n-sparkle.s3 { animation-delay: 0.8s; }
+
+.niulai .n-tear {
+  position: absolute;
+  top: 34%;
+  right: 12%;
+  width: 0.22em;
+  height: 0.32em;
+  border-radius: 50% 50% 60% 60%;
+  background: #9fc4d8;
+}
+.niulai-anim .n-tear { animation: niulai-tear-fall 2.4s ease-in infinite; }
+@keyframes niulai-tear-fall {
+  0%, 55% { transform: translateY(0); opacity: 0; }
+  62% { opacity: 1; }
+  90%, 100% { transform: translateY(0.8em); opacity: 0; }
+}
+
+/* 点击反应（两种形象共用，由 PetFloat 挂到外层容器） */
+.pet-click > * { animation: pet-click-bounce 0.45s ease; }
+@keyframes pet-click-bounce {
+  0%, 100% { transform: scale(1, 1); }
+  35% { transform: scale(0.92, 1.08) translateY(-4%); }
+  70% { transform: scale(1.05, 0.94); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .niulai-anim *, .niulai-anim img { animation: none !important; }
+  .pet-click > * { animation: none !important; }
+}

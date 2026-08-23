@@ -4,7 +4,6 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Archive,
   Brain,
-  Cat,
   ChevronDown,
   ClipboardList,
   Database,
@@ -33,10 +32,11 @@ import {
   useChatRunManager,
 } from './chatRunManager'
 import { mockApi } from './mockApi'
-import { PetAvatar } from './components/pet/PetAvatar'
+import { PetCharacter } from './components/pet/PetAvatar'
 import type { PetState } from './components/pet/PetAvatar'
 import { petStateFromAgentRun, petStateFromChatRun } from './components/pet/petState'
 import { PetFloat } from './components/pet/PetFloat'
+import { PetSettingsButton } from './components/pet/PetSettings'
 import { cn, CORTEX_MARK_URL } from './components/ui'
 import { ChatView } from './components/chat/ChatView'
 import { AgentView } from './components/agent/AgentView'
@@ -52,7 +52,6 @@ import LoginBackdrop from './components/LoginBackdrop'
 import {
   activeTabIdAtom,
   createTab,
-  petVisibleAtom,
   rightPanelCollapsedAtom,
   selectedSpaceAtom,
   tabId,
@@ -988,7 +987,6 @@ function TopBar({
   onLogout: () => void
 }) {
   const [selectedSpace, setSelectedSpace] = useAtom(selectedSpaceAtom)
-  const [petVisible, setPetVisible] = useAtom(petVisibleAtom)
   const activeSpace = spaces.find((space) => space.id === selectedSpace) ?? spaces[0]
 
   return (
@@ -1028,16 +1026,7 @@ function TopBar({
           <UserCog size={14} />
           {user.username}
         </div>
-        <button
-          title={petVisible ? '隐藏小猫' : '显示小猫'}
-          className={cn(
-            'flex h-8 w-8 items-center justify-center rounded-md border border-line hover:bg-field',
-            petVisible ? 'text-ink' : 'text-zinc-400',
-          )}
-          onClick={() => setPetVisible(!petVisible)}
-        >
-          <Cat size={15} />
-        </button>
+        <PetSettingsButton />
         <button
           title="退出登录"
           className="flex h-8 w-8 items-center justify-center rounded-md border border-line text-zinc-500 hover:bg-field hover:text-ink"
@@ -1061,7 +1050,7 @@ function TabPetChip({ state, fallback }: { state: PetState; fallback: React.Reac
   if (state === 'idle') return <>{fallback}</>
   return (
     <span className="flex shrink-0 items-center rounded-md border border-[#e9e2d0] bg-[#faf7ef] p-px">
-      <PetAvatar state={state} size={18} />
+      <PetCharacter state={state} size={18} />
     </span>
   )
 }
@@ -1191,7 +1180,7 @@ function EmptyWorkspace({ onNewTask }: { onNewTask: () => void }) {
   return (
     <div className="flex h-full items-center justify-center">
       <div className="text-center">
-        <PetAvatar state="idle" size={104} className="mx-auto mb-3" />
+        <PetCharacter state="idle" size={104} className="mx-auto mb-3" />
         <div className="text-base font-medium">没有打开的标签</div>
         <button className="mt-4 rounded-md bg-ink px-4 py-2 text-sm text-white" onClick={onNewTask}>新建任务</button>
       </div>
