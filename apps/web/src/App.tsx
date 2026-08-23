@@ -1131,7 +1131,7 @@ function TabContent({
   const isAdmin = user.role === 'admin' || user.role === 'superadmin'
   if (tab.type === 'agent') {
     if (!user.features.agent) return <NoAccess feature="Agent 任务" />
-    return <AgentView key={tab.refId} taskId={tab.refId} title={tab.title} onDeleted={onTaskDeleted} onOpenTab={onOpenTab} />
+    return <AgentView key={tab.refId} taskId={tab.refId} title={tab.title} knowledgeEnabled={user.features.knowledge} onDeleted={onTaskDeleted} onOpenTab={onOpenTab} />
   }
   if (tab.type === 'chat') {
     if (!user.features.chat) return <NoAccess feature="Chat 问数" />

@@ -1,15 +1,18 @@
 import * as React from 'react'
+import { useAtom } from 'jotai'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { CircleStop, Database, Mic, Send, Trash2 } from 'lucide-react'
-import { api } from '../../api'
+import { CircleStop, Mic, Send, Trash2 } from 'lucide-react'
+import { api, ApiError } from '../../api'
 import {
   isAgentRunActive,
   mergeAgentMessages,
   useAgentRun,
   useAgentRunManager,
 } from '../../agentRunManager'
-import type { AgentTaskDetail, PermissionMode, TabType } from '../../types'
+import { agentKnowledgeEnabledAtom, agentKnowledgeKbIdAtom } from '../../state'
+import type { AgentKnowledgeScope, AgentTaskDetail, PermissionMode, TabType } from '../../types'
 import { MessageBubble } from '../chat/MessageBubble'
+import { AgentKnowledgePicker } from '../chat/KnowledgeQaPicker'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { cn, IconButton, MessageSkeleton } from '../ui'
 import { AttachmentBudgetBar, AttachmentChips, AttachmentPickerButton } from '../uploads/AttachmentChips'
@@ -20,7 +23,7 @@ import { TaskPlanPanel } from './TaskPlanPanel'
 import { ToolApprovalPanel } from './ToolApprovalPanel'
 import { ToolEventTimeline } from './ToolEventTimeline'
 
-export function AgentView({ taskId, title, onDeleted, onOpenTab }: { taskId: string; title: string; onDeleted: (taskId: string) => void; onOpenTab: (type: TabType, refId: string, title: string) => void }) {
+export function AgentView({ taskId, title, knowledgeEnabled, onDeleted, onOpenTab }: { taskId: string; title: string; knowledgeEnabled: boolean; onDeleted: (taskId: string) => void; onOpenTab: (type: TabType, refId: string, title: string) => void }) {
   const queryClient = useQueryClient()
   const agentRunManager = useAgentRunManager()
   const run = useAgentRun(taskId)
@@ -29,6 +32,22 @@ export function AgentView({ taskId, title, onDeleted, onOpenTab }: { taskId: str
     queryFn: () => api.getTask(taskId),
     refetchInterval: (result) => result.state.data?.activeRun ? 1000 : false,
   })
+  // 知识库选择器的库清单（与 Chat/知识库管理页共用 queryKey 缓存）；404 = 部署未启用知识库
+  const knowledgeBasesQuery = useQuery({
+    queryKey: ['knowledgeBases'],
+    queryFn: () => api.listKnowledgeBases(),
+    retry: false,
+    enabled: knowledgeEnabled,
+  })
+  const knowledgeAvailable = knowledgeEnabled
+    && !(knowledgeBasesQuery.error instanceof ApiError && knowledgeBasesQuery.error.status === 404)
+  const [knowledgeEnabledPref] = useAtom(agentKnowledgeEnabledAtom)
+  const [knowledgeKbId] = useAtom(agentKnowledgeKbIdAtom)
+  // 运行级知识库选择随每次运行发给后端；选择器不可见（无 feature/部署未启用）时不传，
+  // 服务端保持默认行为
+  const knowledgeScope: AgentKnowledgeScope | undefined = knowledgeAvailable
+    ? { enabled: knowledgeEnabledPref, kbId: knowledgeEnabledPref ? knowledgeKbId : null }
+    : undefined
   const [draft, setDraft] = React.useState('')
   const [actionPending, setActionPending] = React.useState(false)
   const [actionError, setActionError] = React.useState<string | null>(null)
@@ -110,11 +129,11 @@ export function AgentView({ taskId, title, onDeleted, onOpenTab }: { taskId: str
     setDraft('')
     setActionError(null)
     try {
-      agentRunManager.startPlan(task, text)
+      agentRunManager.startPlan(task, text, knowledgeScope)
     } catch (error) {
       setActionError(error instanceof Error ? error.message : '无法启动规划')
     }
-  }, [agentRunManager, canPlan, draft, task])
+  }, [agentRunManager, canPlan, draft, knowledgeScope, task])
 
   const sendFollowUpExecute = React.useCallback(() => {
     const text = draft.trim()
@@ -122,11 +141,11 @@ export function AgentView({ taskId, title, onDeleted, onOpenTab }: { taskId: str
     setDraft('')
     setActionError(null)
     try {
-      agentRunManager.startExecute(task, text)
+      agentRunManager.startExecute(task, text, knowledgeScope)
     } catch (error) {
       setActionError(error instanceof Error ? error.message : '无法启动执行')
     }
-  }, [agentRunManager, canFollowUpExecute, draft, task])
+  }, [agentRunManager, canFollowUpExecute, draft, knowledgeScope, task])
 
   const sendDraft = React.useCallback(() => {
     if (canPlan) sendPlanRequest()
@@ -168,11 +187,11 @@ export function AgentView({ taskId, title, onDeleted, onOpenTab }: { taskId: str
     if (!task || active || task.plan?.status !== 'approved') return
     setActionError(null)
     try {
-      agentRunManager.startExecute(task)
+      agentRunManager.startExecute(task, undefined, knowledgeScope)
     } catch (error) {
       setActionError(error instanceof Error ? error.message : '无法启动执行')
     }
-  }, [active, agentRunManager, task])
+  }, [active, agentRunManager, knowledgeScope, task])
 
   const stopTask = React.useCallback(() => {
     void agentRunManager.cancel(taskId).catch((error) => {
@@ -316,7 +335,9 @@ export function AgentView({ taskId, title, onDeleted, onOpenTab }: { taskId: str
               </span>
               <AttachmentPickerButton label="添加文件" onPick={pickFiles} />
               <IconButton label="语音输入" icon={Mic} />
-              <IconButton label="选择知识库" icon={Database} />
+              {knowledgeAvailable && (
+                <AgentKnowledgePicker bases={knowledgeBasesQuery.data ?? []} />
+              )}
               {uploadAttachments.isPending && (
                 <span className="ml-2 text-xs text-zinc-500">上传中…</span>
               )}

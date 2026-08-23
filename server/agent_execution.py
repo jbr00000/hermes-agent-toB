@@ -351,6 +351,8 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
     heartbeat_thread.start()
 
     runtime_metadata: dict[str, Any] = {"mode": phase}
+    # 运行级知识库选择（路由侧已校验物化）；缺省 = 挂 knowledge 工具集、全库可检索
+    knowledge_scope: dict[str, Any] = job.get("knowledge") or {}
     title = repository.get_owned_conversation(user_id, session_id)["title"]
     try:
         if cancel_requested.is_set() or durable_cancel_requested():
@@ -432,6 +434,9 @@ def execute_agent_job(job: dict[str, Any], worker_id: str) -> str:
             mode=phase,
             permission_mode=permission_mode,
             execute_cwd=task_container_cwd(task_id) if phase == "execute" else None,
+            knowledge_enabled=bool(knowledge_scope.get("enabled", True)),
+            knowledge_kb_id=knowledge_scope.get("kb_id"),
+            knowledge_kb_name=knowledge_scope.get("kb_name"),
             tool_progress_callback=on_tool_progress,
             tool_start_callback=on_tool_start,
             tool_complete_callback=on_tool_complete,

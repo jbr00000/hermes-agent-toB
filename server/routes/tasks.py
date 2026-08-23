@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from server import auth
 from server import sessions as session_service
 from server.agent_queue import enqueue_agent_run, stream_agent_run
 from server.deps import get_current_user, require_feature
@@ -27,19 +28,29 @@ class CreateTaskRequest(BaseModel):
     source_session_id: str | None = Field(default=None, min_length=1, max_length=64)
 
 
+class KnowledgeScopeRequest(BaseModel):
+    # 运行级知识库选择：整个 knowledge 字段缺省 = 保持现状（挂 knowledge
+    # 工具集、全库可检索）；enabled=false 本轮不带知识库；kb_id 限定指定库
+    enabled: bool = True
+    kb_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+
 class PlanTaskRequest(BaseModel):
     message: str = Field(min_length=1, max_length=100_000)
     request_id: str | None = Field(default=None, min_length=1, max_length=64)
+    knowledge: KnowledgeScopeRequest | None = None
 
 
 class ExecuteTaskRequest(BaseModel):
     message: str | None = Field(default=None, max_length=100_000)
     request_id: str | None = Field(default=None, min_length=1, max_length=64)
+    knowledge: KnowledgeScopeRequest | None = None
 
 
 class RetryTaskRequest(BaseModel):
     message: str | None = Field(default=None, max_length=100_000)
     request_id: str | None = Field(default=None, min_length=1, max_length=64)
+    knowledge: KnowledgeScopeRequest | None = None
 
 
 class PermissionRequest(BaseModel):
@@ -51,6 +62,37 @@ class PermissionRequest(BaseModel):
 
 class ToolApprovalDecisionRequest(BaseModel):
     decision: Literal["allow", "deny", "allow_all"]
+
+
+def _resolve_knowledge_scope(
+    user: dict, scope: KnowledgeScopeRequest | None
+) -> dict | None:
+    """校验并物化运行级知识库选择。必须在入队（任何存储副作用）之前调用。
+
+    返回 None 表示缺省行为（knowledge 工具集照挂、全库可检索）；返回 dict
+    则随 job 负载传给 worker 侧的 build_agent。
+    """
+    if scope is None:
+        return None
+    if not scope.enabled:
+        if scope.kb_id:
+            raise HTTPException(status_code=400, detail="kb_id 需要知识库检索开启")
+        return {"enabled": False, "kb_id": None, "kb_name": None}
+    if not auth.user_features(user).get("knowledge", True):
+        raise HTTPException(
+            status_code=403, detail="feature 'knowledge' is disabled for this user"
+        )
+    from server.deployment_config import load_deployment_config
+
+    if not load_deployment_config().knowledge.enabled:
+        raise HTTPException(status_code=409, detail="知识库未启用")
+    kb_name = None
+    if scope.kb_id:
+        knowledge_base = get_repository().get_knowledge_base(scope.kb_id)
+        if knowledge_base is None:
+            raise HTTPException(status_code=404, detail="知识库不存在")
+        kb_name = knowledge_base.get("name")
+    return {"enabled": True, "kb_id": scope.kb_id, "kb_name": kb_name}
 
 
 def _task_detail(user_id: str, task_id: str) -> dict:
@@ -257,6 +299,7 @@ async def plan_task(
                 request_id=request_id,
             )
         raise HTTPException(status_code=409, detail="task already has an active run")
+    knowledge_scope = _resolve_knowledge_scope(user, req.knowledge)
     mode_state = session_service.resolve_chat_mode(user["id"], task["session_id"], "plan")
     enqueue_agent_run(
         user_id=user["id"],
@@ -266,6 +309,7 @@ async def plan_task(
         message=req.message,
         permission_mode="read",
         plan_state=mode_state["state"],
+        knowledge=knowledge_scope,
     )
     return stream_agent_run(
         request,
@@ -320,6 +364,7 @@ async def execute_task(
     plan = repository.get_latest_task_plan(user["id"], task_id)
     if plan is None or plan.get("status") != "approved":
         raise HTTPException(status_code=409, detail="approved plan required before execute")
+    knowledge_scope = _resolve_knowledge_scope(user, req.knowledge)
     mode_state = session_service.enter_execute_mode(user["id"], task["session_id"])
     instruction = (req.message or "").strip()
     if instruction:
@@ -342,6 +387,7 @@ async def execute_task(
         display_message=display_message,
         permission_mode=repository.get_task_permission(user["id"], task_id)["mode"],
         plan_state=mode_state["state"],
+        knowledge=knowledge_scope,
     )
     return stream_agent_run(
         request,
@@ -463,6 +509,7 @@ async def retry_task(
     runs = repository.list_task_runs(user["id"], task_id)
     if not runs:
         raise HTTPException(status_code=409, detail="task has no run to retry")
+    knowledge_scope = _resolve_knowledge_scope(user, req.knowledge)
 
     phase = runs[-1]["phase"]
     messages = repository.get_messages(task["session_id"])
@@ -498,6 +545,7 @@ async def retry_task(
         message=message,
         permission_mode=permission_mode,
         plan_state=mode_state["state"],
+        knowledge=knowledge_scope,
     )
     return stream_agent_run(
         request,

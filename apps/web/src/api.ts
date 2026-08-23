@@ -1,6 +1,7 @@
 import type {
   ActiveModelRun,
   AdminUserRow,
+  AgentKnowledgeScope,
   AgentTaskDetail,
   AuditEvent,
   AuthUser,
@@ -926,11 +927,17 @@ export const api = {
     message: string,
     handlers: ChatStreamHandlers,
     signal?: AbortSignal,
+    knowledge?: AgentKnowledgeScope,
   ): Promise<void> {
     const response = await apiFetch(`/tasks/${encodeURIComponent(taskId)}/plan`, {
       method: 'POST',
       signal,
-      body: JSON.stringify({ request_id: requestId, message }),
+      body: JSON.stringify({
+        request_id: requestId,
+        message,
+        // 运行级知识库选择：缺省不传 = 服务端默认（挂 knowledge 工具集、全库可检索）
+        ...(knowledge ? { knowledge: { enabled: knowledge.enabled, kb_id: knowledge.kbId } } : {}),
+      }),
     })
     if (!response.ok) throw await parseError(response)
     await consumeEventStream(response, handlers)
@@ -942,13 +949,16 @@ export const api = {
     handlers: ChatStreamHandlers,
     signal?: AbortSignal,
     message?: string,
+    knowledge?: AgentKnowledgeScope,
   ): Promise<void> {
     const response = await apiFetch(`/tasks/${encodeURIComponent(taskId)}/execute`, {
       method: 'POST',
       signal,
-      body: JSON.stringify(message?.trim()
-        ? { request_id: requestId, message }
-        : { request_id: requestId }),
+      body: JSON.stringify({
+        request_id: requestId,
+        ...(message?.trim() ? { message } : {}),
+        ...(knowledge ? { knowledge: { enabled: knowledge.enabled, kb_id: knowledge.kbId } } : {}),
+      }),
     })
     if (!response.ok) throw await parseError(response)
     await consumeEventStream(response, handlers)

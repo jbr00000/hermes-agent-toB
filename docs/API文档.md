@@ -224,8 +224,11 @@ Agent 模式必须通过任务接口进入。服务端持久化任务、运行�
 #### `POST /tasks/{task_id}/plan`（SSE）
 以只读工具生成计划。无论当前权限租约为何，Plan 阶段都强制只读。接口将任务写入 Redis 队列后保持 SSE 订阅；实际执行由独立 Agent Worker 完成，浏览器断开不会终止任务。Redis 入队失败时服务端将 MySQL 运行记录收敛为失败、释放任务占用并返回 `503` 和 `Retry-After`。
 ```json
-{ "message": "读取文档并生成执行计划", "request_id": "可选幂等标识" }
+{ "message": "读取文档并生成执行计划", "request_id": "可选幂等标识",
+  "knowledge": { "enabled": true, "kb_id": "可选，限定指定知识库" } }
 ```
+
+`knowledge` 为运行级知识库选择（`plan`/`execute`/`retry` 均支持）：整个字段缺省 = 保持默认（挂 `knowledge` 工具集、全库可检索）；`enabled=false` 本轮不挂 `knowledge_search`（此时不能再传 `kb_id`，否则 400）；`kb_id` 把检索限定到指定库。显式 `enabled=true` 要求部署已启用知识库（否则 409）且用户有 knowledge feature（否则 403）；`kb_id` 不存在返回 404。校验全部前置，被拒请求不会入队。
 
 除 `/chat` 的 `session/delta/final/error/done` 事件外，还可能收到：
 
@@ -249,7 +252,7 @@ Agent 模式必须通过任务接口进入。服务端持久化任务、运行�
 `mode` 可取 `read`、`controlled`、`full`。当前版本只有 `full` 会在 Execute 阶段启用 Docker 终端；扩展工具尚未接入风险分类，因此 `controlled` 暂不开放未分类写工具。任务执行完成、失败或取消后自动恢复为 `read`。
 
 #### `POST /tasks/{task_id}/execute`（SSE）
-只允许执行已批准的计划。请求体可传 `request_id`；不传时由服务端生成。Worker 真正领取任务时会重新校验权限租约，过期租约按 `read` 处理。
+只允许执行已批准的计划。请求体可传 `request_id`（不传时由服务端生成）、`message`（追加指令）与 `knowledge`（运行级知识库选择，语义同 `/plan`）。Worker 真正领取任务时会重新校验权限租约，过期租约按 `read` 处理。
 
 #### `GET /tasks/{task_id}/runs/{request_id}/events`（SSE）
 重新订阅已经入队或运行中的 Agent 任务。`content_offset` 查询参数表示前端已经持有的回答字符数，服务端只补发其后的快照内容，并按 Redis 有序事件游标重放后续状态/工具事件。Redis/MySQL 读取在线程池执行，不占用 Uvicorn 事件循环。

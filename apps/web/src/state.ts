@@ -15,6 +15,10 @@ export const knowledgeQaEnabledAtom = atomWithStorage<boolean>('hermes-knowledge
 export const knowledgeQaKbIdAtom = atomWithStorage<string | null>('hermes-knowledge-qa-kb', null, undefined, { getOnInit: true })
 /** 知识库问答的检索模式：fast 快速（默认）/ precise 精准（轻量模型改写，更慢更准） */
 export const knowledgeQaSearchModeAtom = atomWithStorage<KnowledgeSearchMode>('hermes-knowledge-qa-search-mode', 'fast', undefined, { getOnInit: true })
+/** Agent 任务的运行级知识库开关：false = 规划/执行不挂 knowledge_search（默认 true 保持现状） */
+export const agentKnowledgeEnabledAtom = atomWithStorage<boolean>('hermes-agent-knowledge-enabled', true, undefined, { getOnInit: true })
+/** Agent 任务的选库限定：null = 全部知识库 */
+export const agentKnowledgeKbIdAtom = atomWithStorage<string | null>('hermes-agent-knowledge-kb', null, undefined, { getOnInit: true })
 export const selectedSpaceAtom = atom<string>('litigation')
 
 export function tabId(ownerId: string, type: WorkTab['type'], refId: string): string {

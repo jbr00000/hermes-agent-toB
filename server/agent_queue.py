@@ -60,6 +60,7 @@ def enqueue_agent_run(
     permission_mode: str,
     plan_state: str,
     display_message: str | None = None,
+    knowledge: dict[str, Any] | None = None,
 ) -> None:
     repository = get_repository()
     runtime_store = get_runtime_store()
@@ -78,6 +79,8 @@ def enqueue_agent_run(
         "message": message,
         # 聊天流里展示的 user 气泡文案；None 时由执行侧按 phase 给默认值
         "display_message": display_message,
+        # 运行级知识库选择（enabled/kb_id/kb_name）；None = 默认挂 knowledge 工具集
+        "knowledge": knowledge,
         "permission_mode": permission_mode,
         "plan_state": plan_state,
         "queued_at": now,

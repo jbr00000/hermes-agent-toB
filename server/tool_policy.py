@@ -9,6 +9,7 @@ def resolve_toolsets(
     mode: str | None,
     features: Mapping[str, object] | None,
     permission_mode: str = "read",
+    knowledge: bool = True,
 ) -> list[str]:
     """Return the AIAgent toolsets allowed for this request mode.
 
@@ -41,17 +42,24 @@ def resolve_toolsets(
     部放行——未配置知识库后端时 check_fn 会隐藏工具，加在这里是 no-op。
     mode="knowledge"（知识库问答）是专用模式：只挂 knowledge 工具集，由
     agent_factory 的 RAG prompt 约束"先检索、再作答、标引用"。
+
+    ``knowledge=False`` 是运行级开关（agent 计划/执行时用户可选"不带知识
+    库"）：把 knowledge 工具集从结果中摘除，模型本轮完全看不到
+    knowledge_search。专用 mode="knowledge" 不受此开关影响。
     """
     normalized_mode = (mode or "execute").strip().lower()
     if normalized_mode == "knowledge":
         return ["knowledge"]
     if normalized_mode in {"chat", "plan"}:
-        return ["db", "web", "knowledge"]
-    if permission_mode == "full":
+        toolsets = ["db", "web", "knowledge"]
+    elif permission_mode == "full":
         toolsets = ["db", "terminal", "file", "web", "knowledge"]
         if (features or {}).get("browser_automation"):
             toolsets.append("browser")
-        return toolsets
-    if permission_mode == "controlled":
-        return ["db", "terminal", "file", "web", "knowledge"]
-    return ["db", "web", "knowledge"]
+    elif permission_mode == "controlled":
+        toolsets = ["db", "terminal", "file", "web", "knowledge"]
+    else:
+        toolsets = ["db", "web", "knowledge"]
+    if not knowledge:
+        toolsets = [name for name in toolsets if name != "knowledge"]
+    return toolsets

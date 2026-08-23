@@ -12,6 +12,7 @@ def build_agent(
     mode: str = None,
     permission_mode: str = "read",
     execute_cwd: str | None = None,
+    knowledge_enabled: bool = True,
     knowledge_kb_id: str | None = None,
     knowledge_kb_name: str | None = None,
     tool_progress_callback=None,
@@ -39,6 +40,11 @@ def build_agent(
     此处注入 RAG 约束 prompt；``knowledge_kb_id`` 非空时把检索限定到该库
     （prompt 钉住 + 工具侧校验 kb 存在；模型漏传时退化为全库检索）。
 
+    plan/execute 的运行级知识库选择：``knowledge_enabled=False`` 时经
+    tool_policy 摘除 knowledge 工具集（模型看不到 knowledge_search）；
+    ``knowledge_kb_id`` 非空时追加选库限定提示（与 knowledge 模式同一套
+    措辞）。
+
     Args:
         session_id: unique session id.
         user_id: authenticated user id.
@@ -64,6 +70,7 @@ def build_agent(
         mode=mode,
         features=features,
         permission_mode=permission_mode,
+        knowledge=knowledge_enabled,
     )
 
     # Build an ephemeral system-prompt section combining persistent memory
@@ -137,6 +144,12 @@ def build_agent(
                 f'用户选择了知识库「{label}」：调用 knowledge_search 时必须传 '
                 f'kb_id="{knowledge_kb_id}"，不要检索其他库。'
             )
+    if mode in {"plan", "execute"} and knowledge_enabled and knowledge_kb_id:
+        label = knowledge_kb_name or knowledge_kb_id
+        parts.append(
+            f'用户将知识库检索限定在「{label}」：调用 knowledge_search 时必须传 '
+            f'kb_id="{knowledge_kb_id}"，不要检索其他库。'
+        )
     ephemeral = "\n\n".join(parts) if parts else None
 
     return AIAgent(

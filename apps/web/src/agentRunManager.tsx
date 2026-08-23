@@ -4,6 +4,7 @@ import { api } from './api'
 import { mergeRunMessages } from './mergeMessages'
 import type {
   ActiveModelRun,
+  AgentKnowledgeScope,
   AgentTaskDetail,
   AgentTaskStatus,
   ChatMessage,
@@ -139,12 +140,12 @@ export class AgentRunManager {
     taskIds.forEach((taskId) => this.notify(taskId))
   }
 
-  startPlan(task: AgentTaskDetail, message: string): string {
-    return this.start(task, 'plan', message)
+  startPlan(task: AgentTaskDetail, message: string, knowledge?: AgentKnowledgeScope): string {
+    return this.start(task, 'plan', message, knowledge ?? null)
   }
 
-  startExecute(task: AgentTaskDetail, message?: string): string {
-    return this.start(task, 'execute', message ?? null)
+  startExecute(task: AgentTaskDetail, message?: string, knowledge?: AgentKnowledgeScope): string {
+    return this.start(task, 'execute', message ?? null, knowledge ?? null)
   }
 
   async cancel(taskId: string): Promise<void> {
@@ -224,6 +225,7 @@ export class AgentRunManager {
     task: AgentTaskDetail,
     phase: 'plan' | 'execute',
     message: string | null,
+    knowledge: AgentKnowledgeScope | null,
   ): string {
     const current = this.getSnapshot(task.id)
     if (isAgentRunActive(current)) throw new Error('当前任务正在运行')
@@ -278,7 +280,7 @@ export class AgentRunManager {
         snapshotUpdatedAt: now,
       },
     })
-    void this.consume(task, requestId, phase, message, controller)
+    void this.consume(task, requestId, phase, message, controller, knowledge)
     return requestId
   }
 
@@ -331,7 +333,7 @@ export class AgentRunManager {
     if (!this.controllers.has(activeRun.id)) {
       const controller = new AbortController()
       this.controllers.set(activeRun.id, controller)
-      void this.consume(task, activeRun.id, phase, null, controller, true)
+      void this.consume(task, activeRun.id, phase, null, controller, null, true)
     }
   }
 
@@ -341,6 +343,7 @@ export class AgentRunManager {
     phase: 'plan' | 'execute',
     message: string | null,
     controller: AbortController,
+    knowledge: AgentKnowledgeScope | null = null,
     reconnect = false,
   ): Promise<void> {
     let terminalEventReceived = false
@@ -486,6 +489,7 @@ export class AgentRunManager {
           message ?? '',
           handlers,
           controller.signal,
+          knowledge ?? undefined,
         )
       } else {
         await this.agentApi.streamTaskExecute(
@@ -494,6 +498,7 @@ export class AgentRunManager {
           handlers,
           controller.signal,
           message ?? undefined,
+          knowledge ?? undefined,
         )
       }
       if (!terminalEventReceived && isAgentRunActive(this.getSnapshot(task.id))) {

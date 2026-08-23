@@ -170,6 +170,12 @@ export interface KnowledgeCitation {
 /** 知识库问答检索模式：fast=单次融合检索；precise=轻量模型改写+编排（更慢更准） */
 export type KnowledgeSearchMode = 'fast' | 'precise'
 
+/** Agent 任务的运行级知识库选择：enabled=false 不带知识库；kbId=null 检索全部知识库 */
+export interface AgentKnowledgeScope {
+  enabled: boolean
+  kbId: string | null
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant' | 'system'
