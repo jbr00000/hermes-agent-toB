@@ -240,15 +240,9 @@
   90%, 100% { transform: translateY(0.8em); opacity: 0; }
 }
 
-/* 点击反应（两种形象共用，由 PetFloat 挂到外层容器） */
-.pet-click > * { animation: pet-click-bounce 0.45s ease; }
-@keyframes pet-click-bounce {
-  0%, 100% { transform: scale(1, 1); }
-  35% { transform: scale(0.92, 1.08) translateY(-4%); }
-  70% { transform: scale(1.05, 0.94); }
-}
+/* 点击反应：PetFloat 用 WAAPI（element.animate）直接播放，不走 CSS 类 —
+   类切换在 480ms 内连点时不会重启动画，WAAPI 每次调用独立触发 */
 
 @media (prefers-reduced-motion: reduce) {
   .niulai-anim *, .niulai-anim img { animation: none !important; }
-  .pet-click > * { animation: none !important; }
 }

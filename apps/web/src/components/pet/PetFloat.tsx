@@ -79,11 +79,9 @@ function PetFloatShell({ state }: { state: PetState }): React.ReactElement {
 
   const [pos, setPos] = React.useState<PetPos | null>(loadPos)
   const [dragging, setDragging] = React.useState(false)
-  const [clicked, setClicked] = React.useState(false)
   const rootRef = React.useRef<HTMLDivElement | null>(null)
   const dragOffsetRef = React.useRef<{ dx: number; dy: number } | null>(null)
   const downPointRef = React.useRef<PetPos | null>(null)
-  const clickTimerRef = React.useRef<number | null>(null)
 
   const clamp = React.useCallback((x: number, y: number): PetPos => {
     const parent = rootRef.current?.parentElement
@@ -115,6 +113,23 @@ function PetFloatShell({ state }: { state: PetState }): React.ReactElement {
     return { x: clientX - rect.left, y: clientY - rect.top }
   }
 
+  // 点击反应用 WAAPI 直接播：每次点击独立触发（类切换在连点时不会重启动画），
+  // 也不受桌宠自身 idle/任务动画的 class 覆盖影响
+  const playClickReaction = (): void => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    const el = rootRef.current?.firstElementChild
+    if (!el) return
+    el.animate(
+      [
+        { transform: 'scale(1, 1)' },
+        { transform: 'scale(0.86, 1.14) translateY(-7%)', offset: 0.35 },
+        { transform: 'scale(1.1, 0.9)', offset: 0.7 },
+        { transform: 'scale(1, 1)' },
+      ],
+      { duration: 480, easing: 'ease-out' },
+    )
+  }
+
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>): void => {
     event.preventDefault()
     const rect = event.currentTarget.getBoundingClientRect()
@@ -143,9 +158,7 @@ function PetFloatShell({ state }: { state: PetState }): React.ReactElement {
       && Math.abs(event.clientX - down.x) < CLICK_SLOP_PX
       && Math.abs(event.clientY - down.y) < CLICK_SLOP_PX
     ) {
-      if (clickTimerRef.current !== null) window.clearTimeout(clickTimerRef.current)
-      setClicked(true)
-      clickTimerRef.current = window.setTimeout(() => setClicked(false), 480)
+      playClickReaction()
       return
     }
     setPos((current) => {
@@ -167,7 +180,7 @@ function PetFloatShell({ state }: { state: PetState }): React.ReactElement {
   return (
     <div
       ref={rootRef}
-      className={`absolute z-30 touch-none select-none ${dragging ? 'cursor-grabbing' : 'cursor-grab'}${clicked ? ' pet-click' : ''}`}
+      className={`absolute z-30 touch-none select-none ${dragging ? 'cursor-grabbing' : 'cursor-grab'}`}
       style={style}
       title={`${PET_SKIN_LABEL[skin]} · ${PET_STATE_LABEL[effState]}（可拖拽，点击有反应）`}
       onPointerDown={onPointerDown}

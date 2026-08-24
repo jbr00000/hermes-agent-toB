@@ -51,16 +51,24 @@ def inpaint_watermark(img: Image.Image) -> Image.Image:
 
 
 def cutout(img: Image.Image) -> Image.Image:
-    """u2net 的剪影覆盖完整（身体也在），但主体 alpha 偏低。
-    所以只用它的 alpha 当「软掩码源」：低阈值取出剪影 → 闭运算补缝 → 填洞 →
-    最大连通域 → 边缘轻微羽化，重新作为 alpha，颜色直接用原图 RGB。"""
+    """u2net + alpha matting：主体形状（尤其阴影里的手臂）保留得最好，
+    但身体落在「不确定区」只给半透明 alpha。所以只用 matting 结果取剪影形状：
+    阈值化 → 闭运算补缝 → 填洞 → 最大连通域 → 边缘羽化后重新作为 alpha，
+    颜色直接用原图 RGB。"""
     session = new_session("u2net")
     buf = io.BytesIO()
     img.save(buf, format="PNG")
-    result = remove(buf.getvalue(), session=session)
+    result = remove(
+        buf.getvalue(),
+        session=session,
+        alpha_matting=True,
+        alpha_matting_foreground_threshold=220,
+        alpha_matting_background_threshold=15,
+        alpha_matting_erode_size=8,
+    )
     soft = np.array(Image.open(io.BytesIO(result)))[:, :, 3]
 
-    mask = (soft > 20).astype(np.uint8) * 255
+    mask = (soft > 30).astype(np.uint8) * 255
     kernel = np.ones((5, 5), np.uint8)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=3)
 
