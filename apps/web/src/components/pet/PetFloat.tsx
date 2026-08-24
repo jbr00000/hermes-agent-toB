@@ -187,21 +187,22 @@ function PetFloatShell({ state }: { state: PetState }): React.ReactElement {
     }, DOUBLE_CLICK_MS)
   }
 
-  // 拖拽放下（真的移动了位置）：松了一口气——落地一瘫再缓缓恢复
+  // 拖拽放下（真的移动了位置）：松了一口气——pet-relief 类驱动的多层一次性动画
+  // （落地一瘫回弹 + 双臂垂落 + 低头叹气再抬头）。类切换可能撞上连续拖拽，
+  // 先移除再在下一帧加回，强制重启动画
+  const [relief, setRelief] = React.useState(false)
+  const reliefTimerRef = React.useRef<number | null>(null)
   const playRelief = (): void => {
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
-    const el = rootRef.current?.firstElementChild
-    if (!el) return
-    el.animate(
-      [
-        { transform: 'scale(1, 1) translateY(0)' },
-        { transform: 'scale(1.08, 0.88) translateY(2%)', offset: 0.22 },
-        { transform: 'scale(0.96, 1.04) translateY(-1%)', offset: 0.48 },
-        { transform: 'scale(1.02, 0.98)', offset: 0.72 },
-        { transform: 'scale(1, 1) translateY(0)' },
-      ],
-      { duration: 750, easing: 'ease-out' },
-    )
+    if (reliefTimerRef.current !== null) window.clearTimeout(reliefTimerRef.current)
+    setRelief(false)
+    requestAnimationFrame(() => {
+      setRelief(true)
+      reliefTimerRef.current = window.setTimeout(() => {
+        reliefTimerRef.current = null
+        setRelief(false)
+      }, 950)
+    })
   }
 
   const stopWalk = React.useCallback((): void => {
@@ -297,6 +298,7 @@ function PetFloatShell({ state }: { state: PetState }): React.ReactElement {
     () => () => {
       if (walkRafRef.current !== null) cancelAnimationFrame(walkRafRef.current)
       if (clickTimerRef.current !== null) window.clearTimeout(clickTimerRef.current)
+      if (reliefTimerRef.current !== null) window.clearTimeout(reliefTimerRef.current)
     },
     [],
   )
@@ -349,6 +351,7 @@ function PetFloatShell({ state }: { state: PetState }): React.ReactElement {
     dragging ? 'pet-dragging cursor-grabbing' : 'cursor-grab',
     walkDir ? `pet-walking${walkDir === 'left' ? ' pet-face-left' : ''}` : '',
     sleeping ? 'pet-sleeping' : '',
+    relief && !dragging ? 'pet-relief' : '',
   ]
     .filter(Boolean)
     .join(' ')

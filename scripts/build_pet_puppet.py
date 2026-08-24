@@ -145,11 +145,13 @@ def detect_arm_gaps(alpha: np.ndarray, side: str, band_top: int, band_bot: int) 
 
 def split_arm(
     rgb: np.ndarray, alpha: np.ndarray, body_a: np.ndarray, side: str, gaps: dict[int, int]
-) -> tuple[np.ndarray, np.ndarray, tuple[float, float]] | None:
-    """肩部枢轴直线 + 肘下缝隙线把手臂切下。返回 (arm_rgba, body_alpha, pivot)。
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, tuple[float, float]] | None:
+    """肩部枢轴直线 + 肘下缝隙线把手臂切下。返回 (arm_rgba, body_alpha, arm_mask, pivot)。
 
     alpha 是完整剪影（手臂图层从它取像素）；body_a 是身体当前 alpha
     （已删掉头/先拆的臂），在此基础上继续减掉这条手臂。
+    arm_mask 同时返回给腿部拆分用——手掌垂在胯线以下，腿部竖切时必须剔除，
+    否则手掌被手臂、腿两个图层各画一遍（走路摆臂时留下残影）。
     """
     h, w = alpha.shape
     ys = sorted(gaps)
@@ -181,14 +183,20 @@ def split_arm(
 
     arm_a = (alpha.astype(np.float64) * (mask.astype(np.float64) / 255)).astype(np.uint8)
     new_body_a = (body_a.astype(np.float64) * (1 - mask.astype(np.float64) / 255)).astype(np.uint8)
-    return np.dstack([rgb, arm_a]), new_body_a, (px, float(py))
+    return np.dstack([rgb, arm_a]), new_body_a, mask, (px, float(py))
 
 
 def split_leg(
-    rgb: np.ndarray, alpha: np.ndarray, body_a: np.ndarray, key: str, crotch_x: int
+    rgb: np.ndarray,
+    alpha: np.ndarray,
+    body_a: np.ndarray,
+    key: str,
+    crotch_x: int,
+    exclude_masks: list[np.ndarray],
 ) -> tuple[np.ndarray, np.ndarray, tuple[float, float]]:
     """胯中线竖切 + 胯线横切拆出一条腿（正面直立像双腿粘连，直接对半竖切，
-    静止时两层像素完全一致，切缝不可见）。返回 (leg_rgba, body_alpha, pivot)。"""
+    静止时两层像素完全一致，切缝不可见）。返回 (leg_rgba, body_alpha, pivot)。
+    exclude_masks：需要先剔除的区域（垂过胯线的手掌），避免一个像素进两个图层。"""
     h, w = alpha.shape
     y0 = int(h * LEG_HIP_Y_FRAC)
     mask = np.zeros((h, w), np.uint8)
@@ -197,6 +205,8 @@ def split_leg(
     else:
         mask[y0:, crotch_x:] = 255
     mask = cv2.GaussianBlur(mask, (5, 5), 0)  # 切边羽化
+    for ex in exclude_masks:
+        mask = (mask.astype(np.float64) * (1 - ex.astype(np.float64) / 255)).astype(np.uint8)
 
     leg_a = (alpha.astype(np.float64) * (mask.astype(np.float64) / 255)).astype(np.uint8)
     new_body_a = (body_a.astype(np.float64) * (1 - mask.astype(np.float64) / 255)).astype(np.uint8)
@@ -251,6 +261,7 @@ def main() -> None:
 
     layers: dict[str, np.ndarray] = {"head": head_rgba}
     pivots: dict[str, tuple[float, float]] = {"head": head_pivot}
+    arm_masks: list[np.ndarray] = []
     band_top, band_bot = int(h * 0.40), int(h * 0.75)
     for side, key in (("left", "armL"), ("right", "armR")):
         gaps = detect_arm_gaps(alpha, side, band_top, band_bot)
@@ -258,19 +269,20 @@ def main() -> None:
         if result is None:
             print(f"{key}: 缝隙不足，放弃拆臂（该臂留在身体上）")
             continue
-        arm_rgba, body_a, pivot = result
+        arm_rgba, body_a, arm_mask, pivot = result
         layers[key] = arm_rgba
         pivots[key] = pivot
+        arm_masks.append(arm_mask)
         print(f"{key}: 缝隙行 {len(gaps)}，pivot=({pivot[0]:.0f},{pivot[1]:.0f})")
 
-    # 拆腿：胯线高度取躯干实体段中点作为胯中线
+    # 拆腿：胯线高度取躯干实体段中点作为胯中线；手掌垂在胯线以下，腿部要剔除手臂区域
     hip_y = int(h * LEG_HIP_Y_FRAC)
     hip_runs = row_runs(alpha[hip_y])
     if hip_runs:
         trunk = max(hip_runs, key=lambda r: r[1] - r[0])
         crotch_x = (trunk[0] + trunk[1]) // 2
         for key in ("legL", "legR"):
-            leg_rgba, body_a, pivot = split_leg(rgb, alpha, body_a, key, crotch_x)
+            leg_rgba, body_a, pivot = split_leg(rgb, alpha, body_a, key, crotch_x, arm_masks)
             layers[key] = leg_rgba
             pivots[key] = pivot
         print(f"legs: crotch x={crotch_x}, hip y={hip_y}")
