@@ -5,4 +5,6 @@ export const NIULAI_PUPPET = {
   head: { originX: 49.7, originY: 36.7 },
   armL: { originX: 21.0, originY: 41.8 },
   armR: { originX: 79.0, originY: 41.8 },
+  legL: { originX: 38.0, originY: 59.8 },
+  legR: { originX: 62.0, originY: 59.8 },
 } as const

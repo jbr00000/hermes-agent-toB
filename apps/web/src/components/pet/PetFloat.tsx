@@ -187,6 +187,23 @@ function PetFloatShell({ state }: { state: PetState }): React.ReactElement {
     }, DOUBLE_CLICK_MS)
   }
 
+  // 拖拽放下（真的移动了位置）：松了一口气——落地一瘫再缓缓恢复
+  const playRelief = (): void => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    const el = rootRef.current?.firstElementChild
+    if (!el) return
+    el.animate(
+      [
+        { transform: 'scale(1, 1) translateY(0)' },
+        { transform: 'scale(1.08, 0.88) translateY(2%)', offset: 0.22 },
+        { transform: 'scale(0.96, 1.04) translateY(-1%)', offset: 0.48 },
+        { transform: 'scale(1.02, 0.98)', offset: 0.72 },
+        { transform: 'scale(1, 1) translateY(0)' },
+      ],
+      { duration: 750, easing: 'ease-out' },
+    )
+  }
+
   const stopWalk = React.useCallback((): void => {
     if (walkRafRef.current !== null) {
       cancelAnimationFrame(walkRafRef.current)
@@ -225,7 +242,7 @@ function PetFloatShell({ state }: { state: PetState }): React.ReactElement {
     // pos 可能还是 null（CSS right/bottom 锚定）：先换算成数值坐标，视觉上原地不动
     setPos(base)
     setWalkDir(dist < 0 ? 'left' : 'right')
-    const duration = Math.abs(dist) * 22
+    const duration = Math.abs(dist) * 30  // 步速匹配 0.5s 迈步节拍，快了会像飘着滑
     const t0 = performance.now()
     const tick = (now: number): void => {
       if (walkRafRef.current === null) return
@@ -317,6 +334,7 @@ function PetFloatShell({ state }: { state: PetState }): React.ReactElement {
       onPetClick()
       return
     }
+    playRelief()  // 拖拽后放下：松了一口气
     setPos((current) => {
       if (current) persistPos(current)
       return current

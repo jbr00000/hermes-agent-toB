@@ -229,11 +229,25 @@
   55% { transform: rotate(7deg) translateY(3%); }
 }
 
-/* 走动（外壳 .pet-walking）：双臂反相摆动 + 头颠簸 + 身体前倾 */
+/* 走动（外壳 .pet-walking）：双腿交替迈步 + 双臂反相摆动（异侧手脚同步的自然步态）
+   + 头颠簸 + 身体重心摇摆 */
+.pet-walking .niulai .n-leg-l { animation: n-leg-step 0.5s ease-in-out -0.25s infinite; }
+.pet-walking .niulai .n-leg-r { animation: n-leg-step 0.5s ease-in-out infinite; }
 .pet-walking .niulai .n-arm-l { animation: n-arm-swing 0.5s ease-in-out infinite; }
 .pet-walking .niulai .n-arm-r { animation: n-arm-swing 0.5s ease-in-out -0.25s infinite; }
 .pet-walking .niulai .n-head { animation: n-walk-head 0.5s ease-in-out infinite; }
-.pet-walking .niulai .n-body { transform: rotate(1.5deg); transform-origin: 50% 100%; }
+.pet-walking .niulai .n-body {
+  transform-origin: 50% 100%;
+  animation: n-walk-body 0.5s ease-in-out infinite;
+}
+@keyframes n-leg-step {
+  0%, 100% { transform: rotate(9deg) translateY(-1.5%); }
+  50% { transform: rotate(-7deg); }
+}
+@keyframes n-walk-body {
+  0%, 100% { transform: rotate(-2deg); }
+  50% { transform: rotate(2deg); }
+}
 @keyframes n-arm-swing {
   0%, 100% { transform: rotate(13deg); }
   50% { transform: rotate(-13deg); }
@@ -241,6 +255,21 @@
 @keyframes n-walk-head {
   0%, 100% { transform: rotate(0deg) translateY(0); }
   50% { transform: rotate(1.5deg) translateY(-1.5%); }
+}
+
+/* 被拖拽拎起（外壳 .pet-dragging）：挣扎——四肢扑腾 + 头甩动 */
+.pet-dragging .niulai .n-leg-l { animation: n-kick 0.3s ease-in-out infinite; }
+.pet-dragging .niulai .n-leg-r { animation: n-kick 0.3s ease-in-out -0.15s infinite; }
+.pet-dragging .niulai .n-arm-l { animation: n-flail 0.3s ease-in-out infinite; }
+.pet-dragging .niulai .n-arm-r { animation: n-flail 0.3s ease-in-out -0.15s infinite; }
+.pet-dragging .niulai .n-head { animation: n-wobble 0.4s ease-in-out infinite; }
+@keyframes n-kick {
+  0%, 100% { transform: rotate(14deg) translateY(-2%); }
+  50% { transform: rotate(-11deg); }
+}
+@keyframes n-flail {
+  0%, 100% { transform: rotate(-22deg); }
+  50% { transform: rotate(14deg); }
 }
 
 /* 瞌睡（外壳 .pet-sleeping）：头低垂（盖过 idle 的头轻摆） */
@@ -319,12 +348,17 @@
   transition: transform 0.18s ease-out, filter 0.4s ease;
 }
 
-/* 拖拽中（DRAG 最高优先级）：轻轻拎起 */
+/* 拖拽中（DRAG 最高优先级）：拎起 + 扭动挣扎 */
 .pet-dragging .pet-stage {
-  transform: scale(1.06) rotate(2deg);
+  animation: pet-struggle 0.45s ease-in-out infinite;
+  transition: none;
+}
+@keyframes pet-struggle {
+  0%, 100% { transform: scale(1.05) rotate(3.5deg); }
+  50% { transform: scale(1.05) rotate(-3.5deg); }
 }
 
-/* 走动（WALK）：上下颠簸 + 左右摇摆；左走时立绘水平翻转 */
+/* 走动（WALK）：轻微起伏（迈步动作在腿部图层上）；左走时立绘水平翻转 */
 .pet-walking .pet-stage {
   animation: pet-walk-bob 0.5s ease-in-out infinite;
   transition: none;
@@ -333,12 +367,12 @@
   animation-name: pet-walk-bob-flip;
 }
 @keyframes pet-walk-bob {
-  0%, 100% { transform: translateY(0) rotate(-2.5deg); }
-  50% { transform: translateY(-5%) rotate(2.5deg); }
+  0%, 100% { transform: translateY(0) rotate(-1.5deg); }
+  50% { transform: translateY(-3%) rotate(1.5deg); }
 }
 @keyframes pet-walk-bob-flip {
-  0%, 100% { transform: scaleX(-1) translateY(0) rotate(-2.5deg); }
-  50% { transform: scaleX(-1) translateY(-5%) rotate(2.5deg); }
+  0%, 100% { transform: scaleX(-1) translateY(0) rotate(-1.5deg); }
+  50% { transform: scaleX(-1) translateY(-3%) rotate(1.5deg); }
 }
 
 /* 瞌睡（SLEEP：60s 无交互进入，点击唤醒）：低垂褪色 + Zzz */
@@ -372,7 +406,9 @@
 
 @media (prefers-reduced-motion: reduce) {
   .niulai-anim *, .niulai-anim .n-layer { animation: none !important; }
-  .pet-walking .niulai .n-layer { animation: none !important; }
+  .pet-walking .niulai .n-layer,
+  .pet-dragging .niulai .n-layer { animation: none !important; }
   .pet-walking .pet-stage { animation: none !important; }
+  .pet-dragging .pet-stage { animation: none !important; transform: scale(1.05); }
   .pet-zzz i { animation: none; opacity: 0.75; }
 }

@@ -37,6 +37,8 @@ NECK_Y_FRAC = 0.37  # 头/颈横切位置（图高比例）：颌底与肩膀之
 SHOULDER_Y_FRAC = 0.42  # 肩部枢轴高度
 ARM_PIVOT_X_FRAC = 0.21  # 肩枢轴距同侧轮廓的水平位置（图宽比例，左臂用，右臂镜像）
 MIN_GAP_ROWS = 10  # 缝隙行少于此值放弃拆臂（手臂贴身，留在身体上）
+LEG_HIP_Y_FRAC = 0.60  # 腿/躯干横切位置（胯部）
+LEG_PIVOT_X_FRAC = {"legL": 0.38, "legR": 0.62}  # 髋部枢轴（图宽比例）
 
 
 # ---------------------------------------------------------------- 抠图
@@ -182,9 +184,31 @@ def split_arm(
     return np.dstack([rgb, arm_a]), new_body_a, (px, float(py))
 
 
+def split_leg(
+    rgb: np.ndarray, alpha: np.ndarray, body_a: np.ndarray, key: str, crotch_x: int
+) -> tuple[np.ndarray, np.ndarray, tuple[float, float]]:
+    """胯中线竖切 + 胯线横切拆出一条腿（正面直立像双腿粘连，直接对半竖切，
+    静止时两层像素完全一致，切缝不可见）。返回 (leg_rgba, body_alpha, pivot)。"""
+    h, w = alpha.shape
+    y0 = int(h * LEG_HIP_Y_FRAC)
+    mask = np.zeros((h, w), np.uint8)
+    if key == "legL":
+        mask[y0:, :crotch_x] = 255
+    else:
+        mask[y0:, crotch_x:] = 255
+    mask = cv2.GaussianBlur(mask, (5, 5), 0)  # 切边羽化
+
+    leg_a = (alpha.astype(np.float64) * (mask.astype(np.float64) / 255)).astype(np.uint8)
+    new_body_a = (body_a.astype(np.float64) * (1 - mask.astype(np.float64) / 255)).astype(np.uint8)
+    pivot = (w * LEG_PIVOT_X_FRAC[key], float(y0))
+    return np.dstack([rgb, leg_a]), new_body_a, pivot
+
+
 def inpaint_body(rgb: np.ndarray, body_a: np.ndarray, orig_alpha: np.ndarray) -> np.ndarray:
-    """把身体被切掉的头/臂区域 RGB 用周围纹理补上（部件摆开时露出的躯干不穿帮）。"""
-    hole = ((orig_alpha > ALPHA_THR) & (body_a <= ALPHA_THR)).astype(np.uint8) * 255
+    """把身体被切掉的头/臂/腿区域 RGB 用周围纹理补上（部件摆开时露出的躯干不穿帮）。
+    只对身体 alpha 基本掉光的区域动刀——羽化缝上的半透明带保留原始 RGB，
+    否则接缝处会显出一条模糊线。"""
+    hole = ((orig_alpha > ALPHA_THR) & (body_a <= 32)).astype(np.uint8) * 255
     if hole.sum() == 0:
         return rgb
     hole = cv2.dilate(hole, np.ones((7, 7), np.uint8), iterations=1)
@@ -239,6 +263,20 @@ def main() -> None:
         pivots[key] = pivot
         print(f"{key}: 缝隙行 {len(gaps)}，pivot=({pivot[0]:.0f},{pivot[1]:.0f})")
 
+    # 拆腿：胯线高度取躯干实体段中点作为胯中线
+    hip_y = int(h * LEG_HIP_Y_FRAC)
+    hip_runs = row_runs(alpha[hip_y])
+    if hip_runs:
+        trunk = max(hip_runs, key=lambda r: r[1] - r[0])
+        crotch_x = (trunk[0] + trunk[1]) // 2
+        for key in ("legL", "legR"):
+            leg_rgba, body_a, pivot = split_leg(rgb, alpha, body_a, key, crotch_x)
+            layers[key] = leg_rgba
+            pivots[key] = pivot
+        print(f"legs: crotch x={crotch_x}, hip y={hip_y}")
+    else:
+        print("legs: 胯部行无实体段，放弃拆腿")
+
     body_rgba = np.dstack([inpaint_body(rgb, body_a, alpha), body_a])
 
     Image.fromarray(body_rgba, "RGBA").save(OUT_DIR / "niulai-body.png")
@@ -246,7 +284,14 @@ def main() -> None:
         Image.fromarray(layer, "RGBA").save(OUT_DIR / f"niulai-{key}.png")
     img.save(OUT_DIR / "niulai.png")  # 整图保留（兜底 / 静态展示）
 
-    order = [body_rgba, layers.get("armL"), layers.get("armR"), layers["head"]]
+    order = [
+        body_rgba,
+        layers.get("legL"),
+        layers.get("legR"),
+        layers.get("armL"),
+        layers.get("armR"),
+        layers["head"],
+    ]
     stack = [layer for layer in order if layer is not None]
     check_dir = ROOT / "tmp_puppet_check"
     check_dir.mkdir(exist_ok=True)
@@ -254,7 +299,13 @@ def main() -> None:
 
     # 抽帧校验：各层绕枢轴旋转后拼合，肉眼检查接缝/枢轴（角度取 CSS 动画的极值）
     frames = [composite(stack)]
-    for key, degs in (("head", (-10, 10)), ("armL", (-28, 28)), ("armR", (-28, 28))):
+    for key, degs in (
+        ("head", (-10, 10)),
+        ("armL", (-28, 28)),
+        ("armR", (-28, 28)),
+        ("legL", (-12, 12)),
+        ("legR", (-12, 12)),
+    ):
         if key not in layers:
             continue
         for deg in degs:
@@ -277,7 +328,7 @@ def main() -> None:
         "export const NIULAI_PUPPET = {",
         f"  aspect: {round(w / h, 4)},",
     ]
-    for key in ("head", "armL", "armR"):
+    for key in ("head", "armL", "armR", "legL", "legR"):
         if key in pivots:
             x, y = pct(pivots[key])
             meta_lines.append(f"  {key}: {{ originX: {x}, originY: {y} }},")
