@@ -126,60 +126,127 @@
 }
 
 /* ============================================================
-   牛来桌宠（抠图立绘 + 程序化动画，同样只在 .niulai-anim 内生效）
+   牛来桌宠（分层木偶：身体/双臂/头四层叠加，每层独立 transform；
+   图层与枢轴由 scripts/build_pet_puppet.py 生成。
+   所有动画只在 .niulai-anim 内生效；静态姿态（sad 垂臂等）用 transition）
    ============================================================ */
 .niulai {
   position: relative;
   display: inline-block;
 }
-.niulai img {
+.niulai .n-rig {
+  position: absolute;
+  inset: 0;
   display: block;
+}
+.niulai .n-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transition: transform 0.35s ease;
+}
+
+/* 待机：身体呼吸 + 头轻摆 + 双臂微晃 */
+.niulai-anim.n-idle .n-body {
   transform-origin: 50% 100%;
+  animation: n-breathe 3.4s ease-in-out infinite;
+}
+.niulai-anim.n-idle .n-head { animation: n-head-sway 4.2s ease-in-out infinite; }
+.niulai-anim.n-idle .n-arm-l { animation: n-arm-idle 3.4s ease-in-out infinite; }
+.niulai-anim.n-idle .n-arm-r { animation: n-arm-idle 3.4s ease-in-out -1.7s infinite; }
+@keyframes n-breathe {
+  0%, 100% { transform: scale(1, 1); }
+  50% { transform: scale(1.012, 1.02); }
+}
+@keyframes n-head-sway {
+  0%, 100% { transform: rotate(0deg); }
+  30% { transform: rotate(2deg); }
+  65% { transform: rotate(-1.5deg); }
+}
+@keyframes n-arm-idle {
+  0%, 100% { transform: rotate(0deg); }
+  50% { transform: rotate(2.5deg); }
 }
 
-/* 待机：缓慢呼吸浮动 */
-.niulai-anim.n-idle img { animation: niulai-breathe 3.4s ease-in-out infinite; }
-@keyframes niulai-breathe {
+/* 思考：歪头（绕颈部枢轴）+ 微微上下 */
+.niulai-anim.n-thinking .n-head { animation: n-think-tilt 2.8s ease-in-out infinite; }
+@keyframes n-think-tilt {
+  0%, 100% { transform: rotate(-9deg) translateY(0); }
+  50% { transform: rotate(-9deg) translateY(-1.5%); }
+}
+
+/* 工作：身体摇摆 + 双臂交替摆动 + 头随节奏点动 */
+.niulai-anim.n-working .n-body {
+  transform-origin: 50% 100%;
+  animation: n-rock 0.9s ease-in-out infinite;
+}
+.niulai-anim.n-working .n-arm-l { animation: n-pump 0.45s ease-in-out infinite; }
+.niulai-anim.n-working .n-arm-r { animation: n-pump 0.45s ease-in-out -0.225s infinite; }
+.niulai-anim.n-working .n-head { animation: n-head-nod 0.9s ease-in-out infinite; }
+@keyframes n-rock {
+  0%, 100% { transform: rotate(-2.5deg); }
+  50% { transform: rotate(2.5deg); }
+}
+@keyframes n-pump {
+  0%, 100% { transform: rotate(-10deg); }
+  50% { transform: rotate(10deg); }
+}
+@keyframes n-head-nod {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2%); }
+}
+
+/* 疑惑：头部快速左右摇摆 */
+.niulai-anim.n-confused .n-head { animation: n-wobble 0.5s ease-in-out infinite; }
+@keyframes n-wobble {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(-5deg); }
+  75% { transform: rotate(5deg); }
+}
+
+/* 恍然大悟：整体弹跳 + 头后仰 + 双臂举起 */
+.niulai-anim.n-eureka {
+  transform-origin: 50% 100%;
+  animation: n-hop 0.8s ease-in-out infinite;
+}
+.niulai-anim.n-eureka .n-head { transform: rotate(-6deg) translateY(-1%); }
+.niulai-anim.n-eureka .n-arm-l { transform: rotate(-26deg); }
+.niulai-anim.n-eureka .n-arm-r { transform: rotate(26deg); }
+@keyframes n-hop {
   0%, 100% { transform: translateY(0) scale(1, 1); }
-  50% { transform: translateY(-1.5%) scale(1.008, 1.02); }
-}
-
-/* 思考：歪头 + 微微上下 */
-.niulai-anim.n-thinking img { animation: niulai-tilt 2.8s ease-in-out infinite; }
-@keyframes niulai-tilt {
-  0%, 100% { transform: rotate(-7deg) translateY(0); }
-  50% { transform: rotate(-7deg) translateY(-2%); }
-}
-
-/* 工作：左右摇摆 */
-.niulai-anim.n-working img { animation: niulai-rock 0.9s ease-in-out infinite; }
-@keyframes niulai-rock {
-  0%, 100% { transform: rotate(-4deg); }
-  50% { transform: rotate(4deg); }
-}
-
-/* 疑惑：快速小幅抖动 */
-.niulai-anim.n-confused img { animation: niulai-wiggle 0.5s ease-in-out infinite; }
-@keyframes niulai-wiggle {
-  0%, 100% { transform: translateX(0) rotate(0); }
-  25% { transform: translateX(-3%) rotate(-1.5deg); }
-  75% { transform: translateX(3%) rotate(1.5deg); }
-}
-
-/* 恍然大悟：弹跳 */
-.niulai-anim.n-eureka img { animation: niulai-hop 0.8s ease-in-out infinite; }
-@keyframes niulai-hop {
-  0%, 100% { transform: translateY(0) scale(1, 1); }
-  35% { transform: translateY(-9%) scale(0.98, 1.04); }
+  35% { transform: translateY(-8%) scale(0.98, 1.04); }
   60% { transform: translateY(0) scale(1.03, 0.96); }
 }
 
-/* 难过：低垂 + 褪色 */
-.niulai-anim.n-sad img { animation: niulai-droop 3.6s ease-in-out infinite; filter: saturate(0.7); }
-.niulai.n-sad img { filter: saturate(0.7); }
-@keyframes niulai-droop {
-  0%, 100% { transform: translateY(2%) scale(1, 0.97); }
-  55% { transform: translateY(5%) scale(1, 0.95); }
+/* 难过：垂头 + 双臂下垂 + 褪色 */
+.niulai.n-sad { filter: saturate(0.7); }
+.niulai.n-sad .n-arm-l { transform: rotate(6deg); }
+.niulai.n-sad .n-arm-r { transform: rotate(-6deg); }
+.niulai-anim.n-sad .n-head { animation: n-droop 3.6s ease-in-out infinite; }
+@keyframes n-droop {
+  0%, 100% { transform: rotate(5deg) translateY(1.5%); }
+  55% { transform: rotate(7deg) translateY(3%); }
+}
+
+/* 走动（外壳 .pet-walking）：双臂反相摆动 + 头颠簸 + 身体前倾 */
+.pet-walking .niulai .n-arm-l { animation: n-arm-swing 0.5s ease-in-out infinite; }
+.pet-walking .niulai .n-arm-r { animation: n-arm-swing 0.5s ease-in-out -0.25s infinite; }
+.pet-walking .niulai .n-head { animation: n-walk-head 0.5s ease-in-out infinite; }
+.pet-walking .niulai .n-body { transform: rotate(1.5deg); transform-origin: 50% 100%; }
+@keyframes n-arm-swing {
+  0%, 100% { transform: rotate(13deg); }
+  50% { transform: rotate(-13deg); }
+}
+@keyframes n-walk-head {
+  0%, 100% { transform: rotate(0deg) translateY(0); }
+  50% { transform: rotate(1.5deg) translateY(-1.5%); }
+}
+
+/* 瞌睡（外壳 .pet-sleeping）：头低垂（盖过 idle 的头轻摆） */
+.pet-sleeping .niulai-anim .n-head {
+  animation: none;
+  transform: rotate(7deg) translateY(3%);
 }
 
 /* 情绪点缀符号 */
@@ -304,7 +371,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .niulai-anim *, .niulai-anim img { animation: none !important; }
+  .niulai-anim *, .niulai-anim .n-layer { animation: none !important; }
+  .pet-walking .niulai .n-layer { animation: none !important; }
   .pet-walking .pet-stage { animation: none !important; }
   .pet-zzz i { animation: none; opacity: 0.75; }
 }
