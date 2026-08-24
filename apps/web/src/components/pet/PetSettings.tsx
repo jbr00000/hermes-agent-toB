@@ -134,7 +134,7 @@ export function PetSettingsButton(): React.ReactElement {
           />
           <Row
             label="待机微动效"
-            hint="关闭后待机时完全静止"
+            hint="关闭后待机时完全静止（不呼吸、不走动、不打瞌睡）"
             control={<Toggle checked={idleAnim} onChange={setIdleAnim} label="待机微动效" />}
           />
           <Row
