@@ -152,6 +152,14 @@ def build_agent(
         )
     ephemeral = "\n\n".join(parts) if parts else None
 
+    # kimi-coding（api.kimi.com/coding）说 Anthropic Messages 协议。无头路径下
+    # AIAgent init 时 base_url 尚未解析，靠 URL 后缀自动探测不到 /coding，会错走
+    # chat_completions —— 这里显式钉住 api_mode；base_url/key 仍由核心层
+    # resolve_provider_client("kimi-coding") 从 KIMI_API_KEY / KIMI_BASE_URL 解析。
+    extra: dict = {}
+    if runtime_config.provider == "kimi-coding":
+        extra["api_mode"] = "anthropic_messages"
+
     return AIAgent(
         provider=runtime_config.provider,
         model=runtime_config.model,
@@ -173,4 +181,5 @@ def build_agent(
         tool_complete_callback=tool_complete_callback,
         status_callback=status_callback,
         event_callback=event_callback,
+        **extra,
     )

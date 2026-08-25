@@ -64,6 +64,40 @@ def test_runtime_config_infers_kept_provider_from_model_prefix(monkeypatch, tmp_
     assert runtime.model == "qwen-plus"
 
 
+def test_runtime_config_accepts_kimi_coding_provider(monkeypatch, tmp_path) -> None:
+    """kimi-coding 在受支持名单内：显式声明不被回落成 deepseek。"""
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    _write_config(
+        home,
+        """
+model:
+  default: kimi-k2.5
+  provider: kimi-coding
+  max_input_tokens: 131072
+""",
+    )
+
+    runtime = load_runtime_config()
+
+    assert runtime.provider == "kimi-coding"
+    assert runtime.model == "kimi-k2.5"
+    assert runtime.max_input_tokens == 131072
+
+
+def test_runtime_config_infers_kimi_coding_from_model_prefix(monkeypatch, tmp_path) -> None:
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    _write_config(home, "model: kimi-k2.5\n")
+
+    runtime = load_runtime_config()
+
+    assert runtime.provider == "kimi-coding"
+    assert runtime.model == "kimi-k2.5"
+
+
 def test_runtime_config_falls_back_to_safe_default_without_model(monkeypatch, tmp_path) -> None:
     home = tmp_path / "hermes_home"
     home.mkdir()

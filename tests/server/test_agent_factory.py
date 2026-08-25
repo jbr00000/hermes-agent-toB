@@ -50,6 +50,7 @@ agent:
 
     assert captured["provider"] == "custom"
     assert captured["model"] == "llama-3.3"
+    assert "api_mode" not in captured  # 非 kimi-coding 不钉 api_mode，保持核心层自动探测
     assert captured["reasoning_config"] == {"enabled": True, "effort": "low"}
     assert captured["enabled_toolsets"] == ["db", "terminal", "file", "web", "knowledge"]
     assert captured["tool_start_callback"] is callback
@@ -134,6 +135,36 @@ def test_build_agent_scoped_kb_adds_prompt_constraint(monkeypatch, tmp_path) -> 
     prompt = captured["ephemeral_system_prompt"]
     assert 'kb_id="kb-7"' in prompt
     assert "财务制度" in prompt
+
+
+def test_build_agent_kimi_coding_pins_anthropic_api_mode(monkeypatch, tmp_path) -> None:
+    """kimi-coding 走 Anthropic Messages 协议：显式传 api_mode，其余 provider 不传。"""
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    _write_config(
+        home,
+        """
+model:
+  default: kimi-k2.5
+  provider: kimi-coding
+""",
+    )
+    captured = {}
+
+    class CapturingAgent:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setitem(sys.modules, "run_agent", SimpleNamespace(AIAgent=CapturingAgent))
+    import server.memory as memory
+
+    monkeypatch.setattr(memory, "list_memory_contents", lambda _user_id: [])
+
+    build_agent(session_id="s1", user_id="u1", mode="chat")
+
+    assert captured["provider"] == "kimi-coding"
+    assert captured["api_mode"] == "anthropic_messages"
 
 
 def test_build_agent_defers_deployment_mcp_toolsets(monkeypatch, tmp_path) -> None:
