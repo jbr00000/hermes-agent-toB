@@ -1,4 +1,4 @@
-import type { ChatMessage, ConversationSummary, KnowledgeSpace, MemoryCandidate, SessionSummary } from './types'
+import type { ChatMessage, ConversationSummary, DataSource, KnowledgeSpace, MemoryCandidate, SessionSummary } from './types'
 
 export const spaces: KnowledgeSpace[] = [
   { id: 'litigation', name: '诉讼仲裁', role: 'space_admin', libraries: 5, documents: 132 },
@@ -44,4 +44,13 @@ export const messages: Record<string, ChatMessage[]> = {
 export const memoryCandidates: MemoryCandidate[] = [
   { id: 'c-01', content: '合同纠纷类任务默认优先输出“争议焦点、证据清单、法律依据、待核实问题”四段。', source: '建设合同纠纷证据材料梳理', status: 'pending' },
   { id: 'c-02', content: '诉讼案件资料默认使用“诉讼仲裁”业务空间知识库。', source: '历史会话', status: 'pending' },
+]
+
+/** 数据源连接卡片墙（图1）种子数据；status 模拟最近一次测试连接的结果 */
+export const dataSources: DataSource[] = [
+  { id: 'ds-01', name: '地下水治理', dbType: 'postgresql', host: '192.168.1.137', port: 5432, database: 'appdb', username: 'appuser', status: 'connected', lastTestedAt: 1756108800, createdAt: 1755936000, updatedAt: 1756108800 },
+  { id: 'ds-02', name: '工作督办', dbType: 'mysql', host: '192.168.1.86', port: 3307, database: 'business_data', username: 'reader', status: 'connected', lastTestedAt: 1756022400, createdAt: 1755849600, updatedAt: 1756022400 },
+  { id: 'ds-03', name: '计划调度', dbType: 'mysql', host: '192.168.1.90', port: 3306, database: 'schedule_plan', username: 'scheduler', status: 'connected', lastTestedAt: 1756022400, createdAt: 1755763200, updatedAt: 1756022400 },
+  { id: 'ds-04', name: '资产管理', dbType: 'mysql', host: '192.168.1.101', port: 3306, database: 'asset_management', username: 'asset_ro', status: 'failed', lastTestedAt: 1755936000, createdAt: 1755676800, updatedAt: 1755936000 },
+  { id: 'ds-05', name: '渗漏治理', dbType: 'postgresql', host: '192.168.1.86', port: 5432, database: 'dpc', username: 'dpc_ro', status: 'untested', lastTestedAt: null, createdAt: 1756108800, updatedAt: 1756108800 },
 ]

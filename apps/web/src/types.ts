@@ -1,4 +1,4 @@
-export type TabType = 'agent' | 'chat' | 'knowledgeBase' | 'knowledgeBaseDetail' | 'document' | 'memory' | 'users' | 'security' | 'audit'
+export type TabType = 'agent' | 'chat' | 'knowledgeBase' | 'knowledgeBaseDetail' | 'document' | 'database' | 'memory' | 'users' | 'security' | 'audit'
 
 export type WorkspaceMode = 'agent' | 'chat'
 
@@ -176,7 +176,37 @@ export interface AgentKnowledgeScope {
   kbId: string | null
 }
 
-/** 桌宠形象：cat 铅笔小猫（程序化 SVG）/ niulai 牛来（抠图立绘 + 程序化动画） */
+/** 数据源连接（数据库管理 · 图1卡片墙）。密码为 write-only：API 永不回传。 */
+export type DbType = 'mysql' | 'postgresql' | 'sqlite'
+
+export interface DataSource {
+  id: string
+  /** 数据库中文名 */
+  name: string
+  dbType: DbType
+  host: string
+  port: number
+  database: string
+  username: string
+  /** 最近一次测试连接的结果；untested = 新建/改密码后未测 */
+  status: 'connected' | 'failed' | 'untested'
+  lastTestedAt: number | null
+  createdAt: number
+  updatedAt: number
+}
+
+/** 新建/编辑连接的表单载荷；编辑时 password 留空 = 不修改 */
+export interface DataSourceInput {
+  name: string
+  dbType: DbType
+  host: string
+  port: number
+  database: string
+  username: string
+  password?: string
+}
+
+/** 桌宠形象：cat 铅笔小猫 / niulai 牛来（均使用完整身体精灵帧，微型图标可回退 SVG） */
 export type PetSkin = 'cat' | 'niulai'
 
 export interface ChatMessage {
