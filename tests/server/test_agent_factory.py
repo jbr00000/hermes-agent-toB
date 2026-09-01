@@ -138,15 +138,21 @@ def test_build_agent_scoped_kb_adds_prompt_constraint(monkeypatch, tmp_path) -> 
 
 
 def test_build_agent_kimi_coding_pins_anthropic_api_mode(monkeypatch, tmp_path) -> None:
-    """kimi-coding 走 Anthropic Messages 协议：显式传 api_mode，其余 provider 不传。"""
+    """kimi-coding 走 Anthropic Messages 协议：显式传 api_mode/base_url/api_key。
+
+    anthropic_messages 分支不做 provider 路由，构造参数里的凭据就是全部凭据，
+    所以 base_url 必须经 resolve_runtime_provider 解析（sk-kimi- 前缀 →
+    api.kimi.com/coding）并显式传入。
+    """
     home = tmp_path / "hermes_home"
     home.mkdir()
     monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("KIMI_API_KEY", "sk-kimi-test-key")
     _write_config(
         home,
         """
 model:
-  default: kimi-k2.5
+  default: k3
   provider: kimi-coding
 """,
     )
@@ -164,7 +170,10 @@ model:
     build_agent(session_id="s1", user_id="u1", mode="chat")
 
     assert captured["provider"] == "kimi-coding"
+    assert captured["model"] == "k3"
     assert captured["api_mode"] == "anthropic_messages"
+    assert captured["base_url"] == "https://api.kimi.com/coding"
+    assert captured["api_key"] == "sk-kimi-test-key"
 
 
 def test_build_agent_defers_deployment_mcp_toolsets(monkeypatch, tmp_path) -> None:

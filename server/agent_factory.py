@@ -152,13 +152,23 @@ def build_agent(
         )
     ephemeral = "\n\n".join(parts) if parts else None
 
-    # kimi-coding（api.kimi.com/coding）说 Anthropic Messages 协议。无头路径下
-    # AIAgent init 时 base_url 尚未解析，靠 URL 后缀自动探测不到 /coding，会错走
-    # chat_completions —— 这里显式钉住 api_mode；base_url/key 仍由核心层
-    # resolve_provider_client("kimi-coding") 从 KIMI_API_KEY / KIMI_BASE_URL 解析。
+    # kimi-coding（api.kimi.com/coding）说 Anthropic Messages 协议。该模式下
+    # AIAgent init 不做 provider 路由（agent_init.py 的 anthropic 分支直接用构造
+    # 参数里的 api_key/base_url），无头路径必须显式解析并传入：base_url/key 经
+    # resolve_runtime_provider 从 KIMI_API_KEY / KIMI_BASE_URL 解析（sk-kimi-
+    # 前缀自动路由 api.kimi.com/coding），api_mode 钉死 anthropic_messages。
     extra: dict = {}
     if runtime_config.provider == "kimi-coding":
+        from hermes_cli.runtime_provider import resolve_runtime_provider
+
+        rt = resolve_runtime_provider(
+            requested="kimi-coding", target_model=runtime_config.model
+        )
         extra["api_mode"] = "anthropic_messages"
+        if rt.get("base_url"):
+            extra["base_url"] = rt["base_url"]
+        if rt.get("api_key"):
+            extra["api_key"] = rt["api_key"]
 
     return AIAgent(
         provider=runtime_config.provider,
