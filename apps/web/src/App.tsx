@@ -4,12 +4,14 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Archive,
   Brain,
+  Check,
   ChevronDown,
   ClipboardList,
   Database,
   FileText,
   HardDrive,
   Layers3,
+  ListChecks,
   LockKeyhole,
   LogOut,
   Menu,
@@ -18,6 +20,7 @@ import {
   Search,
   ShieldCheck,
   TableProperties,
+  Trash2,
   UserCog,
   Users,
   X,
@@ -40,6 +43,7 @@ import { petStateFromAgentRun, petStateFromChatRun } from './components/pet/petS
 import { PetFloat } from './components/pet/PetFloat'
 import { PetSettingsButton } from './components/pet/PetSettings'
 import { cn, CORTEX_MARK_URL } from './components/ui'
+import { ConfirmDialog } from './components/ConfirmDialog'
 import { ChatView } from './components/chat/ChatView'
 import { AgentView } from './components/agent/AgentView'
 import { RightPanel } from './components/RightPanel'
@@ -547,6 +551,49 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
     })
   }, [activeTabId, setActiveTabId, setTabs, setWorkspaceMode])
 
+  /** 批量关闭某类型的指定 refId 标签（批量删除会话后调用）；与 closeTab 同一规则：
+   *  当前标签被关掉时优先落在同类型标签，否则留在原模式的空工作区。 */
+  const closeTabsByRef = React.useCallback((type: 'agent' | 'chat', refIds: ReadonlySet<string>) => {
+    setTabs((current) => {
+      const removedIds = new Set(
+        current.filter((tab) => tab.type === type && refIds.has(tab.refId)).map((tab) => tab.id),
+      )
+      if (removedIds.size === 0) return current
+      const next = current.filter((tab) => !removedIds.has(tab.id)).map((tab, order) => ({ ...tab, order }))
+      if (activeTabId && removedIds.has(activeTabId)) {
+        const nextActive = next.find((tab) => tab.type === type) ?? null
+        setActiveTabId(nextActive?.id ?? null)
+      }
+      return next
+    })
+  }, [activeTabId, setActiveTabId, setTabs])
+
+  /** 批量删除当前模式的会话历史：逐条调单删接口，成功的关标签 + 刷新列表，
+   *  失败的汇总提示（agent 任务运行中时服务端会拒绝删除）。 */
+  const batchDeleteSessions = React.useCallback(async (ids: string[]) => {
+    const isChat = workspaceMode === 'chat'
+    const removed = new Set<string>()
+    let failed = 0
+    for (const id of ids) {
+      try {
+        if (isChat) await api.deleteConversation(id)
+        else await api.deleteTask(id)
+        removed.add(id)
+      } catch {
+        failed += 1
+      }
+    }
+    if (removed.size > 0) {
+      closeTabsByRef(isChat ? 'chat' : 'agent', removed)
+      void queryClient.invalidateQueries({ queryKey: [isChat ? 'conversations' : 'tasks'] })
+    }
+    if (failed > 0) {
+      setNotice(isChat
+        ? `${failed} 条问答删除失败，请稍后重试`
+        : `${failed} 个任务删除失败（运行中的任务需先停止）`)
+    }
+  }, [closeTabsByRef, queryClient, workspaceMode])
+
   const activateTab = React.useCallback((nextTabId: string) => {
     const tab = tabs.find((item) => item.id === nextTabId)
     setActiveTabId(nextTabId)
@@ -681,6 +728,7 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
           onModeChange={changeWorkspaceMode}
           onNewConversation={createConversation}
           onNewAgentTask={() => createAgentTask()}
+          onBatchDelete={batchDeleteSessions}
           mobileOpen={mobileSidebarOpen}
           onClose={() => setMobileSidebarOpen(false)}
         />
@@ -741,6 +789,7 @@ function Sidebar({
   onModeChange,
   onNewConversation,
   onNewAgentTask,
+  onBatchDelete,
   mobileOpen,
   onClose,
 }: {
@@ -753,10 +802,21 @@ function Sidebar({
   onModeChange: (mode: WorkspaceMode) => void
   onNewConversation: () => void
   onNewAgentTask: () => void
+  onBatchDelete: (ids: string[]) => Promise<void>
   mobileOpen: boolean
   onClose: () => void
 }) {
   const [searchQuery, setSearchQuery] = React.useState('')
+  // 批量删除选择模式：切换工作模式时退出并清空选择
+  const [selecting, setSelecting] = React.useState(false)
+  const [selected, setSelected] = React.useState<ReadonlySet<string>>(new Set())
+  const [confirmOpen, setConfirmOpen] = React.useState(false)
+  const [deleting, setDeleting] = React.useState(false)
+  React.useEffect(() => {
+    setSelecting(false)
+    setSelected(new Set())
+    setConfirmOpen(false)
+  }, [mode])
   const normalizedSearch = searchQuery.trim().toLocaleLowerCase('zh-CN')
   const visibleSessions = normalizedSearch
     ? sessions.filter((session) => session.title.toLocaleLowerCase('zh-CN').includes(normalizedSearch))
@@ -789,6 +849,35 @@ function Sidebar({
   const createAgentTask = () => {
     onNewAgentTask()
     onClose()
+  }
+
+  // 批量删除：当前模式下的可见条目（受搜索框过滤），全选/单选都基于它
+  const visibleItems = mode === 'agent' ? visibleSessions : visibleConversations
+  const toggleSelect = (id: string) => {
+    setSelected((current) => {
+      const next = new Set(current)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+  const allSelected = visibleItems.length > 0 && visibleItems.every((item) => selected.has(item.id))
+  const toggleSelectAll = () => {
+    setSelected(allSelected ? new Set() : new Set(visibleItems.map((item) => item.id)))
+  }
+  const exitSelecting = () => {
+    setSelecting(false)
+    setSelected(new Set())
+  }
+  const confirmBatchDelete = async () => {
+    setDeleting(true)
+    try {
+      await onBatchDelete([...selected])
+      exitSelecting()
+      setConfirmOpen(false)
+    } finally {
+      setDeleting(false)
+    }
   }
 
   return (
@@ -865,6 +954,20 @@ function Sidebar({
             onChange={(event) => setSearchQuery(event.target.value)}
           />
         </label>
+        {!selecting && visibleItems.length > 0 && (
+          <div className="mt-2 flex items-center justify-between">
+            <span className="text-xs text-zinc-400">
+              共 {visibleItems.length} {mode === 'agent' ? '个任务' : '条问答'}
+            </span>
+            <button
+              className="flex h-7 items-center gap-1 rounded-md px-2 text-xs text-zinc-500 hover:bg-field hover:text-ink"
+              onClick={() => setSelecting(true)}
+            >
+              <ListChecks size={13} />
+              批量删除
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto px-3 py-3">
@@ -878,9 +981,10 @@ function Sidebar({
                     'w-full rounded-md px-2.5 py-2 text-left transition hover:bg-field',
                     activeTab?.type === 'agent' && activeTab.refId === session.id && 'bg-field',
                   )}
-                  onClick={() => openTab('agent', session.id, session.title)}
+                  onClick={() => selecting ? toggleSelect(session.id) : openTab('agent', session.id, session.title)}
                 >
                   <div className="flex items-center gap-2">
+                    {selecting && <SelectBox checked={selected.has(session.id)} />}
                     <span className={cn('h-2 w-2 shrink-0 rounded-full status-dot', session.status === 'running' || session.status === 'planning' ? 'bg-success text-success' : session.status === 'awaiting_approval' ? 'bg-caution text-caution' : 'bg-zinc-400 text-zinc-400')} />
                     <span className="min-w-0 flex-1 truncate text-sm font-medium">{session.title}</span>
                   </div>
@@ -900,10 +1004,10 @@ function Sidebar({
         ) : (
           <>
             {pinnedConversations.length > 0 && (
-              <ConversationGroup title="置顶问答" items={pinnedConversations} activeTab={activeTab} onOpenTab={openTab} />
+              <ConversationGroup title="置顶问答" items={pinnedConversations} activeTab={activeTab} onOpenTab={openTab} selecting={selecting} selectedIds={selected} onToggleSelect={toggleSelect} />
             )}
             {conversationGroups.map((group) => group.items.length > 0 && (
-              <ConversationGroup key={group.title} title={group.title} items={group.items} activeTab={activeTab} onOpenTab={openTab} />
+              <ConversationGroup key={group.title} title={group.title} items={group.items} activeTab={activeTab} onOpenTab={openTab} selecting={selecting} selectedIds={selected} onToggleSelect={toggleSelect} />
             ))}
           </>
         )}
@@ -933,6 +1037,48 @@ function Sidebar({
         </NavGroup>
 
       </div>
+
+      {selecting && (
+        <div className="border-t border-line px-3 py-2.5">
+          <div className="flex items-center gap-2">
+            <button
+              className="flex h-7 items-center gap-1.5 rounded-md px-1.5 text-xs text-zinc-600 hover:bg-field"
+              onClick={toggleSelectAll}
+            >
+              <SelectBox checked={allSelected} />
+              全选
+            </button>
+            <span className="text-xs text-zinc-400">已选 {selected.size}</span>
+            <div className="ml-auto flex items-center gap-1.5">
+              <button
+                className="h-7 rounded-md border border-line px-2.5 text-xs hover:bg-field"
+                onClick={exitSelecting}
+              >
+                取消
+              </button>
+              <button
+                className="flex h-7 items-center gap-1 rounded-md bg-danger px-2.5 text-xs font-medium text-white disabled:bg-zinc-300"
+                disabled={selected.size === 0}
+                onClick={() => setConfirmOpen(true)}
+              >
+                <Trash2 size={12} />
+                删除（{selected.size}）
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmOpen && (
+        <ConfirmDialog
+          title={mode === 'agent' ? '批量删除任务' : '批量删除问答'}
+          description={`将删除选中的 ${selected.size} ${mode === 'agent' ? '个任务（运行中的任务会删除失败，需先停止）' : '条问答记录'}，此操作不可恢复。`}
+          confirmLabel={`删除 ${selected.size} 项`}
+          pending={deleting}
+          onConfirm={() => void confirmBatchDelete()}
+          onCancel={() => setConfirmOpen(false)}
+        />
+      )}
       </aside>
     </>
   )
@@ -943,11 +1089,17 @@ function ConversationGroup({
   items,
   activeTab,
   onOpenTab,
+  selecting,
+  selectedIds,
+  onToggleSelect,
 }: {
   title: string
   items: ConversationSummary[]
   activeTab: WorkTab | null
   onOpenTab: (type: TabType, refId: string, title: string) => void
+  selecting: boolean
+  selectedIds: ReadonlySet<string>
+  onToggleSelect: (id: string) => void
 }) {
   return (
     <NavGroup title={title}>
@@ -961,8 +1113,9 @@ function ConversationGroup({
                 'group flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition active:scale-[0.98]',
                 active ? 'bg-[#e0ece4] font-medium text-[#28513d]' : 'text-zinc-700 hover:bg-field',
               )}
-              onClick={() => onOpenTab('chat', conversation.id, conversation.title)}
+              onClick={() => selecting ? onToggleSelect(conversation.id) : onOpenTab('chat', conversation.id, conversation.title)}
             >
+              {selecting && <SelectBox checked={selectedIds.has(conversation.id)} />}
               <MessageSquareText size={14} className={cn('shrink-0', active ? 'text-[#3d735a]' : 'text-zinc-400')} />
               <span className="min-w-0 flex-1 truncate">{conversation.title}</span>
               <span className="hidden shrink-0 text-[10px] text-zinc-400 group-hover:inline">{conversation.updatedAt}</span>
@@ -971,6 +1124,18 @@ function ConversationGroup({
         })}
       </div>
     </NavGroup>
+  )
+}
+
+/** 批量删除选择模式的复选框（侧边栏条目与底部「全选」共用） */
+function SelectBox({ checked }: { checked: boolean }) {
+  return (
+    <span className={cn(
+      'flex h-4 w-4 shrink-0 items-center justify-center rounded border',
+      checked ? 'border-ink bg-ink text-white' : 'border-line bg-panel',
+    )}>
+      {checked && <Check size={12} />}
+    </span>
   )
 }
 
