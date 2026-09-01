@@ -17,6 +17,7 @@ import {
   Plus,
   Search,
   ShieldCheck,
+  TableProperties,
   UserCog,
   Users,
   X,
@@ -47,6 +48,7 @@ import { KnowledgeBaseListView } from './components/knowledge/KnowledgeBaseListV
 import { DocumentDetailView } from './components/knowledge/DocumentDetailView'
 import { UserAdminView } from './components/users/UserAdminView'
 import { DatabaseManageView } from './components/database/DatabaseManageView'
+import { DatasetMetaView } from './components/database/DatasetMetaView'
 import { MemoryView } from './views/MemoryView'
 import { SecurityView } from './views/SecurityView'
 import { AuditView } from './views/AuditView'
@@ -111,6 +113,8 @@ function typeIcon(type: TabType): AppIcon {
       return FileText
     case 'database':
       return HardDrive
+    case 'datasetMeta':
+      return TableProperties
     case 'memory':
       return Brain
     case 'users':
@@ -1170,7 +1174,11 @@ function TabContent({
   }
   if (tab.type === 'database') {
     if (!isAdmin) return <NoAccess feature="数据库管理" />
-    return <DatabaseManageView />
+    return <DatabaseManageView onOpenMeta={(dataset) => onOpenTab('datasetMeta', dataset.id, dataset.name)} />
+  }
+  if (tab.type === 'datasetMeta') {
+    if (!isAdmin) return <NoAccess feature="元数据配置" />
+    return <DatasetMetaView key={tab.refId} datasetId={tab.refId} />
   }
   if (tab.type === 'memory') {
     if (!user.features.memory) return <NoAccess feature="记忆中心" />

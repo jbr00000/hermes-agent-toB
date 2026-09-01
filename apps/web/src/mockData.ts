@@ -1,4 +1,4 @@
-import type { ChatMessage, ConversationSummary, DataSource, KnowledgeSpace, MemoryCandidate, SessionSummary } from './types'
+import type { ChatMessage, ConversationSummary, Dataset, DataSource, KnowledgeSpace, MemoryCandidate, SessionSummary } from './types'
 
 export const spaces: KnowledgeSpace[] = [
   { id: 'litigation', name: '诉讼仲裁', role: 'space_admin', libraries: 5, documents: 132 },
@@ -53,4 +53,17 @@ export const dataSources: DataSource[] = [
   { id: 'ds-03', name: '计划调度', dbType: 'mysql', host: '192.168.1.90', port: 3306, database: 'schedule_plan', username: 'scheduler', status: 'connected', lastTestedAt: 1756022400, createdAt: 1755763200, updatedAt: 1756022400 },
   { id: 'ds-04', name: '资产管理', dbType: 'mysql', host: '192.168.1.101', port: 3306, database: 'asset_management', username: 'asset_ro', status: 'failed', lastTestedAt: 1755936000, createdAt: 1755676800, updatedAt: 1755936000 },
   { id: 'ds-05', name: '渗漏治理', dbType: 'postgresql', host: '192.168.1.86', port: 5432, database: 'dpc', username: 'dpc_ro', status: 'untested', lastTestedAt: null, createdAt: 1756108800, updatedAt: 1756108800 },
+  // BULL 问数开发库（阶段0 已导入 dev MySQL 容器 127.0.0.1:13306 的三个 schema）
+  { id: 'ds-06', name: '基金问数库', dbType: 'mysql', host: '127.0.0.1', port: 13306, database: 'nl2sql_fund', username: 'hermes_nl2sql_ro', status: 'connected', lastTestedAt: 1756195200, createdAt: 1756195200, updatedAt: 1756195200 },
+  { id: 'ds-07', name: '股票问数库', dbType: 'mysql', host: '127.0.0.1', port: 13306, database: 'nl2sql_stock', username: 'hermes_nl2sql_ro', status: 'connected', lastTestedAt: 1756195200, createdAt: 1756195200, updatedAt: 1756195200 },
+  { id: 'ds-08', name: '宏观问数库', dbType: 'mysql', host: '127.0.0.1', port: 13306, database: 'nl2sql_macro', username: 'hermes_nl2sql_ro', status: 'connected', lastTestedAt: 1756195200, createdAt: 1756195200, updatedAt: 1756195200 },
+]
+
+/** 数据集列表（图3）种子数据：覆盖 启用 / 缺提示词 / 缺业务说明 / 停用 四种治理状态 */
+export const datasets: Dataset[] = [
+  { id: 'dataset-01', name: '基金问数数据集', description: 'CCKS2022 基金领域问数：基金基本信息、规模、费率、持仓与净值查询。', dataSourceId: 'ds-06', flowVersion: '框架默认流程', enabled: true, prompt: '你是基金领域问数助手。表名与字段均为中文拼音，金额单位为元，日期格式 YYYY-MM-DD。', ddlCount: 28, ruleCount: 6, createdAt: 1756195200, updatedAt: 1756281600 },
+  { id: 'dataset-02', name: '股票问数数据集', description: 'CCKS2022 股票领域问数：上市公司基本信息、行情、财务指标与股东数据。', dataSourceId: 'ds-07', flowVersion: '框架默认流程', enabled: true, prompt: '你是股票领域问数助手。股票代码为 6 位数字字符串，涉及"最新"时按交易日期倒序取第一条。', ddlCount: 15, ruleCount: 4, createdAt: 1756195200, updatedAt: 1756281600 },
+  { id: 'dataset-03', name: '宏观问数数据集', description: 'CCKS2022 宏观经济问数：GDP、CPI、利率、汇率等宏观指标查询。', dataSourceId: 'ds-08', flowVersion: '框架默认流程', enabled: true, prompt: '', ddlCount: 10, ruleCount: 2, createdAt: 1756195200, updatedAt: 1756281600 },
+  { id: 'dataset-04', name: '督办事项统计', description: '', dataSourceId: 'ds-02', flowVersion: '框架默认流程', enabled: true, prompt: '统计口径以督办单状态字段为准，逾期 = 截止时间早于当前且状态非已完成。', ddlCount: 8, ruleCount: 3, createdAt: 1756108800, updatedAt: 1756195200 },
+  { id: 'dataset-05', name: '资产台账问数', description: '资产台账与折旧查询（待资产库连接恢复后启用）。', dataSourceId: 'ds-04', flowVersion: '框架默认流程', enabled: false, prompt: '金额单位为万元，保留两位小数。', ddlCount: 0, ruleCount: 0, createdAt: 1756022400, updatedAt: 1756108800 },
 ]

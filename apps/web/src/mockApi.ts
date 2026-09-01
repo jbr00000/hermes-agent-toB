@@ -1,5 +1,5 @@
-import { conversations, dataSources, memoryCandidates, messages, sessions, spaces } from './mockData'
-import type { DataSource, DataSourceInput, UploadedFile, UploadOwnerType } from './types'
+import { conversations, datasets, dataSources, memoryCandidates, messages, sessions, spaces } from './mockData'
+import type { Dataset, DatasetInput, DataSource, DataSourceInput, UploadedFile, UploadOwnerType } from './types'
 
 const wait = (ms = 180) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -140,5 +140,52 @@ export const mockApi = {
     ds.lastTestedAt = Date.now() / 1000
     ds.updatedAt = ds.lastTestedAt
     return ds
+  },
+
+  // ---- 数据集（图3；同样先走内存 mock）----
+
+  async listDatasets(): Promise<Dataset[]> {
+    await wait()
+    return datasets
+  },
+  async createDataset(input: DatasetInput): Promise<Dataset> {
+    await wait()
+    const now = Date.now() / 1000
+    const created: Dataset = {
+      id: `dataset-${Date.now()}`,
+      name: input.name,
+      description: input.description,
+      dataSourceId: input.dataSourceId,
+      flowVersion: '框架默认流程',
+      enabled: input.enabled,
+      prompt: input.prompt,
+      ddlCount: 0,
+      ruleCount: 0,
+      createdAt: now,
+      updatedAt: now,
+    }
+    datasets.unshift(created)
+    return created
+  },
+  async updateDataset(id: string, input: DatasetInput): Promise<Dataset> {
+    await wait()
+    const index = datasets.findIndex((item) => item.id === id)
+    if (index < 0) throw new Error('数据集不存在')
+    const updated: Dataset = {
+      ...datasets[index],
+      name: input.name,
+      description: input.description,
+      dataSourceId: input.dataSourceId,
+      enabled: input.enabled,
+      prompt: input.prompt,
+      updatedAt: Date.now() / 1000,
+    }
+    datasets[index] = updated
+    return updated
+  },
+  async deleteDataset(id: string) {
+    await wait()
+    const index = datasets.findIndex((item) => item.id === id)
+    if (index >= 0) datasets.splice(index, 1)
   },
 }

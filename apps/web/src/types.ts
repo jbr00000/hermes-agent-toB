@@ -1,4 +1,4 @@
-export type TabType = 'agent' | 'chat' | 'knowledgeBase' | 'knowledgeBaseDetail' | 'document' | 'database' | 'memory' | 'users' | 'security' | 'audit'
+export type TabType = 'agent' | 'chat' | 'knowledgeBase' | 'knowledgeBaseDetail' | 'document' | 'database' | 'datasetMeta' | 'memory' | 'users' | 'security' | 'audit'
 
 export type WorkspaceMode = 'agent' | 'chat'
 
@@ -204,6 +204,34 @@ export interface DataSourceInput {
   database: string
   username: string
   password?: string
+}
+
+/** 数据集（图3）：挂在某个数据源下的问数（NL2SQL）单元，DataSource : Dataset = 1 : N */
+export interface Dataset {
+  id: string
+  name: string
+  /** 业务说明；为空时治理状态显示「缺业务说明」 */
+  description: string
+  dataSourceId: string
+  /** 流程版本占位（决策③：暂无编排引擎，固定「框架默认流程」） */
+  flowVersion: string
+  enabled: boolean
+  /** 问数提示词；为空时治理状态显示「缺提示词」 */
+  prompt: string
+  /** 元数据统计（图3「DDL/规则」列）：表结构条数 / 规则条数 */
+  ddlCount: number
+  ruleCount: number
+  createdAt: number
+  updatedAt: number
+}
+
+/** 新建/编辑数据集的表单载荷 */
+export interface DatasetInput {
+  name: string
+  description: string
+  dataSourceId: string
+  enabled: boolean
+  prompt: string
 }
 
 /** 桌宠形象：cat 铅笔小猫 / niulai 牛来（均使用完整身体精灵帧，微型图标可回退 SVG） */
