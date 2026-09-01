@@ -1,7 +1,7 @@
 import * as React from 'react'
 import { useAtom } from 'jotai'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { CircleStop, Mic, Send, Trash2 } from 'lucide-react'
+import { BarChart3, CircleStop, Mic, Send, Trash2 } from 'lucide-react'
 import { api, ApiError } from '../../api'
 import {
   isAgentRunActive,
@@ -335,6 +335,8 @@ export function AgentView({ taskId, title, knowledgeEnabled, onDeleted, onOpenTa
               </span>
               <AttachmentPickerButton label="添加文件" onPick={pickFiles} />
               <IconButton label="语音输入" icon={Mic} />
+              {/* 问数入口：打开独立问数页（数据集级 NL2SQL），与任务执行互补 */}
+              <IconButton label="问数" icon={BarChart3} onClick={() => onOpenTab('queryData', 'main', '问数')} />
               {knowledgeAvailable && (
                 <AgentKnowledgePicker bases={knowledgeBasesQuery.data ?? []} />
               )}

@@ -1,5 +1,5 @@
 import { conversations, datasetMeta, datasets, dataSources, memoryCandidates, messages, sessions, spaces } from './mockData'
-import type { Dataset, DatasetInput, DatasetMetaBundle, DataSource, DataSourceInput, MetaKind, UploadedFile, UploadOwnerType } from './types'
+import type { Dataset, DatasetInput, DatasetMetaBundle, DataSource, DataSourceInput, MetaKind, Nl2sqlAnswer, UploadedFile, UploadOwnerType } from './types'
 
 const wait = (ms = 180) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -244,5 +244,47 @@ export const mockApi = {
     await wait()
     datasetMeta[datasetId] = emptyMetaBundle()
     syncDdlCount(datasetId)
+  },
+
+  // ---- 问数（NL2SQL；算法端接入前的前端占位：命中范例回金标准 SQL，否则回模板 SQL）----
+
+  async askNl2sql(datasetId: string, question: string): Promise<Nl2sqlAnswer> {
+    await wait(700)
+    const dataset = datasets.find((item) => item.id === datasetId)
+    if (!dataset) throw new Error('数据集不存在')
+    if (!dataset.enabled) throw new Error('该数据集已停用')
+    const bundle = datasetMeta[datasetId] ?? emptyMetaBundle()
+    const durationMs = 260 + question.length * 3
+
+    // 命中范例（问题包含范例问题的核心片段）→ 回该范例的金标准 SQL + 演示结果集
+    const hit = bundle.examples.find((example) => {
+      const probe = example.question.replace(/[""''，。？！\s]/g, '').slice(0, 8)
+      return probe.length >= 4 && question.replace(/[""''，。？！\s]/g, '').includes(probe)
+    })
+    if (hit) {
+      return {
+        sql: hit.sql,
+        columns: ['示例列A', '示例列B'],
+        rows: [
+          ['演示数据 1', '100'],
+          ['演示数据 2', '86'],
+          ['演示数据 3', '42'],
+        ],
+        summary: `已生成 SQL（命中范例库）：${question}。结果为演示数据，算法端接入后返回真实查询。`,
+        durationMs,
+      }
+    }
+
+    const firstTable = bundle.tables.find((table) => table.enabled)?.tableName ?? '（未配置表结构）'
+    return {
+      sql: `SELECT *\nFROM ${firstTable}\nLIMIT 10`,
+      columns: ['列1', '列2', '列3'],
+      rows: [
+        ['示例', '数据', '1'],
+        ['示例', '数据', '2'],
+      ],
+      summary: `（前端占位）已按数据集「${dataset.name}」生成模板 SQL；接入问数算法端后，这里返回真实 NL2SQL 结果。`,
+      durationMs,
+    }
   },
 }

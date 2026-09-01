@@ -1,4 +1,4 @@
-export type TabType = 'agent' | 'chat' | 'knowledgeBase' | 'knowledgeBaseDetail' | 'document' | 'database' | 'datasetMeta' | 'memory' | 'users' | 'security' | 'audit'
+export type TabType = 'agent' | 'chat' | 'knowledgeBase' | 'knowledgeBaseDetail' | 'document' | 'database' | 'datasetMeta' | 'queryData' | 'memory' | 'users' | 'security' | 'audit'
 
 export type WorkspaceMode = 'agent' | 'chat'
 
@@ -304,6 +304,16 @@ export interface DatasetMetaBundle {
   dimensions: DimensionMeta[]
   foreignKeys: ForeignKeyMeta[]
   examples: ExampleMeta[]
+}
+
+/** 问数（NL2SQL）单轮回答：生成的 SQL + 结果集 + 自然语言小结 */
+export interface Nl2sqlAnswer {
+  sql: string
+  columns: string[]
+  rows: string[][]
+  /** 自然语言小结（mock 下注明占位） */
+  summary: string
+  durationMs: number
 }
 
 /** 桌宠形象：cat 铅笔小猫 / niulai 牛来（均使用完整身体精灵帧，微型图标可回退 SVG） */

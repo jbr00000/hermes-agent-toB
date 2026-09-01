@@ -3,6 +3,7 @@ import { useAtom } from 'jotai'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Archive,
+  BarChart3,
   Brain,
   Check,
   ChevronDown,
@@ -53,6 +54,7 @@ import { DocumentDetailView } from './components/knowledge/DocumentDetailView'
 import { UserAdminView } from './components/users/UserAdminView'
 import { DatabaseManageView } from './components/database/DatabaseManageView'
 import { DatasetMetaView } from './components/database/DatasetMetaView'
+import { QueryDataView } from './components/database/QueryDataView'
 import { MemoryView } from './views/MemoryView'
 import { SecurityView } from './views/SecurityView'
 import { AuditView } from './views/AuditView'
@@ -119,6 +121,8 @@ function typeIcon(type: TabType): AppIcon {
       return HardDrive
     case 'datasetMeta':
       return TableProperties
+    case 'queryData':
+      return BarChart3
     case 'memory':
       return Brain
     case 'users':
@@ -1012,16 +1016,15 @@ function Sidebar({
           </>
         )}
 
-        {(user.features.knowledge || user.features.memory) && (
-          <NavGroup title="业务资源">
-            {user.features.knowledge && (
-              <NavButton active={activeTab?.type === 'knowledgeBase' || activeTab?.type === 'knowledgeBaseDetail' || activeTab?.type === 'document'} icon={Database} label="知识库" onClick={() => openTab('knowledgeBase', 'main', '知识库')} />
-            )}
-            {user.features.memory && (
-              <NavButton active={activeTab?.type === 'memory'} icon={Brain} label="记忆中心" onClick={() => openTab('memory', 'main', '记忆中心')} />
-            )}
-          </NavGroup>
-        )}
+        <NavGroup title="业务资源">
+          <NavButton active={activeTab?.type === 'queryData'} icon={BarChart3} label="问数" onClick={() => openTab('queryData', 'main', '问数')} />
+          {user.features.knowledge && (
+            <NavButton active={activeTab?.type === 'knowledgeBase' || activeTab?.type === 'knowledgeBaseDetail' || activeTab?.type === 'document'} icon={Database} label="知识库" onClick={() => openTab('knowledgeBase', 'main', '知识库')} />
+          )}
+          {user.features.memory && (
+            <NavButton active={activeTab?.type === 'memory'} icon={Brain} label="记忆中心" onClick={() => openTab('memory', 'main', '记忆中心')} />
+          )}
+        </NavGroup>
 
         <NavGroup title="系统管理">
           {user.role === 'superadmin' && (
@@ -1344,6 +1347,9 @@ function TabContent({
   if (tab.type === 'datasetMeta') {
     if (!isAdmin) return <NoAccess feature="元数据配置" />
     return <DatasetMetaView key={tab.refId} datasetId={tab.refId} />
+  }
+  if (tab.type === 'queryData') {
+    return <QueryDataView />
   }
   if (tab.type === 'memory') {
     if (!user.features.memory) return <NoAccess feature="记忆中心" />
