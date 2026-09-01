@@ -8,6 +8,7 @@ import {
   ClipboardList,
   Database,
   FileText,
+  HardDrive,
   Layers3,
   LockKeyhole,
   LogOut,
@@ -45,6 +46,7 @@ import { KnowledgeBaseView } from './components/knowledge/KnowledgeBaseView'
 import { KnowledgeBaseListView } from './components/knowledge/KnowledgeBaseListView'
 import { DocumentDetailView } from './components/knowledge/DocumentDetailView'
 import { UserAdminView } from './components/users/UserAdminView'
+import { DatabaseManageView } from './components/database/DatabaseManageView'
 import { MemoryView } from './views/MemoryView'
 import { SecurityView } from './views/SecurityView'
 import { AuditView } from './views/AuditView'
@@ -107,6 +109,8 @@ function typeIcon(type: TabType): AppIcon {
       return Database
     case 'document':
       return FileText
+    case 'database':
+      return HardDrive
     case 'memory':
       return Brain
     case 'users':
@@ -466,7 +470,11 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
         .map((tab, order) => ({ ...tab, order }))
       if (valid.length === current.length) return current
       if (activeTabId && !valid.some((tab) => tab.id === activeTabId)) {
-        const next = valid[0] ?? null
+        // 当前标签被任务列表清理掉时同样优先同类型，避免模式被带跑
+        const removed = current.find((tab) => tab.id === activeTabId)
+        const next = (removed && (removed.type === 'agent' || removed.type === 'chat')
+          ? valid.find((tab) => tab.type === removed.type)
+          : undefined) ?? valid[0] ?? null
         setActiveTabId(next?.id ?? null)
         if (next?.type === 'agent' || next?.type === 'chat') setWorkspaceMode(next.type)
       }
@@ -514,13 +522,21 @@ function WorkspaceApp({ user, onLogout }: { user: AuthUser; onLogout: () => void
   const closeTab = React.useCallback((closedTabId: string) => {
     setTabs((current) => {
       const index = current.findIndex((tab) => tab.id === closedTabId)
+      const closed = current[index]
       const next = current.filter((tab) => tab.id !== closedTabId).map((tab, order) => ({ ...tab, order }))
       if (activeTabId === closedTabId) {
-        const nextActive = next[Math.max(0, index - 1)] ?? next[0] ?? null
-        setActiveTabId(nextActive?.id ?? null)
-        if (nextActive?.type === 'agent' || nextActive?.type === 'chat') {
-          requestedWorkspaceModeRef.current = nextActive.type
-          setWorkspaceMode(nextActive.type)
+        if (closed && (closed.type === 'agent' || closed.type === 'chat')) {
+          // agent/chat 标签关闭后优先落在同类型标签上；没有同类型标签时留在原模式
+          // （空工作区），绝不因为删一个任务就把工作模式带到另一侧。
+          const nextActive = next.find((tab) => tab.type === closed.type) ?? null
+          setActiveTabId(nextActive?.id ?? null)
+        } else {
+          const nextActive = next[Math.max(0, index - 1)] ?? next[0] ?? null
+          setActiveTabId(nextActive?.id ?? null)
+          if (nextActive?.type === 'agent' || nextActive?.type === 'chat') {
+            requestedWorkspaceModeRef.current = nextActive.type
+            setWorkspaceMode(nextActive.type)
+          }
         }
       }
       return next
@@ -903,6 +919,9 @@ function Sidebar({
           {user.role === 'superadmin' && (
             <NavButton active={activeTab?.type === 'users'} icon={Users} label="用户与权限" onClick={() => openTab('users', 'main', '用户与权限')} />
           )}
+          {(user.role === 'admin' || user.role === 'superadmin') && (
+            <NavButton active={activeTab?.type === 'database'} icon={HardDrive} label="数据库管理" onClick={() => openTab('database', 'main', '数据库管理')} />
+          )}
           <NavButton active={activeTab?.type === 'security'} icon={ShieldCheck} label="能力与安全" onClick={() => openTab('security', 'main', '能力与安全')} />
           {(user.role === 'admin' || user.role === 'superadmin') && (
             <NavButton active={activeTab?.type === 'audit'} icon={ClipboardList} label="审计中心" onClick={() => openTab('audit', 'main', '审计中心')} />
@@ -1148,6 +1167,10 @@ function TabContent({
   if (tab.type === 'document') {
     if (!user.features.knowledge) return <NoAccess feature="知识库" />
     return <DocumentDetailView documentId={tab.refId} isAdmin={isAdmin} onOpenTab={onOpenTab} />
+  }
+  if (tab.type === 'database') {
+    if (!isAdmin) return <NoAccess feature="数据库管理" />
+    return <DatabaseManageView />
   }
   if (tab.type === 'memory') {
     if (!user.features.memory) return <NoAccess feature="记忆中心" />
