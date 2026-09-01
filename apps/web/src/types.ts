@@ -234,6 +234,78 @@ export interface DatasetInput {
   prompt: string
 }
 
+/** 元数据配置（图4）六类元数据的种类 key */
+export type MetaKind = 'tables' | 'terms' | 'metrics' | 'dimensions' | 'foreignKeys' | 'examples'
+
+/** 表结构元数据（图4 默认 tab）；enabled=false 的表不下发给问数流程 */
+export interface TableMeta {
+  id: string
+  datasetId: string
+  tableName: string
+  comment: string
+  enabled: boolean
+  updatedAt: number
+}
+
+/** 术语：业务名词 → 口径定义 */
+export interface TermMeta {
+  id: string
+  datasetId: string
+  term: string
+  definition: string
+  updatedAt: number
+}
+
+/** 指标：可计算的业务度量（expression 为口径/SQL 片段） */
+export interface MetricMeta {
+  id: string
+  datasetId: string
+  name: string
+  expression: string
+  description: string
+  updatedAt: number
+}
+
+/** 维度：分析切片（field 为关联的表字段） */
+export interface DimensionMeta {
+  id: string
+  datasetId: string
+  name: string
+  field: string
+  description: string
+  updatedAt: number
+}
+
+/** 外键关系：表间 join 依据 */
+export interface ForeignKeyMeta {
+  id: string
+  datasetId: string
+  fromTable: string
+  fromColumn: string
+  toTable: string
+  toColumn: string
+  updatedAt: number
+}
+
+/** 范例：问题 → 标准 SQL（few-shot 示例） */
+export interface ExampleMeta {
+  id: string
+  datasetId: string
+  question: string
+  sql: string
+  updatedAt: number
+}
+
+/** 一个数据集的全量元数据 */
+export interface DatasetMetaBundle {
+  tables: TableMeta[]
+  terms: TermMeta[]
+  metrics: MetricMeta[]
+  dimensions: DimensionMeta[]
+  foreignKeys: ForeignKeyMeta[]
+  examples: ExampleMeta[]
+}
+
 /** 桌宠形象：cat 铅笔小猫 / niulai 牛来（均使用完整身体精灵帧，微型图标可回退 SVG） */
 export type PetSkin = 'cat' | 'niulai'
 

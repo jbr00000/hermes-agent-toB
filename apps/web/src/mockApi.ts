@@ -1,7 +1,17 @@
-import { conversations, datasets, dataSources, memoryCandidates, messages, sessions, spaces } from './mockData'
-import type { Dataset, DatasetInput, DataSource, DataSourceInput, UploadedFile, UploadOwnerType } from './types'
+import { conversations, datasetMeta, datasets, dataSources, memoryCandidates, messages, sessions, spaces } from './mockData'
+import type { Dataset, DatasetInput, DatasetMetaBundle, DataSource, DataSourceInput, MetaKind, UploadedFile, UploadOwnerType } from './types'
 
 const wait = (ms = 180) => new Promise((resolve) => setTimeout(resolve, ms))
+
+function emptyMetaBundle(): DatasetMetaBundle {
+  return { tables: [], terms: [], metrics: [], dimensions: [], foreignKeys: [], examples: [] }
+}
+
+/** 表结构条数变化后同步数据集的 ddlCount（图3「DDL/规则」列） */
+function syncDdlCount(datasetId: string) {
+  const dataset = datasets.find((item) => item.id === datasetId)
+  if (dataset) dataset.ddlCount = (datasetMeta[datasetId] ?? emptyMetaBundle()).tables.length
+}
 
 /** 纯前端开发用的内存附件表（key = `${ownerType}:${ownerId}`）；解析一律秒级转 ready。 */
 const mockUploads = new Map<string, UploadedFile[]>()
@@ -187,5 +197,52 @@ export const mockApi = {
     await wait()
     const index = datasets.findIndex((item) => item.id === id)
     if (index >= 0) datasets.splice(index, 1)
+    delete datasetMeta[id]
+  },
+
+  // ---- 元数据配置（图4；六类元数据共用一套泛型 CRUD）----
+
+  async getDatasetMeta(datasetId: string): Promise<DatasetMetaBundle> {
+    await wait()
+    if (!datasetMeta[datasetId]) datasetMeta[datasetId] = emptyMetaBundle()
+    return datasetMeta[datasetId]
+  },
+  /** 新增/编辑一条元数据：item.id 为空 = 新增；表结构新增默认 enabled=true */
+  async saveMetaItem(
+    datasetId: string,
+    kind: MetaKind,
+    item: Record<string, unknown> & { id?: string },
+  ) {
+    await wait()
+    if (!datasetMeta[datasetId]) datasetMeta[datasetId] = emptyMetaBundle()
+    const list = datasetMeta[datasetId][kind] as unknown as Array<Record<string, unknown>>
+    const now = Date.now() / 1000
+    if (item.id) {
+      const index = list.findIndex((entry) => entry.id === item.id)
+      if (index >= 0) list[index] = { ...list[index], ...item, updatedAt: now }
+    } else {
+      list.unshift({
+        ...item,
+        id: `${kind}-${Date.now()}`,
+        datasetId,
+        ...(kind === 'tables' ? { enabled: true } : {}),
+        updatedAt: now,
+      })
+    }
+    if (kind === 'tables') syncDdlCount(datasetId)
+  },
+  async deleteMetaItem(datasetId: string, kind: MetaKind, id: string) {
+    await wait()
+    const bundle = datasetMeta[datasetId]
+    if (!bundle) return
+    const list = bundle[kind] as unknown as Array<Record<string, unknown>>
+    const index = list.findIndex((entry) => entry.id === id)
+    if (index >= 0) list.splice(index, 1)
+    if (kind === 'tables') syncDdlCount(datasetId)
+  },
+  async clearDatasetMeta(datasetId: string) {
+    await wait()
+    datasetMeta[datasetId] = emptyMetaBundle()
+    syncDdlCount(datasetId)
   },
 }

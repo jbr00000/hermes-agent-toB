@@ -1,4 +1,4 @@
-import type { ChatMessage, ConversationSummary, Dataset, DataSource, KnowledgeSpace, MemoryCandidate, SessionSummary } from './types'
+import type { ChatMessage, ConversationSummary, Dataset, DatasetMetaBundle, DataSource, KnowledgeSpace, MemoryCandidate, SessionSummary } from './types'
 
 export const spaces: KnowledgeSpace[] = [
   { id: 'litigation', name: '诉讼仲裁', role: 'space_admin', libraries: 5, documents: 132 },
@@ -46,24 +46,89 @@ export const memoryCandidates: MemoryCandidate[] = [
   { id: 'c-02', content: '诉讼案件资料默认使用“诉讼仲裁”业务空间知识库。', source: '历史会话', status: 'pending' },
 ]
 
-/** 数据源连接卡片墙（图1）种子数据；status 模拟最近一次测试连接的结果 */
+/** 数据源连接卡片墙（图1）种子数据：只对应阶段0 导入的三个 BULL 问数开发库
+ *  （dev MySQL 容器 127.0.0.1:13306 的 nl2sql_fund / nl2sql_stock / nl2sql_macro） */
 export const dataSources: DataSource[] = [
-  { id: 'ds-01', name: '地下水治理', dbType: 'postgresql', host: '192.168.1.137', port: 5432, database: 'appdb', username: 'appuser', status: 'connected', lastTestedAt: 1756108800, createdAt: 1755936000, updatedAt: 1756108800 },
-  { id: 'ds-02', name: '工作督办', dbType: 'mysql', host: '192.168.1.86', port: 3307, database: 'business_data', username: 'reader', status: 'connected', lastTestedAt: 1756022400, createdAt: 1755849600, updatedAt: 1756022400 },
-  { id: 'ds-03', name: '计划调度', dbType: 'mysql', host: '192.168.1.90', port: 3306, database: 'schedule_plan', username: 'scheduler', status: 'connected', lastTestedAt: 1756022400, createdAt: 1755763200, updatedAt: 1756022400 },
-  { id: 'ds-04', name: '资产管理', dbType: 'mysql', host: '192.168.1.101', port: 3306, database: 'asset_management', username: 'asset_ro', status: 'failed', lastTestedAt: 1755936000, createdAt: 1755676800, updatedAt: 1755936000 },
-  { id: 'ds-05', name: '渗漏治理', dbType: 'postgresql', host: '192.168.1.86', port: 5432, database: 'dpc', username: 'dpc_ro', status: 'untested', lastTestedAt: null, createdAt: 1756108800, updatedAt: 1756108800 },
-  // BULL 问数开发库（阶段0 已导入 dev MySQL 容器 127.0.0.1:13306 的三个 schema）
-  { id: 'ds-06', name: '基金问数库', dbType: 'mysql', host: '127.0.0.1', port: 13306, database: 'nl2sql_fund', username: 'hermes_nl2sql_ro', status: 'connected', lastTestedAt: 1756195200, createdAt: 1756195200, updatedAt: 1756195200 },
-  { id: 'ds-07', name: '股票问数库', dbType: 'mysql', host: '127.0.0.1', port: 13306, database: 'nl2sql_stock', username: 'hermes_nl2sql_ro', status: 'connected', lastTestedAt: 1756195200, createdAt: 1756195200, updatedAt: 1756195200 },
-  { id: 'ds-08', name: '宏观问数库', dbType: 'mysql', host: '127.0.0.1', port: 13306, database: 'nl2sql_macro', username: 'hermes_nl2sql_ro', status: 'connected', lastTestedAt: 1756195200, createdAt: 1756195200, updatedAt: 1756195200 },
+  { id: 'ds-01', name: '基金问数库', dbType: 'mysql', host: '127.0.0.1', port: 13306, database: 'nl2sql_fund', username: 'hermes_nl2sql_ro', status: 'connected', lastTestedAt: 1756195200, createdAt: 1756195200, updatedAt: 1756195200 },
+  { id: 'ds-02', name: '股票问数库', dbType: 'mysql', host: '127.0.0.1', port: 13306, database: 'nl2sql_stock', username: 'hermes_nl2sql_ro', status: 'connected', lastTestedAt: 1756195200, createdAt: 1756195200, updatedAt: 1756195200 },
+  { id: 'ds-03', name: '宏观问数库', dbType: 'mysql', host: '127.0.0.1', port: 13306, database: 'nl2sql_macro', username: 'hermes_nl2sql_ro', status: 'connected', lastTestedAt: 1756195200, createdAt: 1756195200, updatedAt: 1756195200 },
 ]
 
-/** 数据集列表（图3）种子数据：覆盖 启用 / 缺提示词 / 缺业务说明 / 停用 四种治理状态 */
+/** 数据集列表（图3）种子数据：一库一数据集。ddlCount 为真实表数（fund 28 / stock 31 / macro 19）；
+ *  宏观库刻意留空提示词，演示「缺提示词」治理状态 */
 export const datasets: Dataset[] = [
-  { id: 'dataset-01', name: '基金问数数据集', description: 'CCKS2022 基金领域问数：基金基本信息、规模、费率、持仓与净值查询。', dataSourceId: 'ds-06', flowVersion: '框架默认流程', enabled: true, prompt: '你是基金领域问数助手。表名与字段均为中文拼音，金额单位为元，日期格式 YYYY-MM-DD。', ddlCount: 28, ruleCount: 6, createdAt: 1756195200, updatedAt: 1756281600 },
-  { id: 'dataset-02', name: '股票问数数据集', description: 'CCKS2022 股票领域问数：上市公司基本信息、行情、财务指标与股东数据。', dataSourceId: 'ds-07', flowVersion: '框架默认流程', enabled: true, prompt: '你是股票领域问数助手。股票代码为 6 位数字字符串，涉及"最新"时按交易日期倒序取第一条。', ddlCount: 15, ruleCount: 4, createdAt: 1756195200, updatedAt: 1756281600 },
-  { id: 'dataset-03', name: '宏观问数数据集', description: 'CCKS2022 宏观经济问数：GDP、CPI、利率、汇率等宏观指标查询。', dataSourceId: 'ds-08', flowVersion: '框架默认流程', enabled: true, prompt: '', ddlCount: 10, ruleCount: 2, createdAt: 1756195200, updatedAt: 1756281600 },
-  { id: 'dataset-04', name: '督办事项统计', description: '', dataSourceId: 'ds-02', flowVersion: '框架默认流程', enabled: true, prompt: '统计口径以督办单状态字段为准，逾期 = 截止时间早于当前且状态非已完成。', ddlCount: 8, ruleCount: 3, createdAt: 1756108800, updatedAt: 1756195200 },
-  { id: 'dataset-05', name: '资产台账问数', description: '资产台账与折旧查询（待资产库连接恢复后启用）。', dataSourceId: 'ds-04', flowVersion: '框架默认流程', enabled: false, prompt: '金额单位为万元，保留两位小数。', ddlCount: 0, ruleCount: 0, createdAt: 1756022400, updatedAt: 1756108800 },
+  { id: 'dataset-01', name: '基金问数数据集', description: 'CCKS2022 基金领域问数（ccks_fund）：公募基金概况、资产配置、费率、收益排名与风险等级查询。', dataSourceId: 'ds-01', flowVersion: '框架默认流程', enabled: true, prompt: '你是基金领域问数助手。表名以 mf_ 开头，基金内部代码统一用 InnerCode 关联，金额单位为元，日期格式 YYYY-MM-DD。', ddlCount: 28, ruleCount: 6, createdAt: 1756195200, updatedAt: 1756281600 },
+  { id: 'dataset-02', name: '股票问数数据集', description: 'CCKS2022 股票领域问数（ccks_stock）：上市公司概况、分红回购、配股增发、股东与股本数据。', dataSourceId: 'ds-02', flowVersion: '框架默认流程', enabled: true, prompt: '你是股票领域问数助手。表名以 lc_ 开头，公司代码统一用 CompanyCode 关联；涉及"最新"时按信息披露日期倒序取第一条。', ddlCount: 31, ruleCount: 4, createdAt: 1756195200, updatedAt: 1756281600 },
+  { id: 'dataset-03', name: '宏观问数数据集', description: 'CCKS2022 宏观经济问数（ccks_macro）：GDP、CPI、货币银行、财政收支、海关进出口等宏观指标查询。', dataSourceId: 'ds-03', flowVersion: '框架默认流程', enabled: true, prompt: '', ddlCount: 19, ruleCount: 2, createdAt: 1756195200, updatedAt: 1756281600 },
 ]
+
+/** 元数据配置（图4）种子数据：表名/中文说明/外键关系取自 BULL-cn/db_info.json，
+ *  范例取自 BULL-cn/dev.json 的金标准问答对 */
+export const datasetMeta: Record<string, DatasetMetaBundle> = {
+  'dataset-01': {
+    tables: [
+      { id: 'tm-01', datasetId: 'dataset-01', tableName: 'mf_fundarchives', comment: '公募基金概况', enabled: true, updatedAt: 1756281600 },
+      { id: 'tm-02', datasetId: 'dataset-01', tableName: 'mf_assetallocation', comment: '公募基金资产配置', enabled: true, updatedAt: 1756281600 },
+      { id: 'tm-03', datasetId: 'dataset-01', tableName: 'mf_chargeratenew', comment: '公募基金费率(新)', enabled: true, updatedAt: 1756281600 },
+      { id: 'tm-04', datasetId: 'dataset-01', tableName: 'mf_fundreturnrank', comment: '公募基金最新收益率排名', enabled: true, updatedAt: 1756281600 },
+      { id: 'tm-05', datasetId: 'dataset-01', tableName: 'mf_fundrisklevel', comment: '公募基金风险等级表', enabled: true, updatedAt: 1756281600 },
+      { id: 'tm-06', datasetId: 'dataset-01', tableName: 'mf_benchmarkgrowthrate', comment: '公募基金最新基准收益率', enabled: false, updatedAt: 1756281600 },
+    ],
+    terms: [
+      { id: 'term-01', datasetId: 'dataset-01', term: '基金收益为正', definition: 'mf_fundreturnrank.fundreturn > 0', updatedAt: 1756281600 },
+      { id: 'term-02', datasetId: 'dataset-01', term: '指标周期', definition: 'mf_fundreturnrank.indexcycle，取值如「一个月」「三个月」「今年以来」', updatedAt: 1756281600 },
+    ],
+    metrics: [
+      { id: 'metric-01', datasetId: 'dataset-01', name: '正收益基金数', expression: 'COUNT(*) WHERE fundreturn > 0', description: '按指标周期与基金类别分组统计', updatedAt: 1756281600 },
+    ],
+    dimensions: [
+      { id: 'dim-01', datasetId: 'dataset-01', name: '基金类别', field: 'mf_fundreturnrank.fundtypename', description: '股票型/混合型/债券型等', updatedAt: 1756281600 },
+    ],
+    foreignKeys: [
+      { id: 'fk-01', datasetId: 'dataset-01', fromTable: 'mf_fundarchives', fromColumn: 'InnerCode', toTable: 'mf_assetallocation', toColumn: 'InnerCode', updatedAt: 1756281600 },
+      { id: 'fk-02', datasetId: 'dataset-01', fromTable: 'mf_fundarchives', fromColumn: 'InnerCode', toTable: 'mf_fundrisklevel', toColumn: 'InnerCode', updatedAt: 1756281600 },
+      { id: 'fk-03', datasetId: 'dataset-01', fromTable: 'mf_fundarchives', fromColumn: 'InnerCode', toTable: 'mf_fundreturnrank', toColumn: 'InnerCode', updatedAt: 1756281600 },
+    ],
+    examples: [
+      { id: 'ex-01', datasetId: 'dataset-01', question: '显示指标周期为"一个月"的基金收益为正的基金数目，按基金类别分组展示', sql: "SELECT fundtypename, COUNT(*) FROM mf_fundreturnrank WHERE indexcycle = '一个月' AND fundreturn > 0 GROUP BY fundtypename", updatedAt: 1756281600 },
+    ],
+  },
+  'dataset-02': {
+    tables: [
+      { id: 'tm-11', datasetId: 'dataset-02', tableName: 'lc_stockarchives', comment: '公司概况', enabled: true, updatedAt: 1756281600 },
+      { id: 'tm-12', datasetId: 'dataset-02', tableName: 'lc_actualcontroller', comment: '公司实际控制人', enabled: true, updatedAt: 1756281600 },
+      { id: 'tm-13', datasetId: 'dataset-02', tableName: 'lc_dividend', comment: '公司分红', enabled: true, updatedAt: 1756281600 },
+      { id: 'tm-14', datasetId: 'dataset-02', tableName: 'lc_buyback', comment: '股份回购', enabled: true, updatedAt: 1756281600 },
+      { id: 'tm-15', datasetId: 'dataset-02', tableName: 'lc_largeshsubscription', comment: '配股大股东认配状况', enabled: true, updatedAt: 1756281600 },
+      { id: 'tm-16', datasetId: 'dataset-02', tableName: 'lc_freefloat', comment: '自由流通股本', enabled: true, updatedAt: 1756281600 },
+    ],
+    terms: [
+      { id: 'term-11', datasetId: 'dataset-02', term: '实配股数', definition: 'lc_largeshsubscription.actualshares；对应应配股数 oughtshares', updatedAt: 1756281600 },
+    ],
+    metrics: [],
+    dimensions: [],
+    foreignKeys: [
+      { id: 'fk-11', datasetId: 'dataset-02', fromTable: 'lc_stockarchives', fromColumn: 'CompanyCode', toTable: 'lc_actualcontroller', toColumn: 'CompanyCode', updatedAt: 1756281600 },
+      { id: 'fk-12', datasetId: 'dataset-02', fromTable: 'lc_stockarchives', fromColumn: 'CompanyCode', toTable: 'lc_buyback', toColumn: 'CompanyCode', updatedAt: 1756281600 },
+    ],
+    examples: [
+      { id: 'ex-11', datasetId: 'dataset-02', question: '哪些股东名称的实配和应配股数都超过50万', sql: 'SELECT shname FROM lc_largeshsubscription WHERE actualshares > 500000 AND oughtshares > 500000', updatedAt: 1756281600 },
+    ],
+  },
+  'dataset-03': {
+    tables: [
+      { id: 'tm-21', datasetId: 'dataset-03', tableName: 'ed_grossdomesticproduct', comment: '国内生产总值', enabled: true, updatedAt: 1756281600 },
+      { id: 'tm-22', datasetId: 'dataset-03', tableName: 'ed_consumerpriceindex', comment: '居民消费价格指数', enabled: true, updatedAt: 1756281600 },
+      { id: 'tm-23', datasetId: 'dataset-03', tableName: 'ed_chinamoneyandbanking', comment: '中国货币与银行概览', enabled: true, updatedAt: 1756281600 },
+      { id: 'tm-24', datasetId: 'dataset-03', tableName: 'ed_exportimport', comment: '海关进出口', enabled: true, updatedAt: 1756281600 },
+      { id: 'tm-25', datasetId: 'dataset-03', tableName: 'ed_otherdepositorycorpbs', comment: '其他存款性公司资产负债表', enabled: true, updatedAt: 1756281600 },
+    ],
+    terms: [],
+    metrics: [],
+    dimensions: [],
+    foreignKeys: [],
+    examples: [
+      { id: 'ex-21', datasetId: 'dataset-03', question: '列出准备金存款在其他存款性公司资产负债表中的数据记录', sql: 'SELECT depositswithcentralbank FROM ed_otherdepositorycorpbs', updatedAt: 1756281600 },
+    ],
+  },
+}
