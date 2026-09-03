@@ -7,7 +7,6 @@ const inputClass = 'h-9 w-full rounded-md border border-line bg-panel px-3 text-
 const DEFAULT_PORTS: Record<DbType, number> = {
   mysql: 3306,
   postgresql: 5432,
-  sqlite: 0,
 }
 
 function DialogShell({

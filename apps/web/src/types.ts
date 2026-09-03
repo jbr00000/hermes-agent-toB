@@ -176,8 +176,9 @@ export interface AgentKnowledgeScope {
   kbId: string | null
 }
 
-/** 数据源连接（数据库管理 · 图1卡片墙）。密码为 write-only：API 永不回传。 */
-export type DbType = 'mysql' | 'postgresql' | 'sqlite'
+/** 数据源连接（数据库管理 · 图1卡片墙）。密码为 write-only：API 永不回传。
+ *  问数要求业务库为 MySQL/PostgreSQL（后端只收这两类）。 */
+export type DbType = 'mysql' | 'postgresql'
 
 export interface DataSource {
   id: string
@@ -188,6 +189,8 @@ export interface DataSource {
   port: number
   database: string
   username: string
+  /** 是否已设置密码（密码本身为 write-only，API 永不回传） */
+  hasPassword: boolean
   /** 最近一次测试连接的结果；untested = 新建/改密码后未测 */
   status: 'connected' | 'failed' | 'untested'
   lastTestedAt: number | null
@@ -237,42 +240,58 @@ export interface DatasetInput {
 /** 元数据配置（图4）六类元数据的种类 key */
 export type MetaKind = 'tables' | 'terms' | 'metrics' | 'dimensions' | 'foreignKeys' | 'examples'
 
-/** 表结构元数据（图4 默认 tab）；enabled=false 的表不下发给问数流程 */
+/** 元数据来源标记：MANUAL=人工维护 / AI=自动抓取或生成 */
+export type MetaProvider = 'MANUAL' | 'AI'
+
+/** 表结构元数据（图4 默认 tab）；enabled=false 的表不下发给问数流程。
+ *  ddlContent 为完整建表语句，由算法端原文拼进 SQL 生成 prompt */
 export interface TableMeta {
   id: string
   datasetId: string
   tableName: string
-  comment: string
+  ddlContent: string
+  /** 表中文说明 */
+  description: string
   enabled: boolean
+  provider: MetaProvider
   updatedAt: number
 }
 
-/** 术语：业务名词 → 口径定义 */
+/** 术语：业务名词 → 口径定义；synonyms 近义词参与检索召回 */
 export interface TermMeta {
   id: string
   datasetId: string
   term: string
   definition: string
+  /** 近义词（顿号/逗号分隔） */
+  synonyms: string
+  remark: string
+  provider: MetaProvider
   updatedAt: number
 }
 
-/** 指标：可计算的业务度量（expression 为口径/SQL 片段） */
+/** 指标：可计算的业务度量（expression 为口径/SQL 片段，可含占位符） */
 export interface MetricMeta {
   id: string
   datasetId: string
   name: string
+  displayName: string
   expression: string
-  description: string
+  remark: string
+  provider: MetaProvider
   updatedAt: number
 }
 
-/** 维度：分析切片（field 为关联的表字段） */
+/** 维度码表：编码 ↔ 中文标准值（name 形如「表名.字段名」，dataKey=库存编码，dataValue=标准中文值） */
 export interface DimensionMeta {
   id: string
   datasetId: string
   name: string
-  field: string
-  description: string
+  displayName: string
+  dataKey: string
+  dataValue: string
+  remark: string
+  provider: MetaProvider
   updatedAt: number
 }
 
@@ -284,6 +303,9 @@ export interface ForeignKeyMeta {
   fromColumn: string
   toTable: string
   toColumn: string
+  /** 关联说明 */
+  relationDesc: string
+  provider: MetaProvider
   updatedAt: number
 }
 
@@ -293,6 +315,8 @@ export interface ExampleMeta {
   datasetId: string
   question: string
   sql: string
+  remark: string
+  provider: MetaProvider
   updatedAt: number
 }
 
@@ -304,6 +328,41 @@ export interface DatasetMetaBundle {
   dimensions: DimensionMeta[]
   foreignKeys: ForeignKeyMeta[]
   examples: ExampleMeta[]
+}
+
+/** 三端同步历史（图4「三端同步历史」弹窗）：一次同步按五段资产分别记录状态 */
+export interface Nl2sqlSyncSegment {
+  key: 'ddl' | 'terminology' | 'index' | 'dimension' | 'qaPair'
+  label: string
+  status: string // pending | running | success | failed | skipped
+  message: string | null
+}
+
+export interface Nl2sqlSyncRecord {
+  id: string
+  datasetId: string
+  /** ASSET_CHANGE（资产变更自动）| MANUAL_RESYNC（手动重同步）| CLEAR（清空）| IMPORT（Excel 导入） */
+  triggerType: string
+  overallStatus: string
+  overallMessage: string | null
+  segments: Nl2sqlSyncSegment[]
+  createdAt: number
+}
+
+/** Excel 导入预览（POST meta/import/preview）：按元数据类型分组的 create/update/duplicate 统计 + 行级错误 */
+export interface MetaImportTypeSummary {
+  read: number
+  create: number
+  update: number
+  duplicate: number
+  error: number
+}
+
+export interface MetaImportPreview {
+  previewId: string
+  typeSummaries: Partial<Record<MetaKind, MetaImportTypeSummary>>
+  errors: Array<{ sheet: string; row: number; message: string }>
+  ignoredSheets: string[]
 }
 
 /** 问数（NL2SQL）单轮回答：生成的 SQL + 结果集 + 自然语言小结 */

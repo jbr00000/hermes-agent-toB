@@ -8,6 +8,15 @@ import type {
   ChatMessage,
   ConversationDetail,
   ConversationSummary,
+  DataSource,
+  DataSourceInput,
+  Dataset,
+  DatasetInput,
+  DatasetMetaBundle,
+  DbType,
+  DimensionMeta,
+  ExampleMeta,
+  ForeignKeyMeta,
   KnowledgeBase,
   KnowledgeCitation,
   KnowledgeChunk,
@@ -15,12 +24,18 @@ import type {
   KnowledgeSearchMode,
   KnowledgeStats,
   MessageAttachment,
+  MetaImportPreview,
+  MetaKind,
+  MetricMeta,
+  Nl2sqlSyncRecord,
   PermissionMode,
   SessionSummary,
+  TableMeta,
   TaskArtifact,
   TaskPermission,
   TaskPlan,
   TaskRun,
+  TermMeta,
   ToolApproval,
   ToolEvent,
   UploadBudget,
@@ -274,6 +289,173 @@ interface BackendAdminUser {
   status: 'active' | 'disabled'
   features: UserFeatures
   created_at: number
+}
+
+// ---------------------------------------------------------------- NL2SQL 问数
+
+interface BackendNl2sqlDatasource {
+  id: string
+  name: string
+  db_type: DbType
+  host: string
+  port: number
+  database_name: string
+  schema_name: string | null
+  username: string
+  description: string | null
+  enabled: boolean
+  last_test_status: 'connected' | 'failed' | null
+  last_test_message: string | null
+  last_tested_at: number | null
+  has_password: boolean
+  created_at: number
+  updated_at: number
+}
+
+interface BackendNl2sqlDataset {
+  id: string
+  name: string
+  datasource_id: string
+  description: string | null
+  system_prompt: string | null
+  flow_version: string
+  enabled: boolean
+  ddl_count: number
+  rule_count: number
+  created_at: number
+  updated_at: number
+}
+
+function toDataSource(row: BackendNl2sqlDatasource): DataSource {
+  return {
+    id: row.id,
+    name: row.name,
+    dbType: row.db_type,
+    host: row.host,
+    port: row.port,
+    database: row.database_name,
+    username: row.username,
+    hasPassword: row.has_password,
+    status: row.last_test_status ?? 'untested',
+    lastTestedAt: row.last_tested_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
+function toDataset(row: BackendNl2sqlDataset): Dataset {
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description ?? '',
+    dataSourceId: row.datasource_id,
+    flowVersion: row.flow_version,
+    enabled: row.enabled,
+    prompt: row.system_prompt ?? '',
+    ddlCount: row.ddl_count,
+    ruleCount: row.rule_count,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
+function toDataSourcePayload(input: DataSourceInput): Record<string, unknown> {
+  return {
+    name: input.name,
+    db_type: input.dbType,
+    host: input.host,
+    port: input.port,
+    database_name: input.database,
+    username: input.username,
+    ...(input.password ? { password: input.password } : {}),
+  }
+}
+
+function toDatasetPayload(input: DatasetInput): Record<string, unknown> {
+  return {
+    name: input.name,
+    datasource_id: input.dataSourceId,
+    description: input.description || null,
+    system_prompt: input.prompt || null,
+    enabled: input.enabled,
+  }
+}
+
+/** 六类元数据 后端 snake_case 列 → 前端 camelCase 字段（反转即写回映射） */
+const META_KEY_TO_FRONT: Record<MetaKind, Record<string, string>> = {
+  tables: { table_name: 'tableName', ddl_content: 'ddlContent', description: 'description', enabled: 'enabled', provider: 'provider' },
+  terms: { terminology: 'term', terminology_explain: 'definition', synonyms: 'synonyms', remark: 'remark', provider: 'provider' },
+  metrics: { index_name: 'name', index_display_name: 'displayName', calculate_method: 'expression', remark: 'remark', provider: 'provider' },
+  dimensions: { dimension_name: 'name', dimension_display_name: 'displayName', db_data_key: 'dataKey', db_data_value: 'dataValue', remark: 'remark', provider: 'provider' },
+  foreignKeys: { source_table: 'fromTable', source_column: 'fromColumn', target_table: 'toTable', target_column: 'toColumn', relation_desc: 'relationDesc', provider: 'provider' },
+  examples: { question: 'question', question_sql: 'sql', remark: 'remark', provider: 'provider' },
+}
+
+const META_KEY_TO_BACK: Record<MetaKind, Record<string, string>> = Object.fromEntries(
+  (Object.entries(META_KEY_TO_FRONT) as Array<[MetaKind, Record<string, string>]>).map(
+    ([kind, mapping]) => [kind, Object.fromEntries(Object.entries(mapping).map(([back, front]) => [front, back]))],
+  ),
+) as Record<MetaKind, Record<string, string>>
+
+type BackendMetaRow = Record<string, unknown> & { id: string; dataset_id: string; updated_at: number }
+
+/** 元数据行 → 前端 camelCase 对象（保留 id/datasetId/updatedAt；updatedAt 维持秒级与列表渲染约定一致） */
+function toMetaRow(kind: MetaKind, row: BackendMetaRow): Record<string, unknown> & { id: string; datasetId: string; updatedAt: number } {
+  const out: Record<string, unknown> & { id: string; datasetId: string; updatedAt: number } = {
+    id: row.id,
+    datasetId: row.dataset_id,
+    updatedAt: row.updated_at,
+  }
+  for (const [back, front] of Object.entries(META_KEY_TO_FRONT[kind])) {
+    out[front] = row[back] ?? (front === 'provider' ? 'MANUAL' : front === 'enabled' ? true : '')
+  }
+  return out
+}
+
+/** 前端表单值（camelCase，可带 id）→ 后端 fields 载荷（snake_case） */
+function toBackendMetaFields(kind: MetaKind, item: Record<string, unknown>): Record<string, unknown> {
+  const fields: Record<string, unknown> = {}
+  for (const [front, back] of Object.entries(META_KEY_TO_BACK[kind])) {
+    if (item[front] !== undefined) fields[back] = item[front]
+  }
+  return fields
+}
+
+interface BackendNl2sqlSyncRecord {
+  id: string
+  dataset_id: string
+  trigger_type: string
+  overall_status: string
+  overall_message: string | null
+  ddl_status: string
+  ddl_message: string | null
+  terminology_status: string
+  terminology_message: string | null
+  index_status: string
+  index_message: string | null
+  dimension_status: string
+  dimension_message: string | null
+  qa_pair_status: string
+  qa_pair_message: string | null
+  created_at: number
+}
+
+function toSyncRecord(row: BackendNl2sqlSyncRecord): Nl2sqlSyncRecord {
+  return {
+    id: row.id,
+    datasetId: row.dataset_id,
+    triggerType: row.trigger_type,
+    overallStatus: row.overall_status,
+    overallMessage: row.overall_message,
+    segments: [
+      { key: 'ddl', label: '表结构', status: row.ddl_status, message: row.ddl_message },
+      { key: 'terminology', label: '术语', status: row.terminology_status, message: row.terminology_message },
+      { key: 'index', label: '指标', status: row.index_status, message: row.index_message },
+      { key: 'dimension', label: '维度', status: row.dimension_status, message: row.dimension_message },
+      { key: 'qaPair', label: '范例', status: row.qa_pair_status, message: row.qa_pair_message },
+    ],
+    createdAt: row.created_at,
+  }
 }
 
 export class ApiError extends Error {
@@ -733,6 +915,20 @@ async function consumeEventStream(
     if (done) break
   }
   if (buffer.trim()) dispatchSseBlock(buffer, handlers)
+}
+
+/** 带鉴权的文件下载：从 Content-Disposition 取 filename*=UTF-8'' 名，缺失时用 fallback。 */
+async function downloadResponseBlob(response: Response, fallbackName: string): Promise<void> {
+  const disposition = response.headers.get('Content-Disposition') ?? ''
+  const match = /filename\*=UTF-8''([^;]+)/i.exec(disposition)
+  const filename = match ? decodeURIComponent(match[1]) : fallbackName
+  const blob = await response.blob()
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  anchor.click()
+  URL.revokeObjectURL(url)
 }
 
 export const api = {
@@ -1291,6 +1487,192 @@ export const api = {
     const response = await apiFetch(`/knowledge/documents/${encodeURIComponent(docId)}/file${query}`)
     if (!response.ok) throw await parseError(response)
     return response.blob()
+  },
+
+  // ------------------------------------------- NL2SQL 问数（数据库管理 / 元数据配置 / 问数页）
+
+  async listDataSources(): Promise<DataSource[]> {
+    const response = await apiFetch('/nl2sql/datasources')
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as { datasources: BackendNl2sqlDatasource[] }
+    return body.datasources.map(toDataSource)
+  },
+
+  async createDataSource(input: DataSourceInput): Promise<DataSource> {
+    const response = await apiFetch('/nl2sql/datasources', {
+      method: 'POST',
+      body: JSON.stringify(toDataSourcePayload(input)),
+    })
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as { datasource: BackendNl2sqlDatasource }
+    return toDataSource(body.datasource)
+  },
+
+  async updateDataSource(id: string, input: DataSourceInput): Promise<DataSource> {
+    const response = await apiFetch(`/nl2sql/datasources/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(toDataSourcePayload(input)),
+    })
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as { datasource: BackendNl2sqlDatasource }
+    return toDataSource(body.datasource)
+  },
+
+  async deleteDataSource(id: string): Promise<void> {
+    const response = await apiFetch(`/nl2sql/datasources/${encodeURIComponent(id)}`, { method: 'DELETE' })
+    if (!response.ok) throw await parseError(response)
+  },
+
+  /** 测试连接：返回探活结果 + 刷新后的数据源行（last_test_* 已落库） */
+  async testDataSource(id: string): Promise<{ success: boolean; message: string; latencyMs: number | null; dataSource: DataSource }> {
+    const response = await apiFetch(`/nl2sql/datasources/${encodeURIComponent(id)}/test`, { method: 'POST' })
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as {
+      success: boolean
+      message: string
+      latency_ms: number | null
+      datasource: BackendNl2sqlDatasource
+    }
+    return { success: body.success, message: body.message, latencyMs: body.latency_ms, dataSource: toDataSource(body.datasource) }
+  },
+
+  async listDatasets(): Promise<Dataset[]> {
+    const response = await apiFetch('/nl2sql/datasets')
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as { datasets: BackendNl2sqlDataset[] }
+    return body.datasets.map(toDataset)
+  },
+
+  async createDataset(input: DatasetInput): Promise<Dataset> {
+    const response = await apiFetch('/nl2sql/datasets', {
+      method: 'POST',
+      body: JSON.stringify(toDatasetPayload(input)),
+    })
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as { dataset: BackendNl2sqlDataset }
+    return toDataset(body.dataset)
+  },
+
+  async updateDataset(id: string, input: DatasetInput): Promise<Dataset> {
+    const response = await apiFetch(`/nl2sql/datasets/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(toDatasetPayload(input)),
+    })
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as { dataset: BackendNl2sqlDataset }
+    return toDataset(body.dataset)
+  },
+
+  async deleteDataset(id: string): Promise<void> {
+    const response = await apiFetch(`/nl2sql/datasets/${encodeURIComponent(id)}`, { method: 'DELETE' })
+    if (!response.ok) throw await parseError(response)
+  },
+
+  async getDatasetMeta(datasetId: string): Promise<DatasetMetaBundle> {
+    const response = await apiFetch(`/nl2sql/datasets/${encodeURIComponent(datasetId)}/meta`)
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as { meta: Record<MetaKind, BackendMetaRow[]> }
+    return {
+      tables: (body.meta.tables ?? []).map((row) => toMetaRow('tables', row)) as unknown as TableMeta[],
+      terms: (body.meta.terms ?? []).map((row) => toMetaRow('terms', row)) as unknown as TermMeta[],
+      metrics: (body.meta.metrics ?? []).map((row) => toMetaRow('metrics', row)) as unknown as MetricMeta[],
+      dimensions: (body.meta.dimensions ?? []).map((row) => toMetaRow('dimensions', row)) as unknown as DimensionMeta[],
+      foreignKeys: (body.meta.foreignKeys ?? []).map((row) => toMetaRow('foreignKeys', row)) as unknown as ForeignKeyMeta[],
+      examples: (body.meta.examples ?? []).map((row) => toMetaRow('examples', row)) as unknown as ExampleMeta[],
+    }
+  },
+
+  /** 新增/编辑一条元数据：item.id 为空 = 新增；表单字段 camelCase，这里转 snake_case fields 载荷 */
+  async saveMetaItem(
+    datasetId: string,
+    kind: MetaKind,
+    item: Record<string, unknown> & { id?: string },
+  ): Promise<void> {
+    const { id, ...rest } = item
+    const response = await apiFetch(
+      `/nl2sql/datasets/${encodeURIComponent(datasetId)}/meta/${encodeURIComponent(kind)}`,
+      { method: 'PUT', body: JSON.stringify({ id: id ?? null, fields: toBackendMetaFields(kind, rest) }) },
+    )
+    if (!response.ok) throw await parseError(response)
+  },
+
+  async deleteMetaItem(datasetId: string, kind: MetaKind, itemId: string): Promise<void> {
+    const response = await apiFetch(
+      `/nl2sql/datasets/${encodeURIComponent(datasetId)}/meta/${encodeURIComponent(kind)}/${encodeURIComponent(itemId)}`,
+      { method: 'DELETE' },
+    )
+    if (!response.ok) throw await parseError(response)
+  },
+
+  async clearDatasetMeta(datasetId: string): Promise<void> {
+    const response = await apiFetch(
+      `/nl2sql/datasets/${encodeURIComponent(datasetId)}/meta/clear`,
+      { method: 'POST' },
+    )
+    if (!response.ok) throw await parseError(response)
+  },
+
+  /** 从数据源抓取全部表 DDL 灌入表结构元数据（按表名匹配只更新 DDL/说明，不动启用状态） */
+  async syncDdlFromDataSource(datasetId: string): Promise<{ created: number; updated: number; total: number }> {
+    const response = await apiFetch(
+      `/nl2sql/datasets/${encodeURIComponent(datasetId)}/meta/sync-ddl`,
+      { method: 'POST' },
+    )
+    if (!response.ok) throw await parseError(response)
+    return response.json() as Promise<{ created: number; updated: number; total: number }>
+  },
+
+  /** Excel 模板/导出：必须走 fetch（带 JWT 头）+ blob + objectURL，文件名取响应头 Content-Disposition */
+  async downloadMetaTemplate(datasetId: string, fallbackName: string): Promise<void> {
+    const response = await apiFetch(`/nl2sql/datasets/${encodeURIComponent(datasetId)}/meta/template`)
+    if (!response.ok) throw await parseError(response)
+    await downloadResponseBlob(response, fallbackName)
+  },
+
+  async exportDatasetMeta(datasetId: string, fallbackName: string): Promise<void> {
+    const response = await apiFetch(`/nl2sql/datasets/${encodeURIComponent(datasetId)}/meta/export`)
+    if (!response.ok) throw await parseError(response)
+    await downloadResponseBlob(response, fallbackName)
+  },
+
+  /** Excel 导入第一步：上传解析 + 与既有元数据比对，返回预览（30 分钟有效） */
+  async importMetaPreview(datasetId: string, file: File): Promise<MetaImportPreview> {
+    const form = new FormData()
+    form.append('file', file)
+    const response = await apiFetch(
+      `/nl2sql/datasets/${encodeURIComponent(datasetId)}/meta/import/preview`,
+      { method: 'POST', body: form },
+    )
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as {
+      preview_id: string
+      type_summaries: MetaImportPreview['typeSummaries']
+      errors: MetaImportPreview['errors']
+      ignored_sheets: string[]
+    }
+    return {
+      previewId: body.preview_id,
+      typeSummaries: body.type_summaries,
+      errors: body.errors,
+      ignoredSheets: body.ignored_sheets,
+    }
+  },
+
+  /** Excel 导入第二步：按预览计划落库 */
+  async importMetaConfirm(datasetId: string, previewId: string): Promise<{ created: number; updated: number }> {
+    const response = await apiFetch(
+      `/nl2sql/datasets/${encodeURIComponent(datasetId)}/meta/import/confirm`,
+      { method: 'POST', body: JSON.stringify({ preview_id: previewId }) },
+    )
+    if (!response.ok) throw await parseError(response)
+    return response.json() as Promise<{ created: number; updated: number }>
+  },
+
+  async getNl2sqlSyncHistory(datasetId: string): Promise<Nl2sqlSyncRecord[]> {
+    const response = await apiFetch(`/nl2sql/datasets/${encodeURIComponent(datasetId)}/sync-history`)
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as { history: BackendNl2sqlSyncRecord[] }
+    return body.history.map(toSyncRecord)
   },
 
   // ---------------------------------------------------------- 用户管理（superadmin）

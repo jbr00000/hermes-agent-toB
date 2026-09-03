@@ -5,7 +5,6 @@ import { Badge, cn } from '../ui'
 const DB_TYPE_LABELS: Record<DbType, string> = {
   mysql: 'MySQL',
   postgresql: 'PostgreSQL',
-  sqlite: 'SQLite',
 }
 
 const STATUS_STYLES: Record<DataSource['status'], { label: string; className: string }> = {

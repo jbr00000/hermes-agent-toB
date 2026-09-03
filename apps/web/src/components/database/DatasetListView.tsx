@@ -1,7 +1,7 @@
 import * as React from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronLeft, ChevronRight, Pencil, Plus, RefreshCw, RotateCcw, Search, SlidersHorizontal, Trash2 } from 'lucide-react'
-import { mockApi } from '../../mockApi'
+import { api } from '../../api'
 import type { Dataset, DatasetInput, DataSource } from '../../types'
 import { Badge, DataTable, Td, Th, cn } from '../ui'
 import { ConfirmDialog } from '../ConfirmDialog'
@@ -65,7 +65,7 @@ export function DatasetListView({
   onOpenMeta: (dataset: Dataset) => void
 }) {
   const queryClient = useQueryClient()
-  const listQuery = useQuery({ queryKey: ['datasets'], queryFn: mockApi.listDatasets })
+  const listQuery = useQuery({ queryKey: ['datasets'], queryFn: api.listDatasets })
 
   const [draft, setDraft] = React.useState<Filters>(EMPTY_FILTERS)
   const [applied, setApplied] = React.useState<Filters>(EMPTY_FILTERS)
@@ -89,8 +89,8 @@ export function DatasetListView({
   const saveMutation = useMutation({
     mutationFn: (input: DatasetInput) =>
       editTarget && editTarget !== 'create'
-        ? mockApi.updateDataset(editTarget.id, input)
-        : mockApi.createDataset(input),
+        ? api.updateDataset(editTarget.id, input)
+        : api.createDataset(input),
     onSuccess: () => {
       setEditTarget(null)
       setFormError(null)
@@ -100,11 +100,12 @@ export function DatasetListView({
   })
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => mockApi.deleteDataset(id),
+    mutationFn: (id: string) => api.deleteDataset(id),
     onSuccess: () => {
       setDeleteTarget(null)
       invalidate()
     },
+    onError: (err: Error) => setFormError(err.message),
   })
 
   return (

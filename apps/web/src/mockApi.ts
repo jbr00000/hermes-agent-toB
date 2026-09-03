@@ -1,17 +1,7 @@
-import { conversations, datasetMeta, datasets, dataSources, memoryCandidates, messages, sessions, spaces } from './mockData'
-import type { Dataset, DatasetInput, DatasetMetaBundle, DataSource, DataSourceInput, MetaKind, Nl2sqlAnswer, UploadedFile, UploadOwnerType } from './types'
+import { conversations, memoryCandidates, messages, sessions, spaces } from './mockData'
+import type { Nl2sqlAnswer, UploadedFile, UploadOwnerType } from './types'
 
 const wait = (ms = 180) => new Promise((resolve) => setTimeout(resolve, ms))
-
-function emptyMetaBundle(): DatasetMetaBundle {
-  return { tables: [], terms: [], metrics: [], dimensions: [], foreignKeys: [], examples: [] }
-}
-
-/** 表结构条数变化后同步数据集的 ddlCount（图3「DDL/规则」列） */
-function syncDdlCount(datasetId: string) {
-  const dataset = datasets.find((item) => item.id === datasetId)
-  if (dataset) dataset.ddlCount = (datasetMeta[datasetId] ?? emptyMetaBundle()).tables.length
-}
 
 /** 纯前端开发用的内存附件表（key = `${ownerType}:${ownerId}`）；解析一律秒级转 ready。 */
 const mockUploads = new Map<string, UploadedFile[]>()
@@ -90,201 +80,16 @@ export const mockApi = {
     }
   },
 
-  // ---- 数据源连接（数据库管理；后端未接，先走内存 mock，适配时平移到 api.ts）----
+  // ---- 问数（NL2SQL）：阶段3 接入 POST /nl2sql/ask（SSE）前的自包含演示 stub ----
 
-  async listDataSources(): Promise<DataSource[]> {
-    await wait()
-    return dataSources
-  },
-  async createDataSource(input: DataSourceInput): Promise<DataSource> {
-    await wait()
-    const now = Date.now() / 1000
-    const created: DataSource = {
-      id: `ds-${Date.now()}`,
-      name: input.name,
-      dbType: input.dbType,
-      host: input.host,
-      port: input.port,
-      database: input.database,
-      username: input.username,
-      status: 'untested',
-      lastTestedAt: null,
-      createdAt: now,
-      updatedAt: now,
-    }
-    dataSources.unshift(created)
-    return created
-  },
-  async updateDataSource(id: string, input: DataSourceInput): Promise<DataSource> {
-    await wait()
-    const index = dataSources.findIndex((ds) => ds.id === id)
-    if (index < 0) throw new Error('数据源不存在')
-    const prev = dataSources[index]
-    const updated: DataSource = {
-      ...prev,
-      name: input.name,
-      dbType: input.dbType,
-      host: input.host,
-      port: input.port,
-      database: input.database,
-      username: input.username,
-      // 连接参数变了 → 旧测试结果失效；mock 语义：password 留空 = 不修改
-      status: 'untested',
-      lastTestedAt: null,
-      updatedAt: Date.now() / 1000,
-    }
-    dataSources[index] = updated
-    return updated
-  },
-  async deleteDataSource(id: string) {
-    await wait()
-    const index = dataSources.findIndex((ds) => ds.id === id)
-    if (index >= 0) dataSources.splice(index, 1)
-  },
-  /** 测试连接：mock 总是成功（真实后端探活由用户的算法端适配） */
-  async testDataSource(id: string): Promise<DataSource> {
-    await wait(600)
-    const ds = dataSources.find((item) => item.id === id)
-    if (!ds) throw new Error('数据源不存在')
-    ds.status = 'connected'
-    ds.lastTestedAt = Date.now() / 1000
-    ds.updatedAt = ds.lastTestedAt
-    return ds
-  },
-
-  // ---- 数据集（图3；同样先走内存 mock）----
-
-  async listDatasets(): Promise<Dataset[]> {
-    await wait()
-    return datasets
-  },
-  async createDataset(input: DatasetInput): Promise<Dataset> {
-    await wait()
-    const now = Date.now() / 1000
-    const created: Dataset = {
-      id: `dataset-${Date.now()}`,
-      name: input.name,
-      description: input.description,
-      dataSourceId: input.dataSourceId,
-      flowVersion: '框架默认流程',
-      enabled: input.enabled,
-      prompt: input.prompt,
-      ddlCount: 0,
-      ruleCount: 0,
-      createdAt: now,
-      updatedAt: now,
-    }
-    datasets.unshift(created)
-    return created
-  },
-  async updateDataset(id: string, input: DatasetInput): Promise<Dataset> {
-    await wait()
-    const index = datasets.findIndex((item) => item.id === id)
-    if (index < 0) throw new Error('数据集不存在')
-    const updated: Dataset = {
-      ...datasets[index],
-      name: input.name,
-      description: input.description,
-      dataSourceId: input.dataSourceId,
-      enabled: input.enabled,
-      prompt: input.prompt,
-      updatedAt: Date.now() / 1000,
-    }
-    datasets[index] = updated
-    return updated
-  },
-  async deleteDataset(id: string) {
-    await wait()
-    const index = datasets.findIndex((item) => item.id === id)
-    if (index >= 0) datasets.splice(index, 1)
-    delete datasetMeta[id]
-  },
-
-  // ---- 元数据配置（图4；六类元数据共用一套泛型 CRUD）----
-
-  async getDatasetMeta(datasetId: string): Promise<DatasetMetaBundle> {
-    await wait()
-    if (!datasetMeta[datasetId]) datasetMeta[datasetId] = emptyMetaBundle()
-    return datasetMeta[datasetId]
-  },
-  /** 新增/编辑一条元数据：item.id 为空 = 新增；表结构新增默认 enabled=true */
-  async saveMetaItem(
-    datasetId: string,
-    kind: MetaKind,
-    item: Record<string, unknown> & { id?: string },
-  ) {
-    await wait()
-    if (!datasetMeta[datasetId]) datasetMeta[datasetId] = emptyMetaBundle()
-    const list = datasetMeta[datasetId][kind] as unknown as Array<Record<string, unknown>>
-    const now = Date.now() / 1000
-    if (item.id) {
-      const index = list.findIndex((entry) => entry.id === item.id)
-      if (index >= 0) list[index] = { ...list[index], ...item, updatedAt: now }
-    } else {
-      list.unshift({
-        ...item,
-        id: `${kind}-${Date.now()}`,
-        datasetId,
-        ...(kind === 'tables' ? { enabled: true } : {}),
-        updatedAt: now,
-      })
-    }
-    if (kind === 'tables') syncDdlCount(datasetId)
-  },
-  async deleteMetaItem(datasetId: string, kind: MetaKind, id: string) {
-    await wait()
-    const bundle = datasetMeta[datasetId]
-    if (!bundle) return
-    const list = bundle[kind] as unknown as Array<Record<string, unknown>>
-    const index = list.findIndex((entry) => entry.id === id)
-    if (index >= 0) list.splice(index, 1)
-    if (kind === 'tables') syncDdlCount(datasetId)
-  },
-  async clearDatasetMeta(datasetId: string) {
-    await wait()
-    datasetMeta[datasetId] = emptyMetaBundle()
-    syncDdlCount(datasetId)
-  },
-
-  // ---- 问数（NL2SQL；算法端接入前的前端占位：命中范例回金标准 SQL，否则回模板 SQL）----
-
-  async askNl2sql(datasetId: string, question: string): Promise<Nl2sqlAnswer> {
+  async askNl2sql(_datasetId: string, question: string): Promise<Nl2sqlAnswer> {
     await wait(700)
-    const dataset = datasets.find((item) => item.id === datasetId)
-    if (!dataset) throw new Error('数据集不存在')
-    if (!dataset.enabled) throw new Error('该数据集已停用')
-    const bundle = datasetMeta[datasetId] ?? emptyMetaBundle()
-    const durationMs = 260 + question.length * 3
-
-    // 命中范例（问题包含范例问题的核心片段）→ 回该范例的金标准 SQL + 演示结果集
-    const hit = bundle.examples.find((example) => {
-      const probe = example.question.replace(/[""''，。？！\s]/g, '').slice(0, 8)
-      return probe.length >= 4 && question.replace(/[""''，。？！\s]/g, '').includes(probe)
-    })
-    if (hit) {
-      return {
-        sql: hit.sql,
-        columns: ['示例列A', '示例列B'],
-        rows: [
-          ['演示数据 1', '100'],
-          ['演示数据 2', '86'],
-          ['演示数据 3', '42'],
-        ],
-        summary: `已生成 SQL（命中范例库）：${question}。结果为演示数据，算法端接入后返回真实查询。`,
-        durationMs,
-      }
-    }
-
-    const firstTable = bundle.tables.find((table) => table.enabled)?.tableName ?? '（未配置表结构）'
     return {
-      sql: `SELECT *\nFROM ${firstTable}\nLIMIT 10`,
-      columns: ['列1', '列2', '列3'],
-      rows: [
-        ['示例', '数据', '1'],
-        ['示例', '数据', '2'],
-      ],
-      summary: `（前端占位）已按数据集「${dataset.name}」生成模板 SQL；接入问数算法端后，这里返回真实 NL2SQL 结果。`,
-      durationMs,
+      sql: '-- 问数算法端尚未接入（阶段3），以下为演示 SQL\nSELECT 1',
+      columns: ['提示'],
+      rows: [['问数算法端接入后，这里展示真实查询结果']],
+      summary: `（演示占位）已收到问题：「${question}」。问数算法端（阶段3）接入后，这里返回真实 NL2SQL 结果。`,
+      durationMs: 700,
     }
   },
 }

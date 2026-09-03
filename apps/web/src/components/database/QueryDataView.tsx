@@ -1,6 +1,7 @@
 import * as React from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { BarChart3, Check, Copy, Send } from 'lucide-react'
+import { api } from '../../api'
 import { mockApi } from '../../mockApi'
 import type { Nl2sqlAnswer } from '../../types'
 import { PageHeader, cn } from '../ui'
@@ -16,9 +17,9 @@ interface Turn {
 const inputClass = 'h-9 rounded-md border border-line bg-panel px-3 text-sm'
 
 /** 独立问数页（决策⑥）：选数据集 → 自然语言提问 → SQL + 结果集 + 小结。
- *  算法端接入前走 mockApi.askNl2sql（命中范例回金标准 SQL，否则模板 SQL）。 */
+ *  数据集清单走后端 /nl2sql/datasets；ask 在阶段3 接入 SSE 流式问数前仍走 mockApi 演示 stub。 */
 export function QueryDataView() {
-  const datasetsQuery = useQuery({ queryKey: ['datasets'], queryFn: mockApi.listDatasets })
+  const datasetsQuery = useQuery({ queryKey: ['datasets'], queryFn: api.listDatasets })
   const enabledDatasets = (datasetsQuery.data ?? []).filter((item) => item.enabled)
 
   const [datasetId, setDatasetId] = React.useState('')

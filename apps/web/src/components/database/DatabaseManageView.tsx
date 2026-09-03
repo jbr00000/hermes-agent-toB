@@ -1,7 +1,7 @@
 import * as React from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Database, Plus } from 'lucide-react'
-import { mockApi } from '../../mockApi'
+import { api } from '../../api'
 import type { Dataset, DataSource, DataSourceInput } from '../../types'
 import { PageHeader, cn } from '../ui'
 import { ConfirmDialog } from '../ConfirmDialog'
@@ -10,28 +10,34 @@ import { DataSourceEditModal } from './DataSourceEditModal'
 import { DatasetListView } from './DatasetListView'
 
 /** 数据库管理 tab（决策⑦）：内部含「数据源连接」（图1+图2）与「数据集」（图3）两个子视图；
- *  元数据配置（图4）是独立 detail 页，经 onOpenMeta 开新 tab。
- *  后端与算法端未接入，当前走 mockApi 内存数据——适配时平移到 api.ts。 */
+ *  元数据配置（图4）是独立 detail 页，经 onOpenMeta 开新 tab。数据走后端 /nl2sql/* 接口。 */
 export function DatabaseManageView({
   onOpenMeta,
 }: {
   onOpenMeta: (dataset: Dataset) => void
 }) {
   const queryClient = useQueryClient()
-  const listQuery = useQuery({ queryKey: ['dataSources'], queryFn: mockApi.listDataSources })
+  const listQuery = useQuery({ queryKey: ['dataSources'], queryFn: api.listDataSources })
 
   const [section, setSection] = React.useState<'sources' | 'datasets'>('sources')
   const [editTarget, setEditTarget] = React.useState<DataSource | null | 'create'>(null)
   const [deleteTarget, setDeleteTarget] = React.useState<DataSource | null>(null)
   const [formError, setFormError] = React.useState<string | null>(null)
+  const [toast, setToast] = React.useState<string | null>(null)
+
+  React.useEffect(() => {
+    if (!toast) return
+    const timer = window.setTimeout(() => setToast(null), 3200)
+    return () => window.clearTimeout(timer)
+  }, [toast])
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['dataSources'] })
 
   const saveMutation = useMutation({
     mutationFn: (input: DataSourceInput) =>
       editTarget && editTarget !== 'create'
-        ? mockApi.updateDataSource(editTarget.id, input)
-        : mockApi.createDataSource(input),
+        ? api.updateDataSource(editTarget.id, input)
+        : api.createDataSource(input),
     onSuccess: () => {
       setEditTarget(null)
       setFormError(null)
@@ -41,16 +47,29 @@ export function DatabaseManageView({
   })
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => mockApi.deleteDataSource(id),
+    mutationFn: (id: string) => api.deleteDataSource(id),
     onSuccess: () => {
       setDeleteTarget(null)
       invalidate()
     },
+    // 409 = 数据源下还有数据集（后端强制先删数据集）
+    onError: (err: Error) => {
+      setDeleteTarget(null)
+      setToast(err.message)
+    },
   })
 
   const testMutation = useMutation({
-    mutationFn: (id: string) => mockApi.testDataSource(id),
-    onSuccess: () => invalidate(),
+    mutationFn: (id: string) => api.testDataSource(id),
+    onSuccess: (result) => {
+      invalidate()
+      setToast(
+        result.success
+          ? `连接成功${result.latencyMs !== null ? `（${result.latencyMs}ms）` : ''}`
+          : `连接失败：${result.message}`,
+      )
+    },
+    onError: (err: Error) => setToast(`测试连接失败：${err.message}`),
   })
 
   const dataSources = listQuery.data ?? []
@@ -147,6 +166,12 @@ export function DatabaseManageView({
           onConfirm={() => deleteMutation.mutate(deleteTarget.id)}
           onCancel={() => setDeleteTarget(null)}
         />
+      )}
+
+      {toast && (
+        <div className="fixed bottom-5 left-1/2 z-50 -translate-x-1/2 rounded-md border border-line bg-panel px-4 py-2 text-sm shadow-card">
+          {toast}
+        </div>
       )}
     </div>
   )

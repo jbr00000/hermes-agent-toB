@@ -439,6 +439,238 @@ class KnowledgeJob(Base):
     created_at: Mapped[float] = mapped_column(Double, nullable=False)
 
 
+# ---------------------------------------------------------------------------
+# NL2SQL（问数）语义层：数据源连接 + 数据集 + 六类元数据 + 三端同步历史。
+#
+# 表名/列名与问数算法端（server/nl2sql/algorithm/，移植自 lone-ai）的直读
+# 口径严格对齐——算法端按 dataset_id 直接 SELECT 这些表，改动列名必须先改
+# 算法端读取处。六类元数据 = 表结构(ddl)/术语/指标/范例/维度码表/外键关系。
+#
+# 数据源密码存 password_enc（Fernet 加密，见 server/nl2sql/crypto.py），
+# API 永不回传明文。
+# ---------------------------------------------------------------------------
+
+
+class Nl2sqlDatasource(Base):
+    """问数业务库连接（数据库管理 · 图1 卡片墙）。"""
+
+    __tablename__ = "nl2sql_datasource"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "name", name="uq_nl2sql_datasource_tenant_name"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    db_type: Mapped[str] = mapped_column(String(16), nullable=False)  # mysql | postgresql
+    host: Mapped[str] = mapped_column(String(255), nullable=False)
+    port: Mapped[int] = mapped_column(Integer, nullable=False)
+    database_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    schema_name: Mapped[str | None] = mapped_column(String(128))
+    username: Mapped[str] = mapped_column(String(128), nullable=False)
+    password_enc: Mapped[str | None] = mapped_column(Text)  # Fernet 密文；NULL = 未设置
+    jdbc_params: Mapped[str | None] = mapped_column(String(512))
+    description: Mapped[str | None] = mapped_column(Text)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # 最近一次测试连接结果；NULL = 未测试（前端显示「未测试」）
+    last_test_status: Mapped[str | None] = mapped_column(String(16))  # connected | failed
+    last_test_message: Mapped[str | None] = mapped_column(Text)
+    last_tested_at: Mapped[float | None] = mapped_column(Double)
+    created_at: Mapped[float] = mapped_column(Double, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Double, nullable=False)
+
+
+class Nl2sqlDataset(Base):
+    """数据集（图3）：挂在某数据源下的问数单元，DataSource : Dataset = 1 : N。
+
+    合并了 lone-ai 的 metadata_set（system_prompt/prompt_template 直接放这里）。
+    ddl_count/rule_count 不落库，列表序列化时从六类元数据表实时统计。
+    """
+
+    __tablename__ = "nl2sql_dataset"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "name", name="uq_nl2sql_dataset_tenant_name"),
+        Index("idx_nl2sql_dataset_datasource", "tenant_id", "datasource_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    datasource_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)  # 业务说明；空 → 治理状态「缺业务说明」
+    system_prompt: Mapped[str | None] = mapped_column(Text)  # 问数提示词；空 → 「缺提示词」
+    flow_version: Mapped[str] = mapped_column(String(32), nullable=False, default="框架默认流程")
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[float] = mapped_column(Double, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Double, nullable=False)
+
+
+class Nl2sqlDdl(Base):
+    """表结构元数据（图4 默认 tab）：enabled=false 的表不下发给问数流程。
+
+    ddl_content 是完整建表语句（SHOW CREATE TABLE 抓取或手工粘贴）——
+    算法端把它原文拼进 SQL 生成 prompt。
+    """
+
+    __tablename__ = "nl2sql_ddl"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "dataset_id", "table_name", name="uq_nl2sql_ddl_table"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    dataset_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    table_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    ddl_content: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)  # 表中文说明
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    provider: Mapped[str] = mapped_column(String(8), nullable=False, default="MANUAL")  # MANUAL | AI
+    created_at: Mapped[float] = mapped_column(Double, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Double, nullable=False)
+
+
+class Nl2sqlTerminology(Base):
+    """术语：业务名词 → 口径定义（synonyms 近义词参与检索召回）。"""
+
+    __tablename__ = "nl2sql_business_terminology"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "dataset_id", "terminology", name="uq_nl2sql_term"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    dataset_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    terminology: Mapped[str] = mapped_column(String(255), nullable=False)
+    terminology_explain: Mapped[str | None] = mapped_column(Text)
+    synonyms: Mapped[str | None] = mapped_column(String(1024))  # 顿号/逗号分隔
+    remark: Mapped[str | None] = mapped_column(Text)
+    provider: Mapped[str] = mapped_column(String(8), nullable=False, default="MANUAL")
+    created_at: Mapped[float] = mapped_column(Double, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Double, nullable=False)
+
+
+class Nl2sqlIndex(Base):
+    """指标：可计算的业务度量（calculate_method 为口径/SQL 片段，可含占位符）。"""
+
+    __tablename__ = "nl2sql_business_index"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "dataset_id", "index_name", name="uq_nl2sql_index"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    dataset_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    index_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    index_display_name: Mapped[str | None] = mapped_column(String(255))
+    calculate_method: Mapped[str | None] = mapped_column(Text)
+    remark: Mapped[str | None] = mapped_column(Text)
+    provider: Mapped[str] = mapped_column(String(8), nullable=False, default="MANUAL")
+    created_at: Mapped[float] = mapped_column(Double, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Double, nullable=False)
+
+
+class Nl2sqlQaPair(Base):
+    """范例：问题 → 金标准 SQL（few-shot 示例）。"""
+
+    __tablename__ = "nl2sql_business_qa_pair"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    dataset_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    question_sql: Mapped[str] = mapped_column(Text, nullable=False)
+    remark: Mapped[str | None] = mapped_column(Text)
+    provider: Mapped[str] = mapped_column(String(8), nullable=False, default="MANUAL")
+    created_at: Mapped[float] = mapped_column(Double, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Double, nullable=False)
+
+
+class Nl2sqlDimensionValue(Base):
+    """维度码表：编码 ↔ 中文标准值（用户说人话、数据库存编码 的翻译表）。
+
+    dimension_name 形如 ``表名.字段名``；db_data_key = 库存编码，
+    db_data_value = 标准中文值。算法端实体匹配与结果翻译都读这张表。
+    """
+
+    __tablename__ = "nl2sql_business_dimension_value"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "dataset_id", "dimension_name", "db_data_key",
+            name="uq_nl2sql_dimension_value",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    dataset_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    dimension_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    dimension_display_name: Mapped[str | None] = mapped_column(String(255))
+    db_data_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    db_data_value: Mapped[str] = mapped_column(String(512), nullable=False)
+    remark: Mapped[str | None] = mapped_column(Text)
+    provider: Mapped[str] = mapped_column(String(8), nullable=False, default="MANUAL")
+    created_at: Mapped[float] = mapped_column(Double, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Double, nullable=False)
+
+
+class Nl2sqlForeignKey(Base):
+    """外键关系：表间 join 依据（算法端多表 join 路径的唯一来源）。"""
+
+    __tablename__ = "nl2sql_foreign_key_relations"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "dataset_id", "source_table", "source_column",
+            "target_table", "target_column",
+            name="uq_nl2sql_fk",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    dataset_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    source_table: Mapped[str] = mapped_column(String(128), nullable=False)
+    source_column: Mapped[str] = mapped_column(String(128), nullable=False)
+    target_table: Mapped[str] = mapped_column(String(128), nullable=False)
+    target_column: Mapped[str] = mapped_column(String(128), nullable=False)
+    relation_desc: Mapped[str | None] = mapped_column(Text)
+    provider: Mapped[str] = mapped_column(String(8), nullable=False, default="MANUAL")
+    created_at: Mapped[float] = mapped_column(Double, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Double, nullable=False)
+
+
+class Nl2sqlSyncHistory(Base):
+    """三端同步历史（图4「三端同步历史」数据源）。
+
+    三端 = MySQL 主库（事实源）+ ES 关键词索引 + Milvus 向量索引；
+    每次同步按 ddl/术语/指标/维度/范例 五段分别记录 running/success/failed/skipped。
+    """
+
+    __tablename__ = "nl2sql_search_sync_history"
+    __table_args__ = (
+        Index("idx_nl2sql_sync_history_dataset", "tenant_id", "dataset_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    dataset_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    # ASSET_CHANGE（资产变更自动）| MANUAL_RESYNC（手动重同步）| CLEAR（清空）| IMPORT（Excel 导入）
+    trigger_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    overall_status: Mapped[str] = mapped_column(String(16), nullable=False, default="running")
+    overall_message: Mapped[str | None] = mapped_column(Text)
+    ddl_status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    ddl_message: Mapped[str | None] = mapped_column(Text)
+    terminology_status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    terminology_message: Mapped[str | None] = mapped_column(Text)
+    index_status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    index_message: Mapped[str | None] = mapped_column(Text)
+    dimension_status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    dimension_message: Mapped[str | None] = mapped_column(Text)
+    qa_pair_status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    qa_pair_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[float] = mapped_column(Double, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Double, nullable=False)
+
+
 class UploadedFile(Base):
     """临时上传文件（chat/agent 附件问答）：原件落盘 + 解析全文，随 owner 删除。
 

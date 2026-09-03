@@ -10,7 +10,7 @@ from server import auth as auth_module
 from server import features as features_module
 from server import memory as memory_module
 from server.storage import database_health, get_runtime_store
-from server.routes import audit, auth, chat, features, knowledge, memory, sessions, tasks, uploads, users
+from server.routes import audit, auth, chat, features, knowledge, memory, nl2sql, sessions, tasks, uploads, users
 
 
 def create_app() -> FastAPI:
@@ -30,6 +30,7 @@ def create_app() -> FastAPI:
     app.include_router(audit.router)
     app.include_router(knowledge.router)
     app.include_router(uploads.router)
+    app.include_router(nl2sql.router)
 
     @app.get("/health/live")
     def liveness():
