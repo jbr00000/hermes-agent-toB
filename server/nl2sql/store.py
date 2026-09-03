@@ -294,6 +294,45 @@ def clear_dataset_meta(dataset_id: str) -> None:
 # ------------------------------------------------------------------ 同步历史
 
 
+def create_sync_history(dataset_id: str, trigger_type: str) -> dict[str, Any]:
+    """开一条同步历史（overall=running，五段 pending），返回落库后的记录。"""
+    now = _now()
+    with session_scope() as session:
+        row = Nl2sqlSyncHistory(
+            id=uuid.uuid4().hex,
+            tenant_id=tenant_id(),
+            dataset_id=dataset_id,
+            trigger_type=trigger_type,
+            overall_status="running",
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(row)
+        session.flush()
+        return _row(row)
+
+
+def get_sync_history(record_id: str) -> dict[str, Any] | None:
+    with session_scope() as session:
+        row = session.get(Nl2sqlSyncHistory, record_id)
+        if row is None or row.tenant_id != tenant_id():
+            return None
+        return _row(row)
+
+
+def update_sync_history(record_id: str, fields: dict[str, Any]) -> dict[str, Any]:
+    """按段/整体状态更新同步历史（同步执行器收尾时调用）。"""
+    with session_scope() as session:
+        row = session.get(Nl2sqlSyncHistory, record_id)
+        if row is None or row.tenant_id != tenant_id():
+            raise KeyError(f"同步历史记录不存在: {record_id}")
+        for key, value in fields.items():
+            setattr(row, key, value)
+        row.updated_at = _now()
+        session.flush()
+        return _row(row)
+
+
 def list_sync_history(dataset_id: str, limit: int = 20) -> list[dict[str, Any]]:
     with session_scope() as session:
         rows = session.scalars(

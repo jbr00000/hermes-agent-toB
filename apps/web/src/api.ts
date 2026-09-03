@@ -1651,6 +1651,17 @@ export const api = {
     return response.json() as Promise<{ created: number; updated: number; total: number }>
   },
 
+  /** 三端重同步（202：立即返回 running 记录，实际同步在服务端后台线程执行；轮询 sync-history 看结果） */
+  async triggerNl2sqlSync(datasetId: string): Promise<Nl2sqlSyncRecord> {
+    const response = await apiFetch(
+      `/nl2sql/datasets/${encodeURIComponent(datasetId)}/sync`,
+      { method: 'POST' },
+    )
+    if (!response.ok) throw await parseError(response)
+    const body = await response.json() as { record: BackendNl2sqlSyncRecord }
+    return toSyncRecord(body.record)
+  },
+
   /** Excel 模板/导出：必须走 fetch（带 JWT 头）+ blob + objectURL，文件名取响应头 Content-Disposition */
   async downloadMetaTemplate(datasetId: string, fallbackName: string): Promise<void> {
     const response = await apiFetch(`/nl2sql/datasets/${encodeURIComponent(datasetId)}/meta/template`)

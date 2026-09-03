@@ -389,6 +389,27 @@ def import_confirm(dataset_id: str, payload: ImportConfirmPayload, user: dict = 
 # ------------------------------------------------------------------ 三端同步历史（执行器阶段5 落地）
 
 
+@_admin_router.post("/datasets/{dataset_id}/sync", status_code=202)
+def trigger_sync(dataset_id: str, user: dict = Depends(require_admin)):
+    """触发三端同步（MySQL → ES + Milvus 五索引）：立即落 running 记录并后台执行。
+
+    前端拿到记录后轮询 GET sync-history 看进度。同数据集已有同步在跑 → 409。
+    """
+    from server.nl2sql.sync import start_sync  # 函数内 import：避免路由模块拖重依赖
+
+    dataset = _dataset_or_404(dataset_id)
+    record = start_sync(dataset_id)
+    if record is None:
+        raise HTTPException(status_code=409, detail="该数据集同步进行中，请稍后再试")
+    get_repository().record_audit_event(
+        event_type="nl2sql_sync_trigger", conversation_id=None, user_id=user["id"],
+        status="completed", mode=None,
+        metadata={"dataset_id": dataset_id, "dataset_name": dataset["name"],
+                  "record_id": record["id"]}, error=None,
+    )
+    return {"record": record}
+
+
 @_read_router.get("/datasets/{dataset_id}/sync-history")
 def sync_history(dataset_id: str):
     _dataset_or_404(dataset_id)

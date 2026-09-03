@@ -166,8 +166,8 @@ const textareaClass = 'w-full rounded-md border border-line bg-panel px-3 py-2 t
 const actionBtnClass = 'flex h-8 items-center gap-1.5 rounded-md border border-line px-2.5 text-xs text-zinc-600 hover:bg-field hover:text-ink'
 
 /** 元数据配置页（图4）：左侧数据集列表 + 右侧六类元数据 tab。
- *  下载模板/导出/导入Excel/从数据源同步DDL/同步历史 均走后端 /nl2sql/* 真实接口；
- *  三端重同步（ES/Milvus 重建）在阶段5 接入，当前仍为占位。 */
+ *  下载模板/导出/导入Excel/从数据源同步DDL/三端重同步（ES/Milvus 重建）/同步历史
+ *  均走后端 /nl2sql/* 真实接口。 */
 export function DatasetMetaView({ datasetId }: { datasetId: string }) {
   const queryClient = useQueryClient()
   const datasetsQuery = useQuery({ queryKey: ['datasets'], queryFn: api.listDatasets })
@@ -179,6 +179,7 @@ export function DatasetMetaView({ datasetId }: { datasetId: string }) {
   const [deleteTarget, setDeleteTarget] = React.useState<MetaRow | null>(null)
   const [clearConfirm, setClearConfirm] = React.useState(false)
   const [resyncConfirm, setResyncConfirm] = React.useState(false)
+  const [pendingSyncId, setPendingSyncId] = React.useState<string | null>(null)
   const [historyOpen, setHistoryOpen] = React.useState(false)
   const [importPreview, setImportPreview] = React.useState<MetaImportPreview | null>(null)
   const [importing, setImporting] = React.useState(false)
@@ -199,8 +200,24 @@ export function DatasetMetaView({ datasetId }: { datasetId: string }) {
   const historyQuery = useQuery({
     queryKey: ['nl2sqlSyncHistory', selectedId],
     queryFn: () => api.getNl2sqlSyncHistory(selectedId),
-    enabled: historyOpen,
+    enabled: historyOpen || pendingSyncId != null,
+    // 有记录处于 running/pending 时轮询（重同步在服务端后台线程执行）
+    refetchInterval: (query) =>
+      (query.state.data ?? []).some((record) => record.overallStatus === 'running' || record.overallStatus === 'pending')
+        ? 2500
+        : false,
   })
+
+  // 重同步完成后 toast 结果（只针对本次触发的那条记录）
+  React.useEffect(() => {
+    if (!pendingSyncId) return
+    const record = historyQuery.data?.find((item) => item.id === pendingSyncId)
+    if (!record || record.overallStatus === 'running' || record.overallStatus === 'pending') return
+    setPendingSyncId(null)
+    setToast(record.overallStatus === 'success'
+      ? '三端重同步完成：五段资产已全部写入 ES / Milvus'
+      : `三端重同步未完成：${record.overallMessage ?? '部分资产同步失败（详见同步历史）'}`)
+  }, [pendingSyncId, historyQuery.data])
 
   const datasets = datasetsQuery.data ?? []
   const dataset = datasets.find((item) => item.id === selectedId) ?? null
@@ -253,6 +270,18 @@ export function DatasetMetaView({ datasetId }: { datasetId: string }) {
       setToast(`已从数据源同步 DDL：共 ${result.total} 张表，新增 ${result.created}、更新 ${result.updated}`)
     },
     onError: (err: Error) => setToast(`从数据源同步 DDL 失败：${err.message}`),
+  })
+  const resyncMutation = useMutation({
+    mutationFn: () => api.triggerNl2sqlSync(selectedId),
+    onSuccess: (record) => {
+      setResyncConfirm(false)
+      setPendingSyncId(record.id)
+      setToast('三端重同步已开始，正在后台写入 ES / Milvus…')
+    },
+    onError: (err: Error) => {
+      setResyncConfirm(false)
+      setToast(`三端重同步触发失败：${err.message}`)
+    },
   })
   const importConfirmMutation = useMutation({
     mutationFn: (previewId: string) => api.importMetaConfirm(selectedId, previewId),
@@ -318,9 +347,13 @@ export function DatasetMetaView({ datasetId }: { datasetId: string }) {
               <History size={13} />
               三端同步历史
             </button>
-            <button className={actionBtnClass} onClick={() => setResyncConfirm(true)}>
-              <Workflow size={13} />
-              三端重同步
+            <button
+              className={actionBtnClass}
+              disabled={pendingSyncId != null || resyncMutation.isPending}
+              onClick={() => setResyncConfirm(true)}
+            >
+              {pendingSyncId != null ? <LoaderCircle size={13} className="animate-spin" /> : <Workflow size={13} />}
+              {pendingSyncId != null ? '同步中…' : '三端重同步'}
             </button>
 
             <div className="ml-auto flex items-center gap-1.5">
@@ -527,13 +560,10 @@ export function DatasetMetaView({ datasetId }: { datasetId: string }) {
         <ConfirmDialog
           icon={Workflow}
           title="三端重同步"
-          description="系统将基于当前 MySQL 元数据，清理 ES 和 Milvus 中该数据集的同步内容，再按当前数据重新构建检索数据。（当前为前端占位：同步执行器在阶段5 接入，不会真正执行。）"
+          description="系统将基于当前 MySQL 元数据，清理 ES 和 Milvus 中该数据集的同步内容，再按当前数据重新构建检索数据。同步在后台执行，期间可以离开本页。"
           confirmLabel="开始重同步"
-          pending={false}
-          onConfirm={() => {
-            setResyncConfirm(false)
-            setToast('三端重同步已提交（占位：阶段5 接入同步执行器后真正执行）')
-          }}
+          pending={resyncMutation.isPending}
+          onConfirm={() => resyncMutation.mutate()}
           onCancel={() => setResyncConfirm(false)}
         />
       )}
@@ -544,7 +574,7 @@ export function DatasetMetaView({ datasetId }: { datasetId: string }) {
             <div className="flex h-28 items-center justify-center text-sm text-zinc-400">加载中…</div>
           ) : (historyQuery.data ?? []).length === 0 ? (
             <div className="flex h-28 items-center justify-center text-sm text-zinc-500">
-              暂无同步记录（阶段5 接入 ES / Milvus 同步后展示重建历史）
+              暂无同步记录，点击「三端重同步」发起首次同步
             </div>
           ) : (
             <div className="thin-scrollbar -mx-1 max-h-80 space-y-2 overflow-y-auto px-1">
