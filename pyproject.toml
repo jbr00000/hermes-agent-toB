@@ -130,6 +130,8 @@ dependencies = [
   "tiktoken==0.13.0",
   "pymilvus==2.5.18",
   "openpyxl==3.1.5",
+  # NL2SQL 问数算法（server/nl2sql/algorithm/）：LLM 输出的 <result> JSON 修复解析。
+  "json-repair==0.63.4",
   "numpy==2.4.3",
   # mineru_mode=vlm: mineru-vl-utils drives a vLLM-served MinerU2.5 VLM over
   # its OpenAI-compatible API; pymupdf renders PDF pages to images locally.

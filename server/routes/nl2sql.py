@@ -1,4 +1,4 @@
-"""NL2SQL（问数）语义层路由：数据源连接 / 数据集 / 六类元数据 / Excel / 同步历史。
+"""NL2SQL（问数）语义层路由：数据源连接 / 数据集 / 六类元数据 / Excel / 同步历史 / 问数。
 
 移植自 lone-ai Java 后端的 nl2sql 包能力（FastAPI + SQLAlchemy 重写）：
   - 数据源：CRUD + 测试连接（密码 Fernet 加密落库，API 永不回传明文）
@@ -7,23 +7,29 @@
   - Excel：模板下载 / 导出 / 导入 preview→confirm 两步
   - sync-ddl：从数据源抓 DDL 直接灌入表结构元数据
   - 三端同步历史：只读列表（同步执行器在阶段5 实现）
+  - 问数主链路：POST /nl2sql/ask（真分阶段 SSE，算法在 server/nl2sql/algorithm/）
 
 读取 = 登录用户（问数页要选数据集）；变更 = admin-only（对齐 knowledge 路由口径）。
-问数主链路 ``POST /nl2sql/ask`` 在阶段3 加入本文件。
 """
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
+import queue
+import threading
 import time
 import urllib.parse
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
+from sse_starlette.sse import EventSourceResponse
 
 from server.deps import get_current_user, require_admin
 from server.nl2sql import excel, store
+from server.nl2sql.algorithm import Nl2sqlError
 from server.nl2sql.datasource import DatasourceError, fetch_table_ddls, test_connection
 from server.storage import get_repository
 
@@ -70,6 +76,14 @@ class MetaItemPayload(BaseModel):
 
 class ImportConfirmPayload(BaseModel):
     preview_id: str = Field(min_length=1)
+
+
+class AskPayload(BaseModel):
+    """问数入参：dataset_ids ≥ 2 走跨数据集复合流，否则单数据集。"""
+
+    question: str = Field(min_length=1, max_length=2000)
+    dataset_id: str | None = None
+    dataset_ids: list[str] | None = Field(default=None, max_length=8)
 
 
 # ------------------------------------------------------------------ 序列化
@@ -379,6 +393,71 @@ def import_confirm(dataset_id: str, payload: ImportConfirmPayload, user: dict = 
 def sync_history(dataset_id: str):
     _dataset_or_404(dataset_id)
     return {"history": store.list_sync_history(dataset_id)}
+
+
+# ------------------------------------------------------------------ 问数主链路（SSE）
+
+
+@_read_router.post("/ask")
+async def ask_nl2sql(payload: AskPayload, request: Request):
+    """分阶段流式问数：understand（问题理解）→ generate（查询生成）→ result（结果展示）。
+
+    SSE 事件（对齐 chat.py 的队列+哨兵模式，编排器在后台线程里 asyncio.run）：
+      phase  {step: understand|generate|result, status: start|done, ...阶段数据}
+      sql    {sql, explanation}（生成+安检通过即推，执行还在继续）
+      done   {question, sql_content, explain_content, status, error, format_outputs, token_num}
+      error  {message}（配置/数据源类错误；4 次重试耗尽走 done + status=failed）
+    """
+    event_queue: queue.Queue[object] = queue.Queue()
+    sentinel = object()
+    event_sequence = 0
+    event_lock = threading.Lock()
+
+    def emit(event: str, data: dict) -> None:
+        nonlocal event_sequence
+        with event_lock:
+            event_sequence += 1
+            event_id = event_sequence
+        event_queue.put({
+            "id": str(event_id),
+            "event": event,
+            "data": json.dumps(data, ensure_ascii=False),
+        })
+
+    def run_ask() -> None:
+        try:
+            from server.nl2sql.algorithm.orchestrator import Nl2sqlOrchestrator
+
+            orchestrator = Nl2sqlOrchestrator(emit=emit)
+            result = asyncio.run(orchestrator.ask(
+                question=payload.question,
+                dataset_id=payload.dataset_id,
+                dataset_ids=payload.dataset_ids,
+            ))
+            emit("done", result)
+        except Nl2sqlError as exc:
+            emit("error", {"message": str(exc)})
+        except Exception:
+            logger.exception("问数处理失败")
+            emit("error", {"message": "问数处理失败，请稍后重试或联系管理员"})
+        finally:
+            event_queue.put(sentinel)
+
+    threading.Thread(target=run_ask, daemon=True, name="nl2sql-ask").start()
+
+    async def event_gen():
+        while True:
+            if await request.is_disconnected():
+                break
+            try:
+                item = await asyncio.to_thread(event_queue.get, True, 0.25)
+            except queue.Empty:
+                continue
+            if item is sentinel:
+                break
+            yield item
+
+    return EventSourceResponse(event_gen())
 
 
 router.include_router(_read_router)

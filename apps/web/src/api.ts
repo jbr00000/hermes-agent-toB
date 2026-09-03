@@ -27,6 +27,9 @@ import type {
   MetaImportPreview,
   MetaKind,
   MetricMeta,
+  Nl2sqlAskDone,
+  Nl2sqlFormatOutput,
+  Nl2sqlPhaseEvent,
   Nl2sqlSyncRecord,
   PermissionMode,
   SessionSummary,
@@ -917,6 +920,32 @@ async function consumeEventStream(
   if (buffer.trim()) dispatchSseBlock(buffer, handlers)
 }
 
+/** 问数 SSE 回调（事件明细见 api.askNl2sql 注释） */
+export interface Nl2sqlAskHandlers {
+  onPhase?: (event: Nl2sqlPhaseEvent) => void
+  onSql?: (sql: string, explanation: string) => void
+  onDone?: (result: Nl2sqlAskDone) => void
+  onError?: (message: string) => void
+}
+
+/** 后端 format_outputs 元素（snake_case）→ 前端结果卡（camelCase） */
+function toNl2sqlFormatOutput(raw: unknown): Nl2sqlFormatOutput {
+  const row = (raw ?? {}) as Record<string, unknown>
+  return {
+    type: String(row.type ?? 'text'),
+    title: String(row.title ?? ''),
+    dimensions: String(row.dimensions ?? ''),
+    metrics: String(row.metrics ?? ''),
+    data: Array.isArray(row.data) ? row.data as Array<Record<string, unknown>> : [],
+    dataFigure: Array.isArray(row.data_figure) ? row.data_figure as Array<Record<string, unknown>> : [],
+    dataAll: Number(row.data_all ?? 0),
+    chunkFlag: String(row.chunk_flag ?? ''),
+    resultDesc: String(row.result_desc ?? ''),
+    contentDesc: String(row.content_desc ?? ''),
+    figureType: String(row.figure_type ?? 'text'),
+  }
+}
+
 /** 带鉴权的文件下载：从 Content-Disposition 取 filename*=UTF-8'' 名，缺失时用 fallback。 */
 async function downloadResponseBlob(response: Response, fallbackName: string): Promise<void> {
   const disposition = response.headers.get('Content-Disposition') ?? ''
@@ -1673,6 +1702,60 @@ export const api = {
     if (!response.ok) throw await parseError(response)
     const body = await response.json() as { history: BackendNl2sqlSyncRecord[] }
     return body.history.map(toSyncRecord)
+  },
+
+  /** 分阶段流式问数：POST /nl2sql/ask（SSE）。
+   *  事件：phase（understand/generate/result 三段 start/done）→ sql → done | error。 */
+  async askNl2sql(
+    input: { question: string; datasetId?: string; datasetIds?: string[] },
+    handlers: Nl2sqlAskHandlers,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const response = await apiFetch('/nl2sql/ask', {
+      method: 'POST',
+      signal,
+      body: JSON.stringify({
+        question: input.question,
+        ...(input.datasetId ? { dataset_id: input.datasetId } : {}),
+        ...(input.datasetIds?.length ? { dataset_ids: input.datasetIds } : {}),
+      }),
+    })
+    if (!response.ok) throw await parseError(response)
+    await consumeEventStream(response, {
+      onEvent: (eventName, payload) => {
+        const raw = payload as Record<string, unknown>
+        if (eventName === 'phase') {
+          handlers.onPhase?.({
+            step: raw.step as Nl2sqlPhaseEvent['step'],
+            status: raw.status as Nl2sqlPhaseEvent['status'],
+            question: raw.question as string | undefined,
+            entities: raw.entities as Nl2sqlPhaseEvent['entities'],
+            entityExplain: raw.entity_explain as string | undefined,
+            candidates: raw.candidates as Nl2sqlPhaseEvent['candidates'],
+            tables: raw.tables as string[] | undefined,
+            rows: raw.rows as number | undefined,
+            attempts: raw.attempts as number | undefined,
+            resultDesc: raw.result_desc as string | undefined,
+            error: raw.error as string | undefined,
+          })
+        } else if (eventName === 'sql') {
+          handlers.onSql?.(String(raw.sql ?? ''), String(raw.explanation ?? ''))
+        } else if (eventName === 'done') {
+          const outputs = Array.isArray(raw.format_outputs) ? raw.format_outputs : []
+          handlers.onDone?.({
+            question: String(raw.question ?? ''),
+            sqlContent: String(raw.sql_content ?? ''),
+            explainContent: String(raw.explain_content ?? ''),
+            status: raw.status === 'failed' ? 'failed' : 'success',
+            error: typeof raw.error === 'string' ? raw.error : null,
+            formatOutputs: outputs.map(toNl2sqlFormatOutput),
+            tokenNum: Number(raw.token_num ?? 0),
+          })
+        } else if (eventName === 'error') {
+          handlers.onError?.(String(raw.message ?? '问数处理失败'))
+        }
+      },
+    })
   },
 
   // ---------------------------------------------------------- 用户管理（superadmin）

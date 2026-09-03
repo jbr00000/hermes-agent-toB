@@ -154,3 +154,4 @@ apps/desktop/demo/
 # pr-infographic-workflow reference (storage rule + lapse #8 / #COMMIT-1).
 infographic/
 .hermes-dev/
+nl2sql_data/

@@ -365,7 +365,7 @@ export interface MetaImportPreview {
   ignoredSheets: string[]
 }
 
-/** 问数（NL2SQL）单轮回答：生成的 SQL + 结果集 + 自然语言小结 */
+/** 问数（NL2SQL）单轮回答：生成的 SQL + 结果集 + 自然语言小结（mock 演示用，真链路见下方 SSE 类型） */
 export interface Nl2sqlAnswer {
   sql: string
   columns: string[]
@@ -373,6 +373,51 @@ export interface Nl2sqlAnswer {
   /** 自然语言小结（mock 下注明占位） */
   summary: string
   durationMs: number
+}
+
+/** 问数 SSE：单张格式化结果卡（后端 format_outputs 元素，api.ts 已转 camelCase） */
+export interface Nl2sqlFormatOutput {
+  type: string
+  title: string
+  dimensions: string
+  metrics: string
+  /** 结果集（行字典）；绘图数据是阶段4 的事，dataFigure 由后端预先抽好两列 */
+  data: Array<Record<string, unknown>>
+  dataFigure: Array<Record<string, unknown>>
+  dataAll: number
+  chunkFlag: string
+  resultDesc: string
+  contentDesc: string
+  figureType: string
+}
+
+/** 问数 SSE：done 事件载荷 */
+export interface Nl2sqlAskDone {
+  question: string
+  sqlContent: string
+  explainContent: string
+  /** failed = 4 次重试耗尽（此时 error 为用户可读原因） */
+  status: 'success' | 'failed'
+  error: string | null
+  formatOutputs: Nl2sqlFormatOutput[]
+  tokenNum: number
+}
+
+export type Nl2sqlStep = 'understand' | 'generate' | 'result'
+
+/** 问数 SSE：phase 事件载荷（start 时只有 step/status；done 时带该阶段的展示数据） */
+export interface Nl2sqlPhaseEvent {
+  step: Nl2sqlStep
+  status: 'start' | 'done'
+  question?: string
+  entities?: { time?: string[]; other?: string[]; metric?: string[] }
+  entityExplain?: string
+  candidates?: Record<string, Array<Record<string, unknown>>>
+  tables?: string[]
+  rows?: number
+  attempts?: number
+  resultDesc?: string
+  error?: string
 }
 
 /** 桌宠形象：cat 铅笔小猫 / niulai 牛来（均使用完整身体精灵帧，微型图标可回退 SVG） */

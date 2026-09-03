@@ -306,3 +306,88 @@ def list_sync_history(dataset_id: str, limit: int = 20) -> list[dict[str, Any]]:
             .limit(limit)
         ).all()
         return [_row(row) for row in rows]
+
+
+# ------------------------------------------------------------------ 算法端读取（server/nl2sql/algorithm/）
+
+# lone-ai 的 DDL 里行间注释标记；选表时整行剔除（对齐 lone-ai select_schema 的清洗）
+_DDL_COMMENT_MARKS = ("--", "//")
+
+
+def get_enabled_ddls(dataset_id: str, table_names: list[str] | None = None) -> dict[str, str]:
+    """数据集的启用 DDL → {table_name: 清洗后 ddl_content}。
+
+    清洗 = 逐行剔除含 ``--``/``//`` 注释的行（对齐 lone-ai select_schema 的行为：
+    注释里的业务口径会误导 SQL 生成）。``table_names`` 非空时只取这些表。
+    注意 enabled 在本仓模型里是 Boolean（lone-ai 落库是字符串 '1'）。
+    """
+    with session_scope() as session:
+        stmt = select(Nl2sqlDdl).where(
+            Nl2sqlDdl.tenant_id == tenant_id(),
+            Nl2sqlDdl.dataset_id == dataset_id,
+            Nl2sqlDdl.enabled.is_(True),
+        )
+        if table_names:
+            stmt = stmt.where(Nl2sqlDdl.table_name.in_(table_names))
+        rows = session.scalars(stmt.order_by(Nl2sqlDdl.created_at)).all()
+    result: dict[str, str] = {}
+    for row in rows:
+        lines = [
+            line for line in (row.ddl_content or "").splitlines()
+            if not any(mark in line for mark in _DDL_COMMENT_MARKS)
+        ]
+        cleaned = "\n".join(lines).strip()
+        if cleaned:
+            result[row.table_name] = cleaned
+    return result
+
+
+def get_foreign_key_paths(dataset_id: str, tables: list[str]) -> list[str]:
+    """多表场景的 join 路径提示 → ["src.col=tgt.col", ...]（参数化，勿字符串插值）。
+
+    只保留两端表都在 ``tables`` 里的关系（lone-ai 的 TableAnalysisService 同口径）。
+    """
+    if len(tables) < 2:
+        return []
+    wanted = set(tables)
+    with session_scope() as session:
+        rows = session.scalars(
+            select(Nl2sqlForeignKey).where(
+                Nl2sqlForeignKey.tenant_id == tenant_id(),
+                Nl2sqlForeignKey.dataset_id == dataset_id,
+            )
+        ).all()
+    paths: list[str] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for row in rows:
+        if row.source_table not in wanted or row.target_table not in wanted:
+            continue
+        key = (row.source_table, row.source_column, row.target_table, row.target_column)
+        if key in seen:
+            continue
+        seen.add(key)
+        paths.append(f"{row.source_table}.{row.source_column}={row.target_table}.{row.target_column}")
+    return paths
+
+
+def get_dimension_value_mappings(dataset_ids: list[str]) -> dict[str, dict[str, str]]:
+    """维度码表 → {列名: {db_data_key: db_data_value}}，用于结果值映射展示。
+
+    ``dimension_name`` 形如 ``表名.字段名``，取最后一个点后的字段名作列名键。
+    （lone-ai 在这里对 '1-八贯通线' 有硬编码特例，移植时剔除。）
+    """
+    with session_scope() as session:
+        rows = session.scalars(
+            select(Nl2sqlDimensionValue).where(
+                Nl2sqlDimensionValue.tenant_id == tenant_id(),
+                Nl2sqlDimensionValue.dataset_id.in_(dataset_ids),
+            )
+        ).all()
+    mappings: dict[str, dict[str, str]] = {}
+    for row in rows:
+        column = (row.dimension_name or "").rsplit(".", 1)[-1].strip()
+        key = "" if row.db_data_key is None else str(row.db_data_key)
+        value = "" if row.db_data_value is None else str(row.db_data_value)
+        if column and key:
+            mappings.setdefault(column, {})[key] = value
+    return mappings
