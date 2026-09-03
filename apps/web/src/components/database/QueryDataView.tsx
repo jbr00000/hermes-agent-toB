@@ -27,8 +27,6 @@ interface Turn {
   openStep: Nl2sqlStep | null
 }
 
-const inputClass = 'h-9 rounded-md border border-line bg-panel px-3 text-sm'
-
 const STEP_TITLES: Record<Nl2sqlStep, string> = {
   understand: '问题理解',
   generate: '查询生成',
@@ -124,24 +122,43 @@ function ResultTable({ data }: { data: Array<Record<string, unknown>> }) {
   )
 }
 
-/** 独立问数页（决策⑥）：选数据集 → 自然语言提问 → 三段式卡片（问题理解/查询生成/结果展示）。
+/** 独立问数页（决策⑥）：勾选数据集（≥2 个走跨数据集复合流）→ 自然语言提问
+ *  → 三段式卡片（问题理解/查询生成/结果展示）。
  *  走真链路 POST /nl2sql/ask（SSE 分阶段推送）；figureType ≠ text 时结果卡内嵌 ECharts。 */
 export function QueryDataView() {
   const datasetsQuery = useQuery({ queryKey: ['datasets'], queryFn: api.listDatasets })
   const enabledDatasets = (datasetsQuery.data ?? []).filter((item) => item.enabled)
 
-  const [datasetId, setDatasetId] = React.useState('')
+  const [datasetIds, setDatasetIds] = React.useState<string[]>([])
+  const didInitRef = React.useRef(false)
   const [draft, setDraft] = React.useState('')
   const [turns, setTurns] = React.useState<Turn[]>([])
   const [copiedId, setCopiedId] = React.useState<string | null>(null)
   const scrollRef = React.useRef<HTMLDivElement | null>(null)
 
-  // 数据集清单加载后默认选第一个启用中的；切换数据集清空对话（后端语义按数据集隔离）
+  // 数据集清单加载后默认选第一个启用中的（仅首次；用户可自由增删勾选）
   React.useEffect(() => {
-    if (!datasetId && enabledDatasets.length > 0) setDatasetId(enabledDatasets[0].id)
-  }, [datasetId, enabledDatasets])
+    if (!didInitRef.current && enabledDatasets.length > 0) {
+      didInitRef.current = true
+      setDatasetIds([enabledDatasets[0].id])
+    }
+  }, [enabledDatasets])
 
-  const selectedDataset = enabledDatasets.find((item) => item.id === datasetId) ?? null
+  const selectedDatasets = enabledDatasets.filter((item) => datasetIds.includes(item.id))
+  const selectedNames = selectedDatasets.map((item) => `「${item.name}」`).join('、')
+  // 跨数据集复合流要求同数据源（后端 409 同口径）；提前在选择栏提示
+  const crossDatasource =
+    new Set(selectedDatasets.map((item) => item.dataSourceId)).size > 1
+  const noPromptNames = selectedDatasets
+    .filter((item) => item.prompt.trim() === '')
+    .map((item) => item.name)
+
+  const toggleDataset = (id: string) => {
+    setDatasetIds((current) =>
+      current.includes(id) ? current.filter((item) => item !== id) : [...current, id],
+    )
+    setTurns([]) // 切换选择清空对话（后端语义按数据集隔离）
+  }
 
   const updateTurn = (turnId: string, updater: (turn: Turn) => Turn) => {
     setTurns((current) => current.map((turn) => (turn.id === turnId ? updater(turn) : turn)))
@@ -149,7 +166,7 @@ export function QueryDataView() {
 
   const send = () => {
     const question = draft.trim()
-    if (!question || !datasetId) return
+    if (!question || datasetIds.length === 0 || crossDatasource) return
     const turnId = `turn-${Date.now()}`
     setDraft('')
     setTurns((current) => [
@@ -167,7 +184,7 @@ export function QueryDataView() {
         openStep: 'understand' as const,
       },
     ])
-    void api.askNl2sql({ question, datasetId }, {
+    void api.askNl2sql({ question, datasetIds }, {
       onPhase: (event) => updateTurn(turnId, (turn) => applyPhaseEvent(turn, event)),
       onSql: (sql, explanation) => updateTurn(turnId, (turn) => ({ ...turn, sql, explanation })),
       onDone: (result) => updateTurn(turnId, (turn) => ({
@@ -219,32 +236,46 @@ export function QueryDataView() {
     <div className="flex h-full flex-col">
       <PageHeader icon={BarChart3} title="问数" subtitle="基于数据集的自然语言查数（NL2SQL）" />
 
-      {/* 数据集选择栏 */}
-      <div className="flex flex-wrap items-center gap-3 border-b border-line px-6 py-3">
+      {/* 数据集选择栏：多选 chips；≥2 个走跨数据集复合流 */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-line px-6 py-3">
         <span className="text-sm text-zinc-500">数据集</span>
-        <select
-          className={cn(inputClass, 'w-64')}
-          value={datasetId}
-          onChange={(e) => {
-            setDatasetId(e.target.value)
-            setTurns([])
-          }}
-        >
-          {enabledDatasets.map((item) => (
-            <option key={item.id} value={item.id}>{item.name}</option>
-          ))}
-        </select>
-        {selectedDataset && (
-          <span className="text-xs text-zinc-400">{selectedDataset.description}</span>
+        {enabledDatasets.map((item) => {
+          const checked = datasetIds.includes(item.id)
+          return (
+            <button
+              key={item.id}
+              type="button"
+              title={item.description || item.name}
+              onClick={() => toggleDataset(item.id)}
+              className={cn(
+                'flex h-8 items-center gap-1.5 rounded-md border px-3 text-sm transition active:scale-[0.98]',
+                checked
+                  ? 'border-ink bg-ink text-white'
+                  : 'border-line bg-panel text-zinc-600 hover:border-zinc-400',
+              )}
+            >
+              {checked && <Check size={13} />}
+              {item.name}
+            </button>
+          )
+        })}
+        {datasetIds.length > 1 && (
+          <span className="text-xs text-zinc-400">已选 {datasetIds.length} 个，跨数据集联合问数</span>
         )}
         {datasetsQuery.isSuccess && enabledDatasets.length === 0 && (
           <span className="text-xs text-danger">暂无启用中的数据集，请先在「数据库管理」中启用</span>
         )}
       </div>
 
-      {selectedDataset && selectedDataset.prompt.trim() === '' && (
+      {crossDatasource && (
         <div className="border-b border-line bg-amber-50 px-6 py-2 text-xs text-amber-700">
-          该数据集缺提示词（治理状态「缺提示词」），问数效果可能受影响；可在「数据库管理 → 数据集」中补充。
+          跨数据集问数要求所选数据集挂在同一个数据源下，请调整选择。
+        </div>
+      )}
+      {!crossDatasource && noPromptNames.length > 0 && (
+        <div className="border-b border-line bg-amber-50 px-6 py-2 text-xs text-amber-700">
+          {noPromptNames.map((name) => `「${name}」`).join('、')}
+          缺提示词（治理状态「缺提示词」），问数效果可能受影响；可在「数据库管理 → 数据集」中补充。
         </div>
       )}
 
@@ -253,9 +284,9 @@ export function QueryDataView() {
         <div className="mx-auto max-w-4xl space-y-5">
           {turns.length === 0 && (
             <div className="flex h-40 items-center justify-center text-sm text-zinc-400">
-              {selectedDataset
-                ? `向「${selectedDataset.name}」提问，如：各基金类别下收益为正的基金有多少只？`
-                : '请先选择数据集'}
+              {selectedDatasets.length > 0
+                ? `向 ${selectedNames} 提问，如：各基金类别下收益为正的基金有多少只？`
+                : '请先勾选数据集'}
             </div>
           )}
           {turns.map((turn) => (
@@ -407,16 +438,27 @@ export function QueryDataView() {
                 }
               }}
               className="block min-h-[72px] w-full resize-none bg-transparent px-4 py-3 text-sm outline-none"
-              placeholder={selectedDataset ? `向「${selectedDataset.name}」提问（Enter 发送，Shift+Enter 换行）` : '请先选择数据集'}
-              disabled={!selectedDataset}
+              placeholder={
+                selectedDatasets.length > 0
+                  ? `向 ${selectedNames} 提问（Enter 发送，Shift+Enter 换行）`
+                  : '请先勾选数据集'
+              }
+              disabled={selectedDatasets.length === 0}
             />
             <div className="flex items-center justify-end border-t border-line px-3 py-2">
               <button
                 className={cn(
                   'flex h-8 items-center gap-2 rounded-md px-3 text-sm font-medium transition active:scale-[0.98]',
-                  selectedDataset && draft.trim() ? 'bg-ink text-white' : 'bg-zinc-200 text-zinc-400',
+                  selectedDatasets.length > 0 && !crossDatasource && draft.trim()
+                    ? 'bg-ink text-white'
+                    : 'bg-zinc-200 text-zinc-400',
                 )}
-                disabled={!selectedDataset || !draft.trim() || turns.some((turn) => turn.pending)}
+                disabled={
+                  selectedDatasets.length === 0 ||
+                  crossDatasource ||
+                  !draft.trim() ||
+                  turns.some((turn) => turn.pending)
+                }
                 onClick={send}
               >
                 <Send size={15} />

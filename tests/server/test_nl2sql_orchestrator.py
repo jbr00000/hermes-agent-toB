@@ -1,7 +1,8 @@
-"""API tests: /nl2sql/ask 编排器 —— 事件序列契约、重试耗尽失败路径、入参校验。
+"""API tests: /nl2sql/ask 编排器 —— 事件序列契约、重试耗尽失败路径、入参校验、跨数据集复合流。
 
 LLM 与业务库执行均 monkeypatch（CI 无 chat_completions 端点与业务 MySQL）；
-断言的是编排不变量：阶段事件顺序、done 契约字段、4 次重试语义、错误文案口径。
+断言的是编排不变量：阶段事件顺序、done 契约字段、4 次重试语义、错误文案口径、
+跨数据集的候选/选表合并与同数据源约束。
 """
 from __future__ import annotations
 
@@ -233,3 +234,153 @@ def test_ask_route_validation_error(monkeypatch, tmp_path) -> None:
     assert client.post("/nl2sql/ask", json={"question": "x"}).status_code == 401
     admin = _admin(client)
     assert client.post("/nl2sql/ask", headers=admin, json={"question": ""}).status_code == 422
+
+
+# ------------------------------------------------------------------ 跨数据集复合流
+
+STOCK_TABLE = "mf_stockbasic"
+CROSS_SUB_QUESTION = "各基金类别收益为正的基金数"
+
+
+def _seed_cross_datasets(client, *, share_datasource: bool = True) -> tuple[str, str]:
+    """建两个数据集（基金域 mf_fundarchives + 股票域 mf_stockbasic）。
+
+    share_datasource=True 时挂同一数据源（跨数据集流的合法前提），
+    False 时各挂一个数据源（用于验证 409 同数据源约束）。
+    """
+    admin = _admin(client)
+
+    def mk_datasource(name: str) -> str:
+        response = client.post("/nl2sql/datasources", headers=admin, json={
+            "name": name, "db_type": "mysql", "host": "127.0.0.1", "port": 13306,
+            "database_name": "nl2sql_cross", "username": "reader", "password": "secret-pw",
+        })
+        assert response.status_code == 201, response.text
+        return response.json()["datasource"]["id"]
+
+    datasource_a = mk_datasource("跨域库A")
+    datasource_b = datasource_a if share_datasource else mk_datasource("跨域库B")
+
+    def mk_dataset(name: str, datasource_id: str, table_name: str) -> str:
+        response = client.post("/nl2sql/datasets", headers=admin, json={
+            "name": name, "datasource_id": datasource_id, "description": "", "system_prompt": "",
+        })
+        assert response.status_code == 201, response.text
+        dataset_id = response.json()["dataset"]["id"]
+        response = client.put(
+            f"/nl2sql/datasets/{dataset_id}/meta/tables", headers=admin,
+            json={"fields": {
+                "table_name": table_name,
+                "ddl_content": f"CREATE TABLE {table_name} (\n  InnerCode int\n);",
+                "description": "", "enabled": True, "provider": "MANUAL",
+            }},
+        )
+        assert response.status_code == 200, response.text
+        return dataset_id
+
+    return (
+        mk_dataset("基金数据集", datasource_a, "mf_fundarchives"),
+        mk_dataset("股票数据集", datasource_b, STOCK_TABLE),
+    )
+
+
+def _patch_llm_cross(monkeypatch) -> None:
+    """跨数据集流假 LLM：比单数据集多两路——LLM 筛表 + phase9 依赖结构分析。
+
+    依赖分析与可移除数量分析共用「后处理」system prompt，靠 user_prompt 关键字区分：
+    依赖分析要求先判断 relation_type；可移除数量分析只输出 removable_quantity_fields。
+    """
+    from server.nl2sql.algorithm.llm import LLMClient
+
+    dependency_analysis = {
+        "relation_type": "independent",
+        "has_dependency": False,
+        "sub_questions": [
+            {"id": "q1", "question": CROSS_SUB_QUESTION, "business_domain": "基金", "depends_on": []},
+        ],
+        "field_mapping": {"q1": ["fund_type", "fund_count"]},
+        "common_fields": [],
+    }
+
+    async def fake_chat_completion(
+        self, user_prompt, system_prompt=None, history_messages=None, temperature=0.0, timeout=None
+    ):
+        sp = system_prompt or ""
+        up = user_prompt or ""
+        if "实体抽取" in sp:
+            return ('<result>{"time_entities": [], "other_entities": ["收益为正的基金"], '
+                    '"metric_entities": ["基金数量"]}</result>')
+        if "选择合适的表结构" in sp:
+            # 两数据集各自的筛表调用都返回两张表；服务层按本数据集 DDL 交集过滤
+            return '<result>["mf_fundarchives", "mf_stockbasic"]</result>'
+        if "生成SQL" in sp:
+            return '<result>%s</result>' % json.dumps(
+                {"sql": FAKE_SQL, "explain": "跨域联合统计"}, ensure_ascii=False)
+        if "后处理" in sp:
+            if "relation_type" in up:
+                return '<result>%s</result>' % json.dumps(dependency_analysis, ensure_ascii=False)
+            return '<result>{"removable_quantity_fields": [], "explicit_quantity_fields": []}</result>'
+        if "格式化查询结果" in sp:
+            return ('<result>{"type": "bar", "figure_type": "bar", "dimensions": "fund_type", '
+                    '"metrics": "fund_count", "content_desc": "分布说明"}</result>')
+        return "<result>{}</result>"
+
+    monkeypatch.setattr(LLMClient, "__init__", lambda self: None)
+    monkeypatch.setattr(LLMClient, "chat_completion", fake_chat_completion)
+
+
+def test_ask_cross_dataset_happy_path(monkeypatch, tmp_path) -> None:
+    """跨数据集复合流：候选合并 + 逐数据集筛表合并 + phase9 拆子问题 → 多张结果卡路径。"""
+    client = _client(monkeypatch, tmp_path)
+    dataset_a, dataset_b = _seed_cross_datasets(client)
+    _patch_llm_cross(monkeypatch)
+    _patch_infra(monkeypatch, exec_rows=FAKE_ROWS)
+
+    from server.nl2sql.algorithm.orchestrator import Nl2sqlOrchestrator
+
+    events: list[tuple[str, dict]] = []
+    orchestrator = Nl2sqlOrchestrator(emit=lambda event, payload: events.append((event, payload)))
+    result = asyncio.run(orchestrator.ask(QUESTION, dataset_ids=[dataset_a, dataset_b]))
+
+    phase_seq = [(p.get("step"), p.get("status")) for e, p in events if e == "phase"]
+    assert phase_seq == [
+        ("understand", "start"), ("understand", "done"),
+        ("generate", "start"), ("generate", "done"),
+        ("result", "start"), ("result", "done"),
+    ]
+    assert [e for e, _p in events].count("sql") == 1
+
+    # 两数据集的表经 LLM 筛表后按序合并去重
+    generate_done = next(p for e, p in events if e == "phase" and p.get("step") == "generate" and p.get("status") == "done")
+    assert generate_done["tables"] == ["mf_fundarchives", STOCK_TABLE]
+
+    assert result["status"] == "success" and result["error"] is None
+    assert result["sql_content"] == FAKE_SQL
+    assert result["token_num"] > 0
+
+    # phase9 无依赖 + 有子问题 → format_source=split，按子问题逐卡格式化
+    assert len(result["format_outputs"]) == 1
+    output = result["format_outputs"][0]
+    assert output["title"] == CROSS_SUB_QUESTION  # 卡片标题来自子问题，证明走了 split 路径
+    assert output["data"] == FAKE_ROWS
+    assert output["figure_type"] == "bar"
+    assert output["data_figure"] == [
+        {"fund_type": row["fund_type"], "fund_count": row["fund_count"]} for row in FAKE_ROWS
+    ]
+
+
+def test_ask_cross_dataset_requires_same_datasource(monkeypatch, tmp_path) -> None:
+    """跨数据集挂在不同数据源 → Nl2sqlError（路由层转 error 事件），不进任何阶段。"""
+    client = _client(monkeypatch, tmp_path)
+    dataset_a, dataset_b = _seed_cross_datasets(client, share_datasource=False)
+    _patch_llm_cross(monkeypatch)
+    _patch_infra(monkeypatch, exec_rows=FAKE_ROWS)
+
+    from server.nl2sql.algorithm import Nl2sqlError
+    from server.nl2sql.algorithm.orchestrator import Nl2sqlOrchestrator
+
+    events: list[tuple[str, dict]] = []
+    orchestrator = Nl2sqlOrchestrator(emit=lambda event, payload: events.append((event, payload)))
+    with pytest.raises(Nl2sqlError, match="同一个数据源"):
+        asyncio.run(orchestrator.ask(QUESTION, dataset_ids=[dataset_a, dataset_b]))
+    assert events == []  # 约束在阶段开始前拦截
