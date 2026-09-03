@@ -4,6 +4,7 @@ import { BarChart3, Check, ChevronDown, ChevronRight, Copy, Send } from 'lucide-
 import { api } from '../../api'
 import type { Nl2sqlFormatOutput, Nl2sqlPhaseEvent, Nl2sqlStep } from '../../types'
 import { PageHeader, cn } from '../ui'
+import { Nl2SqlChart } from './Nl2SqlChart'
 
 type SectionStatus = 'idle' | 'running' | 'done' | 'error'
 
@@ -124,7 +125,7 @@ function ResultTable({ data }: { data: Array<Record<string, unknown>> }) {
 }
 
 /** 独立问数页（决策⑥）：选数据集 → 自然语言提问 → 三段式卡片（问题理解/查询生成/结果展示）。
- *  走真链路 POST /nl2sql/ask（SSE 分阶段推送）；绘图在阶段4 接入。 */
+ *  走真链路 POST /nl2sql/ask（SSE 分阶段推送）；figureType ≠ text 时结果卡内嵌 ECharts。 */
 export function QueryDataView() {
   const datasetsQuery = useQuery({ queryKey: ['datasets'], queryFn: api.listDatasets })
   const enabledDatasets = (datasetsQuery.data ?? []).filter((item) => item.enabled)
@@ -370,6 +371,9 @@ export function QueryDataView() {
                         <p className="text-sm leading-6 text-zinc-700">{output.resultDesc}</p>
                         {output.contentDesc && (
                           <p className="mt-1 text-sm leading-6 text-zinc-600">{output.contentDesc}</p>
+                        )}
+                        {output.figureType !== 'text' && output.dataFigure.length > 0 && (
+                          <Nl2SqlChart output={output} />
                         )}
                         <ResultTable data={output.data} />
                         {output.chunkFlag && (
