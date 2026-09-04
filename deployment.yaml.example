@@ -70,3 +70,16 @@ data_permissions:
     user:
       - orders
       - customers
+
+# 问数（NL2SQL）专用模型——整段缺省 = 跟随全局主模型（config.yaml model 段）。
+# 配了之后问数与主 chat 可用不同模型：逐项缺省回落，provider/model 不配则用全局值；
+# base_url/api_key_env 不配则按 provider 常规解析（如 kimi-coding 的 KIMI_API_KEY +
+# api.kimi.com/coding 自动路由，sk-kimi- 前缀 key 放 .env 即可）。
+# 协议支持 chat_completions（deepseek/zai/alibaba/custom）与 anthropic_messages
+# （kimi-coding）；max_output_tokens ≤ 0/缺省 = 不传 max_tokens，由适配层按模型表兜底。
+# nl2sql:
+#   provider: kimi-coding
+#   model: k3
+#   base_url: http://llm-gw.internal/v1    # custom provider 一般需要；其余可省
+#   api_key_env: KIMI_API_KEY              # 只是变量名，key 本体在 .env
+#   max_output_tokens: 8192

@@ -123,6 +123,48 @@ knowledge:
     assert config.knowledge.max_file_mb == 50
 
 
+def test_nl2sql_config_defaults_follow_global_model(monkeypatch, tmp_path) -> None:
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.delenv("HERMES_DEPLOYMENT_CONFIG", raising=False)
+
+    from server.deployment_config import load_deployment_config
+
+    config = load_deployment_config()
+
+    # 整段缺省 = 跟随全局主模型；max_output_tokens=0 表示不传 max_tokens
+    assert config.nl2sql.provider == ""
+    assert config.nl2sql.model == ""
+    assert config.nl2sql.base_url == ""
+    assert config.nl2sql.api_key_env == ""
+    assert config.nl2sql.max_output_tokens == 0
+
+
+def test_nl2sql_config_from_yaml(monkeypatch, tmp_path) -> None:
+    path = tmp_path / "deployment.yaml"
+    path.write_text(
+        """
+nl2sql:
+  provider: kimi-coding
+  model: k3
+  api_key_env: KIMI_API_KEY
+  max_output_tokens: 8192
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HERMES_DEPLOYMENT_CONFIG", str(path))
+
+    from server.deployment_config import load_deployment_config
+
+    config = load_deployment_config()
+
+    assert config.nl2sql.provider == "kimi-coding"
+    assert config.nl2sql.model == "k3"
+    assert config.nl2sql.api_key_env == "KIMI_API_KEY"
+    assert config.nl2sql.max_output_tokens == 8192
+
+
 def test_data_permissions_defaults_disabled(monkeypatch, tmp_path) -> None:
     home = tmp_path / "hermes_home"
     home.mkdir()

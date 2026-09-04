@@ -144,6 +144,24 @@ class KnowledgeDeploymentConfig:
 
 
 @dataclass(frozen=True)
+class Nl2sqlDeploymentConfig:
+    """问数（NL2SQL）专用模型配置。整段缺省 = 跟随全局主模型（config.yaml model 段）。
+
+    逐项缺省回落：provider/model 不配则用全局 runtime config 的值；
+    base_url/api_key_env 不配则按 provider 常规解析（如 kimi-coding 的
+    KIMI_API_KEY + api.kimi.com/coding 自动路由）；max_output_tokens ≤ 0
+    时不传 max_tokens，由模型适配层按模型表兜底。
+    secrets 只进 .env：api_key_env 只是变量名，不是密钥本身。
+    """
+
+    provider: str = ""
+    model: str = ""
+    base_url: str = ""  # 到 /v1 为止（custom provider 一般需要）
+    api_key_env: str = ""
+    max_output_tokens: int = 0
+
+
+@dataclass(frozen=True)
 class DataPermissionsConfig:
     """Table-level data permissions for db_query, keyed by role.
 
@@ -168,6 +186,7 @@ class DeploymentConfig:
     features: dict[str, bool] = field(default_factory=lambda: {"host_terminal": False})
     knowledge: KnowledgeDeploymentConfig = field(default_factory=KnowledgeDeploymentConfig)
     data_permissions: DataPermissionsConfig = field(default_factory=DataPermissionsConfig)
+    nl2sql: Nl2sqlDeploymentConfig = field(default_factory=Nl2sqlDeploymentConfig)
 
 
 def _config_path() -> Path:
@@ -260,6 +279,7 @@ def load_deployment_config(path: str | os.PathLike[str] | None = None) -> Deploy
     sandbox = _as_dict(raw.get("sandbox"))
     knowledge = _as_dict(raw.get("knowledge"))
     data_permissions = _as_dict(raw.get("data_permissions"))
+    nl2sql = _as_dict(raw.get("nl2sql"))
     embedding = _as_dict(knowledge.get("embedding"))
     semantic = _as_dict(knowledge.get("semantic"))
     retrieval = _as_dict(knowledge.get("retrieval"))
@@ -349,5 +369,14 @@ def load_deployment_config(path: str | os.PathLike[str] | None = None) -> Deploy
         data_permissions=DataPermissionsConfig(
             enabled=bool(data_permissions.get("enabled", False)),
             roles=_data_permission_roles(data_permissions.get("roles")),
+        ),
+        nl2sql=Nl2sqlDeploymentConfig(
+            provider=str(nl2sql.get("provider") or "").strip(),
+            model=str(nl2sql.get("model") or "").strip(),
+            base_url=str(nl2sql.get("base_url") or "").strip().rstrip("/"),
+            api_key_env=str(nl2sql.get("api_key_env") or "").strip(),
+            max_output_tokens=_positive_int(nl2sql.get("max_output_tokens"), 0)
+            if nl2sql.get("max_output_tokens") is not None
+            else 0,
         ),
     )
