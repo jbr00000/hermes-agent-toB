@@ -125,192 +125,25 @@
   .pet-anim * { animation: none !important; }
 }
 
-/* ============================================================
-   牛来桌宠（分层木偶：身体/双臂/头四层叠加，每层独立 transform；
-   图层与枢轴由 scripts/build_pet_puppet.py 生成。
-   所有动画只在 .niulai-anim 内生效；静态姿态（sad 垂臂等）用 transition）
-   ============================================================ */
+/* 牛来桌宠：8 × 11 标准精灵表 + 8 × 3 交互精灵表。 */
 .niulai {
   position: relative;
   display: inline-block;
 }
-.niulai .n-rig {
-  position: absolute;
-  inset: 0;
-  display: block;
+.pet-sprite {
+  flex: 0 0 auto;
+  overflow: visible;
+  vertical-align: middle;
+  background-repeat: no-repeat;
+  background-color: transparent;
+  will-change: background-position;
 }
-.niulai .n-layer {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  transition: transform 0.35s ease;
+.pencil-cat {
+  position: relative;
+  display: inline-block;
 }
-
-/* 待机：身体呼吸 + 头轻摆 + 双臂微晃 */
-.niulai-anim.n-idle .n-body {
-  transform-origin: 50% 100%;
-  animation: n-breathe 3.4s ease-in-out infinite;
-}
-.niulai-anim.n-idle .n-head { animation: n-head-sway 4.2s ease-in-out infinite; }
-.niulai-anim.n-idle .n-arm-l { animation: n-arm-idle 3.4s ease-in-out infinite; }
-.niulai-anim.n-idle .n-arm-r { animation: n-arm-idle 3.4s ease-in-out -1.7s infinite; }
-@keyframes n-breathe {
-  0%, 100% { transform: scale(1, 1); }
-  50% { transform: scale(1.012, 1.02); }
-}
-@keyframes n-head-sway {
-  0%, 100% { transform: rotate(0deg); }
-  30% { transform: rotate(2deg); }
-  65% { transform: rotate(-1.5deg); }
-}
-@keyframes n-arm-idle {
-  0%, 100% { transform: rotate(0deg); }
-  50% { transform: rotate(2.5deg); }
-}
-
-/* 思考：歪头（绕颈部枢轴）+ 微微上下 */
-.niulai-anim.n-thinking .n-head { animation: n-think-tilt 2.8s ease-in-out infinite; }
-@keyframes n-think-tilt {
-  0%, 100% { transform: rotate(-9deg) translateY(0); }
-  50% { transform: rotate(-9deg) translateY(-1.5%); }
-}
-
-/* 工作：身体摇摆 + 双臂交替摆动 + 头随节奏点动 */
-.niulai-anim.n-working .n-body {
-  transform-origin: 50% 100%;
-  animation: n-rock 0.9s ease-in-out infinite;
-}
-.niulai-anim.n-working .n-arm-l { animation: n-pump 0.45s ease-in-out infinite; }
-.niulai-anim.n-working .n-arm-r { animation: n-pump 0.45s ease-in-out -0.225s infinite; }
-.niulai-anim.n-working .n-head { animation: n-head-nod 0.9s ease-in-out infinite; }
-@keyframes n-rock {
-  0%, 100% { transform: rotate(-2.5deg); }
-  50% { transform: rotate(2.5deg); }
-}
-@keyframes n-pump {
-  0%, 100% { transform: rotate(-10deg); }
-  50% { transform: rotate(10deg); }
-}
-@keyframes n-head-nod {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-2%); }
-}
-
-/* 疑惑：头部快速左右摇摆 */
-.niulai-anim.n-confused .n-head { animation: n-wobble 0.5s ease-in-out infinite; }
-@keyframes n-wobble {
-  0%, 100% { transform: rotate(0deg); }
-  25% { transform: rotate(-5deg); }
-  75% { transform: rotate(5deg); }
-}
-
-/* 恍然大悟：整体弹跳 + 头后仰 + 双臂举起 */
-.niulai-anim.n-eureka {
-  transform-origin: 50% 100%;
-  animation: n-hop 0.8s ease-in-out infinite;
-}
-.niulai-anim.n-eureka .n-head { transform: rotate(-6deg) translateY(-1%); }
-.niulai-anim.n-eureka .n-arm-l { transform: rotate(-26deg); }
-.niulai-anim.n-eureka .n-arm-r { transform: rotate(26deg); }
-@keyframes n-hop {
-  0%, 100% { transform: translateY(0) scale(1, 1); }
-  35% { transform: translateY(-8%) scale(0.98, 1.04); }
-  60% { transform: translateY(0) scale(1.03, 0.96); }
-}
-
-/* 难过：垂头 + 双臂下垂 + 褪色 */
+.pencil-cat.c-sad { filter: saturate(0.72); }
 .niulai.n-sad { filter: saturate(0.7); }
-.niulai.n-sad .n-arm-l { transform: rotate(6deg); }
-.niulai.n-sad .n-arm-r { transform: rotate(-6deg); }
-.niulai-anim.n-sad .n-head { animation: n-droop 3.6s ease-in-out infinite; }
-@keyframes n-droop {
-  0%, 100% { transform: rotate(5deg) translateY(1.5%); }
-  55% { transform: rotate(7deg) translateY(3%); }
-}
-
-/* 走动（外壳 .pet-walking）：双腿交替迈步 + 双臂反相摆动（异侧手脚同步的自然步态）
-   + 头颠簸 + 身体重心摇摆 */
-.pet-walking .niulai .n-leg-l { animation: n-leg-step 0.5s ease-in-out -0.25s infinite; }
-.pet-walking .niulai .n-leg-r { animation: n-leg-step 0.5s ease-in-out infinite; }
-.pet-walking .niulai .n-arm-l { animation: n-arm-swing 0.5s ease-in-out infinite; }
-.pet-walking .niulai .n-arm-r { animation: n-arm-swing 0.5s ease-in-out -0.25s infinite; }
-.pet-walking .niulai .n-head { animation: n-walk-head 0.5s ease-in-out infinite; }
-.pet-walking .niulai .n-body {
-  transform-origin: 50% 100%;
-  animation: n-walk-body 0.5s ease-in-out infinite;
-}
-@keyframes n-leg-step {
-  0%, 100% { transform: rotate(9deg) translateY(-1.5%); }
-  50% { transform: rotate(-7deg); }
-}
-@keyframes n-walk-body {
-  0%, 100% { transform: rotate(-2deg); }
-  50% { transform: rotate(2deg); }
-}
-@keyframes n-arm-swing {
-  0%, 100% { transform: rotate(13deg); }
-  50% { transform: rotate(-13deg); }
-}
-@keyframes n-walk-head {
-  0%, 100% { transform: rotate(0deg) translateY(0); }
-  50% { transform: rotate(1.5deg) translateY(-1.5%); }
-}
-
-/* 被拖拽拎起（外壳 .pet-dragging）：挣扎——四肢大幅扑腾 + 头用力甩动 */
-.pet-dragging .niulai .n-leg-l { animation: n-kick 0.28s ease-in-out infinite; }
-.pet-dragging .niulai .n-leg-r { animation: n-kick 0.28s ease-in-out -0.14s infinite; }
-.pet-dragging .niulai .n-arm-l { animation: n-flail 0.28s ease-in-out infinite; }
-.pet-dragging .niulai .n-arm-r { animation: n-flail 0.28s ease-in-out -0.14s infinite; }
-.pet-dragging .niulai .n-head { animation: n-head-shake 0.35s ease-in-out infinite; }
-@keyframes n-kick {
-  0%, 100% { transform: rotate(16deg) translateY(-3%); }
-  50% { transform: rotate(-13deg); }
-}
-@keyframes n-flail {
-  0%, 100% { transform: rotate(-30deg); }
-  50% { transform: rotate(20deg); }
-}
-@keyframes n-head-shake {
-  0%, 100% { transform: rotate(-7deg); }
-  50% { transform: rotate(7deg); }
-}
-
-/* 拖拽放下（外壳 .pet-relief，一次性 ~0.95s）：松了一口气——
-   整体落地一瘫再回弹 + 双臂向外垂落 + 头低下叹气再抬起 */
-.pet-relief .pet-stage { animation: pet-relief 0.95s ease-out; }
-.pet-relief .niulai .n-arm-l { animation: n-relief-arm-l 0.95s ease-out; }
-.pet-relief .niulai .n-arm-r { animation: n-relief-arm-r 0.95s ease-out; }
-.pet-relief .niulai .n-head { animation: n-relief-head 0.95s ease-out; }
-@keyframes pet-relief {
-  0% { transform: scale(1.06); }
-  25% { transform: scale(1.14, 0.84) translateY(4%); }
-  55% { transform: scale(0.95, 1.06) translateY(-1.5%); }
-  78% { transform: scale(1.03, 0.97) translateY(1%); }
-  100% { transform: scale(1, 1) translateY(0); }
-}
-@keyframes n-relief-arm-l {
-  0%, 100% { transform: rotate(0deg); }
-  30% { transform: rotate(11deg); }
-  70% { transform: rotate(4deg); }
-}
-@keyframes n-relief-arm-r {
-  0%, 100% { transform: rotate(0deg); }
-  30% { transform: rotate(-11deg); }
-  70% { transform: rotate(-4deg); }
-}
-@keyframes n-relief-head {
-  0%, 100% { transform: rotate(0deg) translateY(0); }
-  30% { transform: rotate(6deg) translateY(2.5%); }
-  65% { transform: rotate(3deg) translateY(1%); }
-}
-
-/* 瞌睡（外壳 .pet-sleeping）：头低垂（盖过 idle 的头轻摆） */
-.pet-sleeping .niulai-anim .n-head {
-  animation: none;
-  transform: rotate(7deg) translateY(3%);
-}
-
 /* 情绪点缀符号 */
 .niulai .n-q {
   position: absolute;
@@ -369,8 +202,17 @@
   90%, 100% { transform: translateY(0.8em); opacity: 0; }
 }
 
-/* 点击反应：PetFloat 用 WAAPI（element.animate）直接播放，不走 CSS 类 —
-   类切换在 480ms 内连点时不会重启动画，WAAPI 每次调用独立触发 */
+/* 新版牛来由完整身体帧承载动作，禁止旧木偶样式再次旋转整只角色或肢体。 */
+.niulai-sprite.niulai-anim,
+.pet-walking .niulai-sprite,
+.pet-dragging .niulai-sprite,
+.pet-relief .niulai-sprite,
+.pet-sleeping .niulai-sprite {
+  animation: none;
+  transform: none;
+}
+
+/* 点击、行走、拖拽和睡眠都由完整身体帧承载。 */
 
 /* ============================================================
    浮动桌宠外壳：拖拽姿态 / 自主走动 / 瞌睡（md F-02/F-03/F-06）
@@ -381,40 +223,32 @@
   transition: transform 0.18s ease-out, filter 0.4s ease;
 }
 
-/* 拖拽中（DRAG 最高优先级）：拎起 + 扭动挣扎 */
+/* 拖拽中（DRAG 最高优先级）：精灵帧负责挣扎，外壳只保留轻微拎起感。 */
 .pet-dragging .pet-stage {
-  animation: pet-struggle 0.4s ease-in-out infinite;
+  animation: none;
+  transform: scale(1.04) translateY(-3%);
   transition: none;
-}
-@keyframes pet-struggle {
-  0%, 100% { transform: scale(1.08) rotate(5deg) translateY(-1%); }
-  25% { transform: scale(1.08) rotate(1deg) translateY(1%); }
-  50% { transform: scale(1.08) rotate(-5deg) translateY(-1%); }
-  75% { transform: scale(1.08) rotate(-1deg) translateY(1%); }
 }
 
-/* 走动（WALK）：轻微起伏（迈步动作在腿部图层上）；左走时立绘水平翻转 */
+/* 走动（WALK）：方向和起伏都由完整身体帧表达，不再翻转外壳。 */
 .pet-walking .pet-stage {
-  animation: pet-walk-bob 0.5s ease-in-out infinite;
+  animation: none;
+  transform: none;
   transition: none;
 }
-.pet-walking.pet-face-left .pet-stage {
-  animation-name: pet-walk-bob-flip;
-}
-@keyframes pet-walk-bob {
-  0%, 100% { transform: translateY(0) rotate(-1.5deg); }
-  50% { transform: translateY(-3%) rotate(1.5deg); }
-}
-@keyframes pet-walk-bob-flip {
-  0%, 100% { transform: scaleX(-1) translateY(0) rotate(-1.5deg); }
-  50% { transform: scaleX(-1) translateY(-3%) rotate(1.5deg); }
+
+/* 落地缓冲由一次性完整身体序列表达。 */
+.pet-relief .pet-stage {
+  animation: none;
+  transform: none;
 }
 
 /* 瞌睡（SLEEP：60s 无交互进入，点击唤醒）：低垂褪色 + Zzz */
 .pet-sleeping .pet-stage {
-  transform: translateY(3%) rotate(4deg) scale(0.97);
+  transform: none;
   filter: saturate(0.8);
 }
+
 .pet-zzz {
   position: absolute;
   top: -0.6em;
@@ -440,10 +274,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .niulai-anim *, .niulai-anim .n-layer { animation: none !important; }
-  .pet-walking .niulai .n-layer,
-  .pet-dragging .niulai .n-layer,
-  .pet-relief .niulai .n-layer { animation: none !important; }
+  .niulai-anim * { animation: none !important; }
   .pet-walking .pet-stage { animation: none !important; }
   .pet-dragging .pet-stage { animation: none !important; transform: scale(1.08); }
   .pet-relief .pet-stage { animation: none !important; }

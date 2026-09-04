@@ -7,8 +7,9 @@ import { useChatRun } from '../../chatRunManager'
 import { petIdleAnimAtom, petSizeAtom, petSkinAtom, petTaskAnimAtom, petVisibleAtom } from '../../state'
 import type { TabType } from '../../types'
 import { PetCharacter } from './PetAvatar'
-import type { PetState } from './PetAvatar'
+import type { PetActivity, PetState } from './PetAvatar'
 import { PET_SKIN_LABEL, PET_STATE_LABEL } from './PetAvatar'
+import { PET_WALK_CYCLE_MS } from './pet-model'
 import { petStateFromAgentRun, petStateFromChatRun, usePetState } from './petState'
 
 const STORAGE_KEY = 'cortex-pet-pos'
@@ -25,6 +26,7 @@ const BEHAVIOR_TICK_MS = 5000
 const WALK_CHANCE = 0.35
 /** 无交互超过该时长进入瞌睡（md 4.2：60s 无操作 → SLEEP，点击唤醒） */
 const SLEEP_AFTER_MS = 60_000
+const WALK_TRAVEL_PER_CYCLE = 32
 
 interface PetPos {
   x: number
@@ -99,6 +101,8 @@ function PetFloatShell({ state }: { state: PetState }): React.ReactElement {
   const sleepingRef = React.useRef(false)
   const interactRef = React.useRef(Date.now())
   const clickTimerRef = React.useRef<number | null>(null)
+  const [reaction, setReaction] = React.useState<'waving' | 'jumping' | null>(null)
+  const reactionTimerRef = React.useRef<number | null>(null)
 
   const clamp = React.useCallback((x: number, y: number): PetPos => {
     const parent = rootRef.current?.parentElement
@@ -138,39 +142,18 @@ function PetFloatShell({ state }: { state: PetState }): React.ReactElement {
     }
   }
 
-  // 点击反应用 WAAPI 直接播：每次点击独立触发（类切换在连点时不会重启动画），
-  // 也不受桌宠自身 idle/任务动画的 class 覆盖影响
+  // 点击反应统一进入 activity 状态机，由各桌宠渲染器选择对应完整身体序列。
   const playReaction = (kind: 'single' | 'double'): void => {
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
-    const el = rootRef.current?.firstElementChild
-    if (!el) return
-    if (kind === 'single') {
-      // 单击：雀跃一下——压扁蓄力 → 跳起歪头 → 落地回弹
-      el.animate(
-        [
-          { transform: 'scale(1, 1) translateY(0) rotate(0deg)' },
-          { transform: 'scale(0.9, 1.08) translateY(-9%) rotate(-5deg)', offset: 0.3 },
-          { transform: 'scale(1.07, 0.93) translateY(0) rotate(4deg)', offset: 0.55 },
-          { transform: 'scale(0.98, 1.02) translateY(-4%) rotate(-2deg)', offset: 0.78 },
-          { transform: 'scale(1, 1) translateY(0) rotate(0deg)' },
-        ],
-        { duration: 620, easing: 'ease-out' },
-      )
-      return
-    }
-    // 双击（md F-03 / 4.2：双击 → CLICK，播完自动回 IDLE）：兴奋地连跳两下
-    el.animate(
-      [
-        { transform: 'scale(1, 1) translateY(0) rotate(0deg)' },
-        { transform: 'scale(0.92, 1.1) translateY(-14%) rotate(-6deg)', offset: 0.18 },
-        { transform: 'scale(1.08, 0.92) translateY(0) rotate(5deg)', offset: 0.36 },
-        { transform: 'scale(0.95, 1.06) translateY(-10%) rotate(-4deg)', offset: 0.55 },
-        { transform: 'scale(1.05, 0.95) translateY(0) rotate(3deg)', offset: 0.72 },
-        { transform: 'scale(1.01, 0.99) translateY(-2%) rotate(-1deg)', offset: 0.88 },
-        { transform: 'scale(1, 1) translateY(0) rotate(0deg)' },
-      ],
-      { duration: 900, easing: 'ease-out' },
-    )
+    if (reactionTimerRef.current !== null) window.clearTimeout(reactionTimerRef.current)
+    setReaction(null)
+    requestAnimationFrame(() => {
+      setReaction(kind === 'single' ? 'waving' : 'jumping')
+      reactionTimerRef.current = window.setTimeout(() => {
+        reactionTimerRef.current = null
+        setReaction(null)
+      }, kind === 'single' ? 760 : 900)
+    })
   }
 
   // 单击/双击区分（md F-03）：第一次点击延迟一拍，窗口内再来一次则升级为双击反应
@@ -187,9 +170,8 @@ function PetFloatShell({ state }: { state: PetState }): React.ReactElement {
     }, DOUBLE_CLICK_MS)
   }
 
-  // 拖拽放下（真的移动了位置）：松了一口气——pet-relief 类驱动的多层一次性动画
-  // （落地一瘫回弹 + 双臂垂落 + 低头叹气再抬头）。类切换可能撞上连续拖拽，
-  // 先移除再在下一帧加回，强制重启动画
+  // 拖拽放下（真的移动了位置）：播放一次完整身体落地缓冲序列。
+  // 先清空再在下一帧恢复 activity，保证连续拖拽也能从第一帧重播。
   const [relief, setRelief] = React.useState(false)
   const reliefTimerRef = React.useRef<number | null>(null)
   const playRelief = (): void => {
@@ -222,8 +204,7 @@ function PetFloatShell({ state }: { state: PetState }): React.ReactElement {
   }, [])
 
   // 待机自主走动（md F-06 _do_walk：随机方向 3–8 步 × 每步 ~10px， clamp 在容器内）。
-  // 位置用 rAF 逐帧推进（直接写 pos，天然与拖拽/收敛同一套坐标，不会出现
-  // WAAPI fill-forwards 提交时的闪跳）；左走时给立绘加水平翻转 class。
+  // 位移使用完整步态周期和恒定速度，避免脚步尚未落地就停止或缓动造成滑行。
   const startWalk = React.useCallback((): void => {
     const el = rootRef.current
     const parent = el?.parentElement
@@ -243,7 +224,8 @@ function PetFloatShell({ state }: { state: PetState }): React.ReactElement {
     // pos 可能还是 null（CSS right/bottom 锚定）：先换算成数值坐标，视觉上原地不动
     setPos(base)
     setWalkDir(dist < 0 ? 'left' : 'right')
-    const duration = Math.abs(dist) * 30  // 步速匹配 0.5s 迈步节拍，快了会像飘着滑
+    const cycles = Math.max(1, Math.round(Math.abs(dist) / WALK_TRAVEL_PER_CYCLE))
+    const duration = cycles * PET_WALK_CYCLE_MS
     const t0 = performance.now()
     const tick = (now: number): void => {
       if (walkRafRef.current === null) return
@@ -253,8 +235,7 @@ function PetFloatShell({ state }: { state: PetState }): React.ReactElement {
         return
       }
       const t = Math.min(1, (now - t0) / duration)
-      const eased = t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2
-      setPos({ x: base.x + dist * eased, y: base.y })
+      setPos({ x: base.x + dist * t, y: base.y })
       if (t < 1) {
         walkRafRef.current = requestAnimationFrame(tick)
         return
@@ -299,6 +280,7 @@ function PetFloatShell({ state }: { state: PetState }): React.ReactElement {
       if (walkRafRef.current !== null) cancelAnimationFrame(walkRafRef.current)
       if (clickTimerRef.current !== null) window.clearTimeout(clickTimerRef.current)
       if (reliefTimerRef.current !== null) window.clearTimeout(reliefTimerRef.current)
+      if (reactionTimerRef.current !== null) window.clearTimeout(reactionTimerRef.current)
     },
     [],
   )
@@ -307,6 +289,7 @@ function PetFloatShell({ state }: { state: PetState }): React.ReactElement {
     event.preventDefault()
     wake()
     stopWalk()
+    setReaction(null)
     const rect = event.currentTarget.getBoundingClientRect()
     dragOffsetRef.current = { dx: event.clientX - rect.left, dy: event.clientY - rect.top }
     downPointRef.current = { x: event.clientX, y: event.clientY }
@@ -349,17 +332,27 @@ function PetFloatShell({ state }: { state: PetState }): React.ReactElement {
 
   const behaviorClass = [
     dragging ? 'pet-dragging cursor-grabbing' : 'cursor-grab',
-    walkDir ? `pet-walking${walkDir === 'left' ? ' pet-face-left' : ''}` : '',
+    walkDir ? 'pet-walking' : '',
     sleeping ? 'pet-sleeping' : '',
     relief && !dragging ? 'pet-relief' : '',
   ]
     .filter(Boolean)
     .join(' ')
 
+  const activity: PetActivity | undefined = dragging
+    ? 'dragging'
+    : relief
+      ? 'relief'
+      : sleeping
+        ? 'sleeping'
+        : walkDir
+          ? `walk-${walkDir}`
+          : reaction ?? undefined
+
   return (
     <div
       ref={rootRef}
-      className={`pet-float absolute z-30 touch-none select-none ${behaviorClass}`}
+      className={`pet-float pet-skin-${skin} absolute z-30 touch-none select-none ${behaviorClass}`}
       style={style}
       title={`${PET_SKIN_LABEL[skin]} · ${PET_STATE_LABEL[effState]}（可拖拽，单击/双击有反应）`}
       onPointerDown={onPointerDown}
@@ -368,7 +361,7 @@ function PetFloatShell({ state }: { state: PetState }): React.ReactElement {
       onPointerCancel={endDrag}
     >
       <span className="pet-stage">
-        <PetCharacter state={effState} size={size} animated={animated} />
+        <PetCharacter state={effState} size={size} animated={activity ? true : animated} activity={activity} />
       </span>
       {sleeping && (
         <span className="pet-zzz" aria-hidden>

@@ -2,20 +2,14 @@ import React from 'react'
 import { useAtomValue } from 'jotai'
 import { petSkinAtom } from '../../state'
 import type { PetSkin } from '../../types'
+import { CatAvatar } from './CatAvatar'
 import { NiulaiAvatar } from './NiulaiAvatar'
+import { PET_STATE_LABEL } from './pet-model'
+import type { PetActivity, PetState } from './pet-model'
 import './pet.css'
 
-/** 宠物神态：待机 / 思考 / 工作 / 疑惑 / 恍然大悟 / 难过 */
-export type PetState = 'idle' | 'thinking' | 'working' | 'confused' | 'eureka' | 'sad'
-
-export const PET_STATE_LABEL: Record<PetState, string> = {
-  idle: '待机',
-  thinking: '思考',
-  working: '工作',
-  confused: '疑惑',
-  eureka: '恍然大悟',
-  sad: '难过',
-}
+export { PET_STATE_LABEL } from './pet-model'
+export type { PetActivity, PetState } from './pet-model'
 
 /* ================= 铅笔稿调色板 ================= */
 const C = {
@@ -422,20 +416,22 @@ function Extras({ pose }: { pose: PetState }): React.ReactElement | null {
 }
 
 /**
- * 铅笔草图风小猫。纯展示组件：给定神态和尺寸，渲染对应姿态 + CSS 微动效。
+ * 铅笔草图风小猫的微型 SVG 回退。常规桌宠尺寸由 CatAvatar 渲染完整身体帧。
  * - size < 40 时自动关闭抖边滤镜（小尺寸会糊边）
  * - 每个实例的滤镜/排线 defs 用 useId 隔离，可同页多实例
  */
-export function PetAvatar({
+function PencilCatSvgAvatar({
   state,
   size = 64,
   animated = true,
   className,
+  activity,
 }: {
   state: PetState
   size?: number
   animated?: boolean
   className?: string
+  activity?: PetActivity
 }): React.ReactElement {
   const uid = React.useId().replace(/[^a-zA-Z0-9]/g, '')
   const filterId = `petRough${uid}`
@@ -443,7 +439,7 @@ export function PetAvatar({
   const useFilter = size >= 40
   return (
     <svg
-      className={`pet p-${state}${animated ? ' pet-anim' : ''}${className ? ` ${className}` : ''}`}
+      className={`pet p-${state}${activity ? ` a-${activity}` : ''}${animated ? ' pet-anim' : ''}${className ? ` ${className}` : ''}`}
       viewBox="0 0 120 120"
       width={size}
       height={size}
@@ -486,6 +482,14 @@ export interface PetCharacterProps {
   size?: number
   animated?: boolean
   className?: string
+  activity?: PetActivity
+}
+
+/** Full-body sprite at usable pet sizes; SVG remains the sharp tiny-icon fallback. */
+export function PetAvatar(props: PetCharacterProps): React.ReactElement {
+  return (props.size ?? 64) < 24
+    ? <PencilCatSvgAvatar {...props} />
+    : <CatAvatar {...props} />
 }
 
 /** 指定形象的桌宠渲染（设置面板预览等需要固定形象的场景） */

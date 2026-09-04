@@ -1,5 +1,5 @@
-import interactionAtlasUrl from './assets/niulai-interactions.webp'
-import standardAtlasUrl from './assets/niulai-spritesheet.webp'
+import interactionAtlasUrl from './assets/cat-interactions.webp'
+import standardAtlasUrl from './assets/cat-spritesheet.webp'
 import { SpritePetAvatar } from './SpritePetAvatar'
 import type { SpriteSpec } from './SpritePetAvatar'
 import { PET_STATE_LABEL, PET_WALK_CYCLE_MS } from './pet-model'
@@ -18,20 +18,8 @@ const STATE_SPRITES: Record<PetState, SpriteSpec> = {
 }
 
 const ACTIVITY_SPRITES: Record<PetActivity, SpriteSpec> = {
-  'walk-right': {
-    atlas: standardAtlasUrl,
-    rows: STANDARD_ROWS,
-    row: 1,
-    frames: 8,
-    frameMs: PET_WALK_CYCLE_MS / 8,
-  },
-  'walk-left': {
-    atlas: standardAtlasUrl,
-    rows: STANDARD_ROWS,
-    row: 2,
-    frames: 8,
-    frameMs: PET_WALK_CYCLE_MS / 8,
-  },
+  'walk-right': { atlas: standardAtlasUrl, rows: STANDARD_ROWS, row: 1, frames: 8, frameMs: PET_WALK_CYCLE_MS / 8 },
+  'walk-left': { atlas: standardAtlasUrl, rows: STANDARD_ROWS, row: 2, frames: 8, frameMs: PET_WALK_CYCLE_MS / 8 },
   waving: { atlas: standardAtlasUrl, rows: STANDARD_ROWS, row: 3, frames: 4, frameMs: 170, loop: false },
   jumping: { atlas: standardAtlasUrl, rows: STANDARD_ROWS, row: 4, frames: 5, frameMs: 150, loop: false },
   dragging: { atlas: interactionAtlasUrl, rows: INTERACTION_ROWS, row: 0, frames: 6, frameMs: 120 },
@@ -39,50 +27,35 @@ const ACTIVITY_SPRITES: Record<PetActivity, SpriteSpec> = {
   sleeping: { atlas: interactionAtlasUrl, rows: INTERACTION_ROWS, row: 2, frames: 6, frameMs: 460 },
 }
 
-/** 牛来桌宠：整只角色逐帧渲染，身体各部位不再单独旋转或拼接。 */
-export function NiulaiAvatar({
-  state,
-  size = 64,
-  animated = true,
-  className,
-  activity,
-}: {
+export interface CatAvatarProps {
   state: PetState
   size?: number
   animated?: boolean
   className?: string
   activity?: PetActivity
-}): React.ReactElement {
+}
+
+/** Pencil cat rendered from complete whole-body frames. */
+export function CatAvatar({
+  state,
+  size = 64,
+  animated = true,
+  className,
+  activity,
+}: CatAvatarProps): React.ReactElement {
   const spec = activity ? ACTIVITY_SPRITES[activity] : STATE_SPRITES[state]
-  const poseClassName = activity ? `n-${activity}` : `n-${state}`
+  const poseClassName = activity ? `c-${activity}` : `c-${state}`
 
   return (
     <SpritePetAvatar
       spec={spec}
       size={size}
       animated={animated}
-      spriteClassName="pet-sprite niulai niulai-sprite"
-      animatedClassName="niulai-anim"
+      spriteClassName="pet-sprite pencil-cat"
+      animatedClassName="pencil-cat-anim"
       poseClassName={poseClassName}
       className={className}
-      ariaLabel={`牛来桌宠：${PET_STATE_LABEL[state]}`}
-    >
-      {state === 'thinking' && !activity && (
-        <span className="n-dots" aria-hidden>
-          <i />
-          <i />
-          <i />
-        </span>
-      )}
-      {state === 'confused' && !activity && <span className="n-q" aria-hidden>?</span>}
-      {state === 'eureka' && !activity && (
-        <>
-          <span className="n-sparkle s1" aria-hidden>✦</span>
-          <span className="n-sparkle s2" aria-hidden>✦</span>
-          <span className="n-sparkle s3" aria-hidden>✦</span>
-        </>
-      )}
-      {state === 'sad' && !activity && <span className="n-tear" aria-hidden />}
-    </SpritePetAvatar>
+      ariaLabel={`铅笔小猫桌宠：${PET_STATE_LABEL[state]}`}
+    />
   )
 }
